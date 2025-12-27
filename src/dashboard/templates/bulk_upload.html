@@ -1101,9 +1101,18 @@ function downloadSampleJSON() {
 
 {% block head_scripts %}
 <script>
+document.addEventListener('DOMContentLoaded', () => {
+    if (typeof Alpine !== 'undefined') {
+        // Alpine already loaded, register directly
+        Alpine.data('bulkUpload', bulkUploadComponent);
+    }
+});
 document.addEventListener('alpine:init', () => {
-    Alpine.data('bulkUpload', () => {
-        // Defaults from settings
+    Alpine.data('bulkUpload', bulkUploadComponent);
+});
+
+function bulkUploadComponent() {
+    // Defaults from settings
     const defaults = {
         agent_email: '{{ defaults.agent_email | default("", true) }}',
         agent_id: '{{ defaults.agent_id | default("", true) }}',
@@ -1890,7 +1899,6 @@ document.addEventListener('alpine:init', () => {
             URL.revokeObjectURL(url);
         }
     };
-    });
-});
+}
 </script>
 {% endblock %}
