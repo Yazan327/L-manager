@@ -1,0 +1,939 @@
+{% extends "base.html" %}
+
+{% block title %}{% if edit_mode %}Edit{% else %}New{% endif %} Listing - L-Manager{% endblock %}
+{% block page_title %}{% if edit_mode %}Edit Listing{% else %}Create New Listing{% endif %}{% endblock %}
+
+{% block content %}
+<div class="flex gap-6" x-data="listingForm()">
+    <!-- Left: Form -->
+    <form method="POST" 
+          action="{% if edit_mode %}{{ url_for('update_listing_form', listing_id=listing.id) }}{% else %}{{ url_for('create_listing_form') }}{% endif %}"
+          class="flex-1 max-w-3xl">
+    
+    <!-- Progress Steps -->
+    <div class="bg-white rounded-lg shadow mb-6 p-4">
+        <div class="flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center text-sm font-bold">1</div>
+                <span class="text-sm font-medium">Core Details</span>
+            </div>
+            <div class="flex-1 h-1 bg-gray-200 mx-4"></div>
+            <div class="flex items-center space-x-3">
+                <div class="w-8 h-8 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center text-sm font-bold">2</div>
+                <span class="text-sm text-gray-500">Specifications</span>
+            </div>
+            <div class="flex-1 h-1 bg-gray-200 mx-4"></div>
+            <div class="flex items-center space-x-3">
+                <div class="w-8 h-8 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center text-sm font-bold">3</div>
+                <span class="text-sm text-gray-500">Media & Amenities</span>
+            </div>
+            <div class="flex-1 h-1 bg-gray-200 mx-4"></div>
+            <div class="flex items-center space-x-3">
+                <div class="w-8 h-8 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center text-sm font-bold">4</div>
+                <span class="text-sm text-gray-500">Description</span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="bg-white rounded-lg shadow">
+        <!-- Section 1: Core Details -->
+        <div class="p-6 border-b border-gray-200">
+            <h3 class="text-lg font-semibold mb-1 flex items-center">
+                <i class="fas fa-info-circle text-indigo-500 mr-2"></i>Core Details
+            </h3>
+            <p class="text-sm text-gray-500 mb-4">Required information for the listing</p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Emirate -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Emirate <span class="text-red-500">*</span></label>
+                    <select name="emirate" required x-model="emirate" @change="onEmirateChange()"
+                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Select Emirate...</option>
+                        <option value="dubai">Dubai</option>
+                        <option value="abu_dhabi">Abu Dhabi</option>
+                        <option value="northern_emirates">Northern Emirates (Sharjah, Ajman, RAK, Fujairah, UAQ)</option>
+                    </select>
+                </div>
+                
+                <!-- City (Dynamic based on Emirate) -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">City <span class="text-red-500">*</span></label>
+                    <select name="city" required x-model="city"
+                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Select City...</option>
+                        <template x-for="c in availableCities" :key="c">
+                            <option :value="c" x-text="c" :selected="c === city"></option>
+                        </template>
+                    </select>
+                </div>
+                
+                <!-- Category -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Category <span class="text-red-500">*</span></label>
+                    <select name="category" required x-model="category"
+                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Select Category...</option>
+                        <option value="residential" {% if listing and listing.category == 'residential' %}selected{% endif %}>Residential</option>
+                        <option value="commercial" {% if listing and listing.category == 'commercial' %}selected{% endif %}>Commercial</option>
+                    </select>
+                </div>
+                
+                <!-- Offering Type -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Offering Type <span class="text-red-500">*</span></label>
+                    <select name="offering_type" required x-model="offeringType"
+                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Select Type...</option>
+                        <option value="sale" {% if listing and listing.offering_type == 'sale' %}selected{% endif %}>For Sale</option>
+                        <option value="rent" {% if listing and listing.offering_type == 'rent' %}selected{% endif %}>For Rent</option>
+                    </select>
+                </div>
+                
+                <!-- Property Type -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Property Type <span class="text-red-500">*</span></label>
+                    <select name="property_type" required x-model="propertyType"
+                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Select Type...</option>
+                        <optgroup label="Residential">
+                            <option value="apartment">Apartment</option>
+                            <option value="villa">Villa</option>
+                            <option value="townhouse">Townhouse</option>
+                            <option value="penthouse">Penthouse</option>
+                            <option value="duplex">Duplex</option>
+                            <option value="villa-compound">Villa Compound</option>
+                            <option value="residential-plot">Residential Plot</option>
+                            <option value="residential-full-floor">Full Floor</option>
+                            <option value="hotel-apartment">Hotel Apartment</option>
+                            <option value="residential-building">Residential Building</option>
+                        </optgroup>
+                        <optgroup label="Commercial">
+                            <option value="office-space">Office Space</option>
+                            <option value="retail">Retail</option>
+                            <option value="warehouse">Warehouse</option>
+                            <option value="land">Land</option>
+                            <option value="shop">Shop</option>
+                            <option value="commercial-building">Commercial Building</option>
+                            <option value="factory">Factory</option>
+                            <option value="showroom">Showroom</option>
+                            <option value="commercial-full-floor">Commercial Full Floor</option>
+                            <option value="labour-camp">Labour Camp</option>
+                            <option value="commercial-plot">Commercial Plot</option>
+                        </optgroup>
+                    </select>
+                </div>
+                
+                <!-- Location (Community/Building) with Search -->
+                <div class="relative" x-data="locationSearch()">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Location <span class="text-red-500">*</span></label>
+                    <input type="hidden" name="location_id" x-model="locationId">
+                    <input type="text" name="location" required x-model="locationText"
+                           @input.debounce.300ms="searchLocations()"
+                           @focus="showResults = locationText.length >= 2"
+                           @click.away="showResults = false"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="Search: Tower, Building, Community...">
+                    
+                    <!-- Search Results Dropdown -->
+                    <div x-show="showResults && results.length > 0" 
+                         x-cloak
+                         class="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                        <template x-for="loc in results" :key="loc.id">
+                            <div @click="selectLocation(loc)" 
+                                 class="px-4 py-2 hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0">
+                                <div class="font-medium text-gray-800" x-text="loc.name"></div>
+                                <div class="text-xs text-gray-500" x-text="loc.path"></div>
+                            </div>
+                        </template>
+                    </div>
+                    
+                    <!-- Loading indicator -->
+                    <div x-show="searching" class="absolute right-3 top-9">
+                        <i class="fas fa-spinner fa-spin text-gray-400"></i>
+                    </div>
+                    
+                    <!-- Selected location badge -->
+                    <div x-show="locationId" class="mt-1 flex items-center text-xs text-green-600">
+                        <i class="fas fa-check-circle mr-1"></i>
+                        <span>Location ID: <span x-text="locationId"></span></span>
+                        <button type="button" @click="clearLocation()" class="ml-2 text-red-500 hover:text-red-700">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    
+                    <!-- Hint -->
+                    <p class="text-xs text-gray-400 mt-1" x-show="!locationId">
+                        Type at least 2 characters to search PropertyFinder locations
+                    </p>
+                </div>
+                
+                <!-- Assigned Agent -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Assigned Agent <span class="text-red-500">*</span></label>
+                    <input type="text" name="assigned_agent" required x-model="assignedAgent"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="agent@company.com">
+                </div>
+                
+                <!-- Reference -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Reference <span class="text-gray-400 text-xs">(auto-generated if empty)</span></label>
+                    <input type="text" name="reference" maxlength="50" x-model="reference"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="Leave empty to auto-generate">
+                </div>
+                
+                <!-- Available From -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Available From</label>
+                    <select name="available_from"
+                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
+                        <option value="immediately">Immediately</option>
+                        <option value="specific_date">Specific Date</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Section 2: Specifications -->
+        <div class="p-6 border-b border-gray-200">
+            <h3 class="text-lg font-semibold mb-1 flex items-center">
+                <i class="fas fa-ruler-combined text-green-500 mr-2"></i>Specifications
+            </h3>
+            <p class="text-sm text-gray-500 mb-4">Property details and specifications</p>
+            
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+                <!-- Bedrooms -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Bedrooms <span class="text-red-500">*</span></label>
+                    <select name="bedrooms" required x-model="bedrooms"
+                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Select...</option>
+                        <option value="studio">Studio</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
+                        <option value="6">6</option>
+                        <option value="7">7</option>
+                        <option value="8">8</option>
+                        <option value="9">9</option>
+                        <option value="10">10+</option>
+                    </select>
+                </div>
+                
+                <!-- Bathrooms -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Bathrooms <span class="text-red-500">*</span></label>
+                    <select name="bathrooms" required x-model="bathrooms"
+                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Select...</option>
+                        <option value="none">None</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
+                        <option value="6">6</option>
+                        <option value="7">7</option>
+                        <option value="8">8</option>
+                        <option value="9">9</option>
+                        <option value="10">10+</option>
+                    </select>
+                </div>
+                
+                <!-- Size -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Size (sqft) <span class="text-red-500">*</span></label>
+                    <input type="number" name="size" required min="1" x-model="size"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="e.g., 657">
+                </div>
+                
+                <!-- Parking Slots -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Parking Slots</label>
+                    <input type="number" name="parking_slots" min="0"
+                           value="{{ listing.parking_slots if listing else '' }}"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="e.g., 1">
+                </div>
+                
+                <!-- Developer -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Developer</label>
+                    <input type="text" name="developer" x-model="developer"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="e.g., Emaar, Damac">
+                </div>
+                
+                <!-- Unit Number -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Unit Number</label>
+                    <input type="text" name="unit_number"
+                           value="{{ listing.unit_number if listing else '' }}"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="e.g., 715 (internal use)">
+                </div>
+                
+                <!-- Furnishing Type -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Furnishing <span class="text-red-500">*</span></label>
+                    <select name="furnishing_type" required x-model="furnishing"
+                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Select...</option>
+                        <option value="unfurnished">Unfurnished</option>
+                        <option value="semi-furnished">Semi-Furnished</option>
+                        <option value="furnished">Furnished</option>
+                    </select>
+                </div>
+                
+                <!-- Floor Number -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Floor Number</label>
+                    <input type="number" name="floor_number" min="0"
+                           value="{{ listing.floor_number if listing else '' }}"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="e.g., 7">
+                </div>
+                
+                <!-- Age -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Property Age (years)</label>
+                    <input type="number" name="age" min="0"
+                           value="{{ listing.age if listing else '' }}"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="e.g., 0">
+                </div>
+                
+                <!-- Project Status -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Project Status <span class="text-red-500">*</span></label>
+                    <select name="project_status" required x-model="projectStatus"
+                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Select...</option>
+                        <option value="completed">Completed (Ready)</option>
+                        <option value="off_plan">Off-Plan</option>
+                        <option value="completed_primary">Completed - Primary</option>
+                        <option value="off_plan_primary">Off-Plan - Primary</option>
+                    </select>
+                </div>
+                
+                <!-- Owner Name -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Owner Name</label>
+                    <input type="text" name="owner_name"
+                           value="{{ listing.owner_name if listing else '' }}"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="Property owner">
+                </div>
+                
+                <!-- Permit Number -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Permit Number</label>
+                    <input type="text" name="permit_number"
+                           value="{{ listing.permit_number if listing else '' }}"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="RERA/DLD permit">
+                </div>
+            </div>
+        </div>
+        
+        <!-- Section 3: Price -->
+        <div class="p-6 border-b border-gray-200">
+            <h3 class="text-lg font-semibold mb-1 flex items-center">
+                <i class="fas fa-money-bill-wave text-yellow-500 mr-2"></i>Price
+            </h3>
+            <p class="text-sm text-gray-500 mb-4">Property pricing information</p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Price -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Property Price (AED) <span class="text-red-500">*</span></label>
+                    <input type="number" name="price" required min="1" x-model="price"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="e.g., 444955">
+                    <p class="text-xs text-gray-400 mt-1">Price in AED (numbers only)</p>
+                </div>
+                
+                <!-- Down Payment -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Down Payment (AED) <span class="text-red-500">*</span></label>
+                    <input type="number" name="downpayment" required min="0" x-model="downpayment"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="e.g., 46248">
+                    <p class="text-xs text-gray-400 mt-1">Enter 0 if not applicable</p>
+                </div>
+                
+                <!-- Rent Frequency (shown only for rent) -->
+                <div x-show="offeringType === 'rent'">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Rent Frequency</label>
+                    <select name="rent_frequency"
+                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
+                        <option value="yearly">Yearly</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="daily">Daily</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Section 4: Media -->
+        <div class="p-6 border-b border-gray-200">
+            <h3 class="text-lg font-semibold mb-1 flex items-center">
+                <i class="fas fa-images text-pink-500 mr-2"></i>Media
+            </h3>
+            <p class="text-sm text-gray-500 mb-4">Property photos and virtual tours</p>
+            
+            <div class="grid grid-cols-1 gap-6">
+                <!-- Images -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Property Images (URLs, one per line)</label>
+                    <textarea name="images" rows="4"
+                              class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500 font-mono text-sm"
+                              placeholder="https://example.com/image1.jpg&#10;https://example.com/image2.jpg&#10;https://example.com/image3.jpg">{% if listing and listing.images %}{% if listing.images is string %}{{ listing.images.replace('|', '\n') }}{% else %}{{ listing.images|join('\n') }}{% endif %}{% endif %}</textarea>
+                    <p class="text-xs text-gray-400 mt-1">Add image URLs, one per line. First image will be the main photo. Google Drive links are auto-converted.</p>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- 360 Tour -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">360° Tour URL</label>
+                        <input type="text" name="video_360"
+                               value="{{ listing.video_360 if listing else '' }}"
+                               class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                               placeholder="https://my360tour.com/... (optional)">
+                    </div>
+                    
+                    <!-- Video Tour -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Video Tour URL</label>
+                        <input type="text" name="video_tour"
+                               value="{{ listing.video_tour if listing else '' }}"
+                               class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                               placeholder="https://youtube.com/... (optional)">
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Section 5: Amenities -->
+        <div class="p-6 border-b border-gray-200">
+            <h3 class="text-lg font-semibold mb-1 flex items-center">
+                <i class="fas fa-swimming-pool text-teal-500 mr-2"></i>Amenities
+            </h3>
+            <p class="text-sm text-gray-500 mb-4">Select property amenities</p>
+            
+            <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                {% set amenities_list = [
+                    ('balcony', 'Balcony'),
+                    ('barbecue-area', 'Barbecue Area'),
+                    ('built-in-wardrobes', 'Built-in Wardrobes'),
+                    ('central-ac', 'Central A/C'),
+                    ('covered-parking', 'Covered Parking'),
+                    ('private-gym', 'Private Gym'),
+                    ('private-jacuzzi', 'Private Jacuzzi'),
+                    ('kitchen-appliances', 'Kitchen Appliances'),
+                    ('maids-room', 'Maid\'s Room'),
+                    ('pets-allowed', 'Pets Allowed'),
+                    ('private-garden', 'Private Garden'),
+                    ('private-pool', 'Private Pool'),
+                    ('shared-pool', 'Shared Pool'),
+                    ('shared-gym', 'Shared Gym'),
+                    ('shared-spa', 'Shared Spa'),
+                    ('security', 'Security'),
+                    ('concierge', 'Concierge'),
+                    ('study', 'Study'),
+                    ('view-of-water', 'View of Water'),
+                    ('view-of-landmark', 'View of Landmark'),
+                    ('walk-in-closet', 'Walk-in Closet'),
+                    ('maid-service', 'Maid Service'),
+                    ('childrens-play-area', 'Children\'s Play Area'),
+                    ('childrens-pool', 'Children\'s Pool'),
+                    ('lobby-in-building', 'Lobby in Building'),
+                    ('vastu-compliant', 'Vastu Compliant')
+                ] %}
+                {% for value, label in amenities_list %}
+                <label class="flex items-center p-2 border border-gray-200 rounded hover:bg-gray-50 cursor-pointer">
+                    <input type="checkbox" name="amenities" value="{{ value }}"
+                           {% if listing and listing.amenities and value in listing.amenities %}checked{% endif %}
+                           class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                    <span class="ml-2 text-sm text-gray-700">{{ label }}</span>
+                </label>
+                {% endfor %}
+            </div>
+        </div>
+        
+        <!-- Section 6: Title & Description -->
+        <div class="p-6 border-b border-gray-200">
+            <h3 class="text-lg font-semibold mb-1 flex items-center">
+                <i class="fas fa-align-left text-indigo-500 mr-2"></i>Title & Description
+            </h3>
+            <p class="text-sm text-gray-500 mb-4">Listing content in English and Arabic</p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- English Title -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Title (English) <span class="text-red-500">*</span></label>
+                    <input type="text" name="title_en" required maxlength="50"
+                           value="{{ listing.title_en if listing else '' }}"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="e.g., Stunning 2BR in Prime Location"
+                           x-model="titleEn">
+                    <p class="text-xs text-gray-400 mt-1"><span x-text="titleEn.length">0</span>/50 characters</p>
+                </div>
+                
+                <!-- Arabic Title -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Title (Arabic)</label>
+                    <input type="text" name="title_ar" maxlength="50" dir="rtl"
+                           value="{{ listing.title_ar if listing else '' }}"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="العنوان بالعربية">
+                </div>
+                
+                <!-- English Description -->
+                <div class="md:col-span-2">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Description (English) <span class="text-red-500">*</span></label>
+                    <textarea name="description_en" rows="5" required maxlength="2000"
+                              class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                              placeholder="Describe the property in detail..."
+                              x-model="descEn">{{ listing.description_en if listing else '' }}</textarea>
+                    <p class="text-xs text-gray-400 mt-1"><span x-text="descEn.length">0</span>/2000 characters</p>
+                </div>
+                
+                <!-- Arabic Description -->
+                <div class="md:col-span-2">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Description (Arabic)</label>
+                    <textarea name="description_ar" rows="5" maxlength="2000" dir="rtl"
+                              class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                              placeholder="وصف العقار بالعربية...">{{ listing.description_ar if listing else '' }}</textarea>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Actions -->
+        <div class="p-6 bg-gray-50 rounded-b-lg flex items-center justify-between">
+            <a href="{{ url_for('listings') }}" class="text-gray-600 hover:text-gray-800">
+                <i class="fas fa-arrow-left mr-2"></i>Cancel
+            </a>
+            <div class="flex items-center space-x-4">
+                <button type="submit" name="action" value="draft"
+                        class="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-100 transition">
+                    <i class="fas fa-save mr-2"></i>Save as Draft
+                </button>
+                <button type="submit" name="action" value="publish"
+                        class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition">
+                    <i class="fas fa-paper-plane mr-2"></i>{% if edit_mode %}Update{% else %}Create{% endif %} & Publish
+                </button>
+            </div>
+        </div>
+    </div>
+    </form>
+    
+    <!-- Right: Live Preview Panel -->
+    <div class="w-96 flex-shrink-0">
+        <div class="bg-white rounded-lg shadow sticky top-6">
+            <!-- Preview Header -->
+            <div class="px-4 py-3 border-b border-gray-200 bg-gray-50 rounded-t-lg">
+                <h3 class="font-semibold text-gray-700 flex items-center">
+                    <i class="fas fa-eye text-indigo-500 mr-2"></i>Live Preview
+                </h3>
+                <p class="text-xs text-gray-500">See how your listing will appear</p>
+            </div>
+            
+            <!-- Preview Image -->
+            <div class="relative">
+                <div class="aspect-video bg-gray-100 flex items-center justify-center overflow-hidden">
+                    <template x-if="previewImage">
+                        <img :src="previewImage" 
+                             class="w-full h-full object-cover" 
+                             alt="Preview"
+                             @error="$el.style.display='none'; $el.nextElementSibling.style.display='flex'">
+                        <div class="hidden text-center text-gray-400 flex-col items-center justify-center absolute inset-0 bg-gray-100">
+                            <i class="fas fa-exclamation-triangle text-4xl mb-2 text-yellow-500"></i>
+                            <p class="text-sm">Image cannot be previewed</p>
+                            <p class="text-xs text-gray-400">It may still work on PropertyFinder</p>
+                        </div>
+                    </template>
+                    <template x-if="!previewImage">
+                        <div class="text-center text-gray-400">
+                            <i class="fas fa-image text-4xl mb-2"></i>
+                            <p class="text-sm">No image added</p>
+                        </div>
+                    </template>
+                </div>
+                <!-- Badges -->
+                <div class="absolute top-2 left-2 flex gap-2">
+                    <span x-show="offeringType" class="px-2 py-1 text-xs font-bold rounded"
+                          :class="offeringType === 'sale' ? 'bg-green-500 text-white' : 'bg-blue-500 text-white'"
+                          x-text="offeringType === 'sale' ? 'FOR SALE' : 'FOR RENT'"></span>
+                    <span x-show="projectStatus" class="px-2 py-1 text-xs font-bold bg-orange-500 text-white rounded"
+                          x-text="projectStatus === 'ready' ? 'READY' : projectStatus === 'off-plan' ? 'OFF-PLAN' : 'RESALE'"></span>
+                </div>
+            </div>
+            
+            <!-- Preview Content -->
+            <div class="p-4">
+                <!-- Price -->
+                <div class="mb-3">
+                    <p class="text-2xl font-bold text-indigo-600">
+                        <span x-show="price">AED <span x-text="formatPrice(price)"></span></span>
+                        <span x-show="!price" class="text-gray-300">AED ---</span>
+                        <span x-show="offeringType === 'rent'" class="text-sm font-normal text-gray-500">/year</span>
+                    </p>
+                    <p x-show="downpayment > 0" class="text-sm text-gray-500">
+                        Down payment: AED <span x-text="formatPrice(downpayment)"></span>
+                    </p>
+                </div>
+                
+                <!-- Title -->
+                <h4 class="font-semibold text-gray-800 mb-2 line-clamp-2" 
+                    x-text="titleEn || 'Listing Title'"></h4>
+                
+                <!-- Location -->
+                <p class="text-sm text-gray-600 mb-3 flex items-center">
+                    <i class="fas fa-map-marker-alt text-gray-400 mr-2"></i>
+                    <span x-text="$root.querySelector('input[name=location]')?.value || city || 'Location'"></span>
+                </p>
+                
+                <!-- Specs -->
+                <div class="flex items-center gap-4 text-sm text-gray-600 mb-4 pb-4 border-b">
+                    <div class="flex items-center" x-show="bedrooms">
+                        <i class="fas fa-bed text-gray-400 mr-1"></i>
+                        <span x-text="bedrooms"></span>
+                    </div>
+                    <div class="flex items-center" x-show="bathrooms">
+                        <i class="fas fa-bath text-gray-400 mr-1"></i>
+                        <span x-text="bathrooms"></span>
+                    </div>
+                    <div class="flex items-center" x-show="size">
+                        <i class="fas fa-ruler-combined text-gray-400 mr-1"></i>
+                        <span x-text="formatPrice(size)"></span> sqft
+                    </div>
+                </div>
+                
+                <!-- Property Info Grid -->
+                <div class="grid grid-cols-2 gap-2 text-xs mb-4">
+                    <div x-show="propertyType" class="flex justify-between p-2 bg-gray-50 rounded">
+                        <span class="text-gray-500">Type</span>
+                        <span class="font-medium" x-text="getPropertyTypeName(propertyType)"></span>
+                    </div>
+                    <div x-show="furnishing" class="flex justify-between p-2 bg-gray-50 rounded">
+                        <span class="text-gray-500">Furnishing</span>
+                        <span class="font-medium capitalize" x-text="furnishing.replace('-', ' ')"></span>
+                    </div>
+                    <div x-show="developer" class="flex justify-between p-2 bg-gray-50 rounded">
+                        <span class="text-gray-500">Developer</span>
+                        <span class="font-medium" x-text="developer"></span>
+                    </div>
+                    <div x-show="reference" class="flex justify-between p-2 bg-gray-50 rounded">
+                        <span class="text-gray-500">Ref</span>
+                        <span class="font-medium" x-text="reference"></span>
+                    </div>
+                </div>
+                
+                <!-- Description Preview -->
+                <div x-show="descEn" class="mb-4">
+                    <p class="text-xs text-gray-500 mb-1">Description</p>
+                    <p class="text-sm text-gray-600 line-clamp-3" x-text="descEn"></p>
+                </div>
+                
+                <!-- Amenities Preview -->
+                <div x-show="selectedAmenities.length > 0">
+                    <p class="text-xs text-gray-500 mb-2">Amenities</p>
+                    <div class="flex flex-wrap gap-1">
+                        <template x-for="amenity in selectedAmenities.slice(0, 6)" :key="amenity">
+                            <span class="px-2 py-1 bg-teal-50 text-teal-700 text-xs rounded" 
+                                  x-text="amenity.replace(/-/g, ' ')"></span>
+                        </template>
+                        <span x-show="selectedAmenities.length > 6" 
+                              class="px-2 py-1 bg-gray-100 text-gray-600 text-xs rounded"
+                              x-text="'+' + (selectedAmenities.length - 6) + ' more'"></span>
+                    </div>
+                </div>
+                
+                <!-- Agent -->
+                <div x-show="assignedAgent" class="mt-4 pt-4 border-t flex items-center">
+                    <div class="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center mr-3">
+                        <i class="fas fa-user text-indigo-500 text-sm"></i>
+                    </div>
+                    <div>
+                        <p class="text-xs text-gray-500">Listed by</p>
+                        <p class="text-sm font-medium" x-text="assignedAgent"></p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Completeness Indicator -->
+            <div class="px-4 py-3 border-t bg-gray-50 rounded-b-lg">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs text-gray-500">Listing Completeness</span>
+                    <span class="text-xs font-medium" :class="completeness >= 80 ? 'text-green-600' : completeness >= 50 ? 'text-yellow-600' : 'text-red-600'"
+                          x-text="completeness + '%'"></span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2">
+                    <div class="h-2 rounded-full transition-all duration-300"
+                         :class="completeness >= 80 ? 'bg-green-500' : completeness >= 50 ? 'bg-yellow-500' : 'bg-red-500'"
+                         :style="'width: ' + completeness + '%'"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function listingForm() {
+    return {
+        // Core Details
+        emirate: {{ (listing.emirate if listing else "")|tojson }},
+        city: {{ (listing.city if listing else "")|tojson }},
+        category: {{ (listing.category if listing else "")|tojson }},
+        offeringType: {{ (listing.offering_type if listing else "")|tojson }},
+        propertyType: {{ (listing.property_type if listing else "")|tojson }},
+        location: {{ (listing.location if listing else "")|tojson }},
+        assignedAgent: {{ (listing.assigned_agent if listing else "")|tojson }},
+        reference: {{ (listing.reference if listing else "")|tojson }},
+        
+        // City options by Emirate
+        cityOptions: {
+            'dubai': ['Dubai'],
+            'abu_dhabi': ['Abu Dhabi', 'Al Ain', 'Al Ruwais', 'Ghayathi', 'Liwa', 'Madinat Zayed'],
+            'northern_emirates': ['Sharjah', 'Ajman', 'Ras Al Khaimah', 'Fujairah', 'Umm Al Quwain']
+        },
+        
+        get availableCities() {
+            if (!this.emirate) return [];
+            return this.cityOptions[this.emirate] || [];
+        },
+        
+        onEmirateChange() {
+            // Reset city when emirate changes (only if current city is not valid for new emirate)
+            const validCities = this.cityOptions[this.emirate] || [];
+            if (!validCities.includes(this.city)) {
+                this.city = validCities.length === 1 ? validCities[0] : '';
+            }
+        },
+        
+        // Specifications
+        bedrooms: {{ (listing.bedrooms if listing else "")|tojson }},
+        bathrooms: {{ (listing.bathrooms if listing else "")|tojson }},
+        size: {{ (listing.size if listing else "")|tojson }},
+        furnishing: {{ (listing.furnishing_type if listing else "")|tojson }},
+        projectStatus: {{ (listing.project_status if listing else "")|tojson }},
+        developer: {{ (listing.developer if listing else "")|tojson }},
+        
+        // Price
+        price: {{ (listing.price if listing else "")|tojson }},
+        downpayment: {{ (listing.downpayment if listing else "0")|tojson }},
+        
+        // Description
+        titleEn: {{ (listing.title_en if listing else "")|tojson }},
+        descEn: {{ (listing.description_en if listing else "")|tojson }},
+        
+        // Media
+        previewImage: '',
+        
+        // Amenities - initialize with existing values when editing
+        selectedAmenities: {{ (listing.amenities if listing and listing.amenities else [])|tojson }},
+        
+        // Watch for amenity checkbox changes
+        init() {
+            this.$watch('selectedAmenities', () => {});
+            
+            // Watch amenity checkboxes
+            document.querySelectorAll('input[name="amenities"]').forEach(cb => {
+                cb.addEventListener('change', () => {
+                    this.selectedAmenities = Array.from(document.querySelectorAll('input[name="amenities"]:checked')).map(c => c.value);
+                });
+            });
+            
+            // Watch images textarea
+            const imagesTextarea = document.querySelector('textarea[name="images"]');
+            if (imagesTextarea) {
+                // Set initial preview image
+                const lines = imagesTextarea.value.split('\n').filter(l => l.trim());
+                let firstUrl = lines[0] || '';
+                if (firstUrl && firstUrl.includes('drive.google.com')) {
+                    firstUrl = this.getProxyUrl(firstUrl);
+                }
+                this.previewImage = firstUrl;
+                
+                // Watch for changes
+                imagesTextarea.addEventListener('input', () => {
+                    const lines = imagesTextarea.value.split('\n').filter(l => l.trim());
+                    let firstUrl = lines[0] || '';
+                    // Use proxy for Google Drive URLs in preview
+                    if (firstUrl && firstUrl.includes('drive.google.com')) {
+                        firstUrl = this.getProxyUrl(firstUrl);
+                    }
+                    this.previewImage = firstUrl;
+                });
+            }
+        },
+        
+        getProxyUrl(url) {
+            // Convert Google Drive URL to a viewable CDN format
+            if (!url) return url;
+            url = url.trim();
+            
+            if (!url.includes('drive.google.com')) return url;
+            
+            // Extract file ID
+            let fileId = null;
+            
+            // Format: /file/d/FILE_ID/view
+            let match = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+            if (match) fileId = match[1];
+            
+            // Format: /open?id=FILE_ID or /uc?id=FILE_ID
+            if (!fileId) {
+                match = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+                if (match) fileId = match[1];
+            }
+            
+            if (fileId) {
+                // Use lh3.googleusercontent.com CDN - more reliable for previews
+                return `https://lh3.googleusercontent.com/d/${fileId}`;
+            }
+            return url;
+        },
+        
+        convertGoogleDriveUrl(url) {
+            if (!url) return url;
+            url = url.trim();
+            
+            // Already a direct URL
+            if (url.includes('drive.google.com/uc?export=view')) return url;
+            if (!url.includes('drive.google.com')) return url;
+            
+            // Extract file ID from various formats
+            let fileId = null;
+            
+            // Format: /file/d/FILE_ID/view
+            let match = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+            if (match) fileId = match[1];
+            
+            // Format: /open?id=FILE_ID or /uc?id=FILE_ID
+            if (!fileId) {
+                match = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+                if (match) fileId = match[1];
+            }
+            
+            if (fileId) {
+                return `https://drive.google.com/uc?export=view&id=${fileId}`;
+            }
+            return url;
+        },
+        
+        get completeness() {
+            let filled = 0;
+            const required = ['emirate', 'city', 'category', 'offeringType', 'propertyType',
+                            'assignedAgent', 'reference', 'bedrooms', 'bathrooms', 'size', 'furnishing',
+                            'projectStatus', 'price', 'titleEn', 'descEn'];
+            required.forEach(field => {
+                if (this[field] && this[field].toString().trim()) filled++;
+            });
+            // Check location separately (it's in a different Alpine component)
+            const locationInput = document.querySelector('input[name="location"]');
+            if (locationInput && locationInput.value.trim()) filled++;
+            return Math.round((filled / (required.length + 1)) * 100);
+        },
+        
+        formatPrice(num) {
+            if (!num) return '0';
+            return parseInt(num).toLocaleString('en-AE');
+        },
+        
+        getPropertyTypeName(code) {
+            const types = {
+                'AP': 'Apartment', 'VH': 'Villa', 'TH': 'Townhouse', 'PH': 'Penthouse',
+                'DU': 'Duplex', 'CO': 'Compound', 'LP': 'Loft', 'HA': 'Hotel Apt',
+                'OF': 'Office', 'RE': 'Retail', 'WH': 'Warehouse', 'LA': 'Land',
+                'SH': 'Shop', 'BU': 'Building', 'FA': 'Factory', 'SL': 'Showroom'
+            };
+            return types[code] || code;
+        }
+    }
+}
+
+// Location Search Component
+function locationSearch() {
+    return {
+        locationId: {{ (listing.location_id if listing and listing.location_id else 'null')|tojson }},
+        locationText: {{ (listing.location if listing else "")|tojson }},
+        results: [],
+        showResults: false,
+        searching: false,
+        
+        async searchLocations() {
+            if (this.locationText.length < 2) {
+                this.results = [];
+                this.showResults = false;
+                return;
+            }
+            
+            this.searching = true;
+            try {
+                const response = await fetch(`/api/locations?search=${encodeURIComponent(this.locationText)}`);
+                const data = await response.json();
+                
+                if (data.data && Array.isArray(data.data)) {
+                    this.results = data.data.map(loc => ({
+                        id: loc.id,
+                        name: loc.name?.en || loc.name || `Location ${loc.id}`,
+                        path: this.buildPath(loc)
+                    }));
+                } else if (Array.isArray(data)) {
+                    this.results = data.map(loc => ({
+                        id: loc.id,
+                        name: loc.name?.en || loc.name || `Location ${loc.id}`,
+                        path: this.buildPath(loc)
+                    }));
+                } else {
+                    this.results = [];
+                }
+                
+                this.showResults = this.results.length > 0;
+            } catch (error) {
+                console.error('Location search error:', error);
+                this.results = [];
+            } finally {
+                this.searching = false;
+            }
+        },
+        
+        buildPath(loc) {
+            const parts = [];
+            if (loc.city?.name?.en) parts.push(loc.city.name.en);
+            if (loc.community?.name?.en) parts.push(loc.community.name.en);
+            if (loc.subCommunity?.name?.en) parts.push(loc.subCommunity.name.en);
+            return parts.join(' > ') || loc.fullName?.en || '';
+        },
+        
+        selectLocation(loc) {
+            this.locationId = loc.id;
+            this.locationText = loc.name;
+            this.showResults = false;
+            this.results = [];
+            
+            // Update parent Alpine data if exists
+            if (this.$root && this.$root.__x) {
+                this.$root.__x.$data.location = loc.name;
+            }
+        },
+        
+        clearLocation() {
+            this.locationId = null;
+            this.locationText = '';
+        }
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,1414 @@
+{% extends "base.html" %}
+
+{% block title %}Insights - L-Manager{% endblock %}
+{% block page_title %}Insights & Analytics{% endblock %}
+
+{% block content %}
+<div x-data="insightsData()" x-init="init()">
+    
+    <!-- Error Alert -->
+    <div x-show="errorMessage" class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+        <div class="flex items-center">
+            <i class="fas fa-exclamation-circle text-red-500 mr-3"></i>
+            <span class="text-red-700" x-text="errorMessage"></span>
+        </div>
+    </div>
+    
+    <!-- Load Data Panel (shown when PF data not loaded) -->
+    <div x-show="!dataLoaded && dataSource === 'pf'" class="bg-white rounded-lg shadow-lg p-8 mb-8">
+        <div class="text-center max-w-xl mx-auto">
+            <div class="w-20 h-20 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                <i class="fas fa-chart-line text-indigo-600 text-3xl"></i>
+            </div>
+            <h2 class="text-2xl font-bold text-gray-800 mb-3">PropertyFinder Insights</h2>
+            <p class="text-gray-600 mb-8">Load your PropertyFinder listings data to view insights and analytics.</p>
+            
+            <!-- Load Button -->
+            <button @click="loadPFData()" 
+                    :disabled="loading"
+                    class="inline-flex items-center px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium rounded-lg transition-colors">
+                <i class="fas mr-2" :class="loading ? 'fa-spinner fa-spin' : 'fa-cloud-download-alt'"></i>
+                <span x-text="loading ? 'Loading Data...' : 'Load PropertyFinder Data'"></span>
+            </button>
+            
+            <p class="text-xs text-gray-400 mt-4">
+                <i class="fas fa-info-circle mr-1"></i>
+                This will fetch listings, users, and leads from PropertyFinder API
+            </p>
+        </div>
+    </div>
+    
+    <!-- Data Source Tabs (shown when data is loaded or viewing local) -->
+    <div x-show="dataLoaded || dataSource === 'local'" class="mb-6">
+        <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 border-b border-gray-200 pb-4">
+            <div class="flex">
+                <button @click="dataSource = 'pf'; selectedUser = ''" 
+                        :class="dataSource === 'pf' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'"
+                        class="py-3 px-6 border-b-2 font-medium text-sm">
+                    <i class="fas fa-cloud mr-2"></i>PropertyFinder Live
+                    <span class="ml-2 bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full text-xs" x-text="pfListings.length"></span>
+                </button>
+                <button @click="dataSource = 'local'; selectedUser = ''" 
+                        :class="dataSource === 'local' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'"
+                        class="py-3 px-6 border-b-2 font-medium text-sm">
+                    <i class="fas fa-database mr-2"></i>Local Database
+                    <span class="ml-2 bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full text-xs" x-text="localListings.length"></span>
+                </button>
+            </div>
+            
+            <div class="flex items-center gap-3">
+                <!-- User/Agent Filter -->
+                <div x-show="dataSource === 'pf' && users.length > 0" class="flex items-center gap-2">
+                    <label class="text-sm text-gray-600"><i class="fas fa-user mr-1"></i>Agent:</label>
+                    <select x-model="selectedUser" @change="currentPage = 1; calculateStats(); buildCharts()"
+                            class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        <option value="">All Agents</option>
+                        <template x-for="user in users" :key="user.publicProfile?.id || user.id">
+                            <option :value="user.publicProfile?.id || user.id" x-text="(user.firstName || '') + ' ' + (user.lastName || '')"></option>
+                        </template>
+                    </select>
+                </div>
+                
+                <!-- Cache Info & Refresh -->
+                <div x-show="dataSource === 'pf' && dataLoaded" class="flex items-center gap-3">
+                    <span x-show="cachedAt" class="text-xs text-gray-500">
+                        <i class="fas fa-clock mr-1"></i>
+                        <span x-text="'Cached ' + getCacheAge() + ' ago'"></span>
+                    </span>
+                    <button @click="loadPFData(true)" 
+                            :disabled="loading"
+                            class="text-sm px-3 py-1.5 bg-indigo-100 hover:bg-indigo-200 disabled:bg-gray-100 text-indigo-700 disabled:text-gray-400 rounded-lg transition-colors">
+                        <i class="fas fa-sync-alt mr-1" :class="loading && 'fa-spin'"></i>
+                        <span x-text="loading ? 'Refreshing...' : 'Refresh'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Active Filter Display -->
+        <div x-show="selectedUser" class="mt-3 flex items-center gap-2">
+            <span class="text-sm text-gray-600">Filtering by agent:</span>
+            <span class="inline-flex items-center px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm">
+                <span x-text="getSelectedUserName()"></span>
+                <button @click="selectedUser = ''; calculateStats(); buildCharts()" class="ml-2 hover:text-indigo-900">
+                    <i class="fas fa-times"></i>
+                </button>
+            </span>
+            <span class="text-sm text-gray-500" x-text="'(' + filteredListings.length + ' listings)'"></span>
+        </div>
+    </div>
+    
+    <!-- Content Section (only shown when data is loaded or viewing local) -->
+    <div x-show="dataLoaded || dataSource === 'local'">
+    
+    <!-- No Data Alert -->
+    <div x-show="listings.length === 0 && (dataLoaded || dataSource === 'local')" class="bg-amber-50 border border-amber-200 rounded-lg p-6 mb-8">
+        <div class="flex items-start">
+            <i class="fas fa-info-circle text-amber-500 text-xl mr-4 mt-1"></i>
+            <div class="flex-1">
+                <h3 class="text-lg font-semibold text-amber-800 mb-2" x-text="dataSource === 'pf' ? 'No Listings on PropertyFinder' : 'No Local Listings'"></h3>
+                <p class="text-amber-700">
+                    <span x-show="dataSource === 'pf'">You don't have any listings on PropertyFinder yet, or they couldn't be loaded.</span>
+                    <span x-show="dataSource === 'local'">You haven't created any local listings through bulk upload yet.</span>
+                </p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Summary Cards -->
+    <div x-show="listings.length > 0" class="grid grid-cols-3 md:grid-cols-6 gap-3 mb-6">
+        <!-- Total Listings -->
+        <div class="bg-white rounded-lg shadow p-3">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-gray-500 text-xs uppercase">Total</p>
+                    <p class="text-xl font-bold text-gray-800" x-text="stats.total"></p>
+                </div>
+                <div class="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center">
+                    <i class="fas fa-building text-indigo-600 text-sm"></i>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Live/Published -->
+        <div class="bg-white rounded-lg shadow p-3">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-gray-500 text-xs uppercase">Live</p>
+                    <p class="text-xl font-bold text-green-600" x-text="stats.live"></p>
+                </div>
+                <div class="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
+                    <i class="fas fa-check-circle text-green-600 text-sm"></i>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Draft -->
+        <div class="bg-white rounded-lg shadow p-3">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-gray-500 text-xs uppercase">Draft</p>
+                    <p class="text-xl font-bold text-gray-600" x-text="stats.draft"></p>
+                </div>
+                <div class="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center">
+                    <i class="fas fa-edit text-gray-600 text-sm"></i>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Total Leads -->
+        <div class="bg-white rounded-lg shadow p-3">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-gray-500 text-xs uppercase">Leads</p>
+                    <p class="text-xl font-bold text-purple-600" x-text="leads.length"></p>
+                </div>
+                <div class="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center">
+                    <i class="fas fa-user-plus text-purple-600 text-sm"></i>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Avg Quality Score -->
+        <div class="bg-white rounded-lg shadow p-3">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-gray-500 text-xs uppercase">Quality</p>
+                    <p class="text-xl font-bold" :class="stats.avgQuality >= 70 ? 'text-green-600' : stats.avgQuality >= 50 ? 'text-yellow-600' : 'text-red-600'" x-text="stats.avgQuality + '%'"></p>
+                </div>
+                <div class="w-8 h-8 bg-yellow-100 rounded-full flex items-center justify-center">
+                    <i class="fas fa-star text-yellow-600 text-sm"></i>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Total Credits Spent -->
+        <div class="bg-white rounded-lg shadow p-3">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-gray-500 text-xs uppercase">Credits</p>
+                    <p class="text-xl font-bold text-orange-600" x-text="stats.totalCredits.toLocaleString()"></p>
+                </div>
+                <div class="w-8 h-8 bg-orange-100 rounded-full flex items-center justify-center">
+                    <i class="fas fa-coins text-orange-600 text-sm"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Performance Metrics Row -->
+    <div x-show="listings.length > 0" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <!-- Total Leads -->
+        <div class="bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg shadow p-3 text-white">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-blue-100 text-xs uppercase">Leads</p>
+                    <p class="text-lg font-bold" x-text="stats.totalLeads"></p>
+                </div>
+                <i class="fas fa-envelope text-blue-200 text-lg"></i>
+            </div>
+        </div>
+        
+        <!-- Leads per Listing -->
+        <div class="bg-gradient-to-br from-green-500 to-green-600 rounded-lg shadow p-3 text-white">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-green-100 text-xs uppercase">Leads/Listing</p>
+                    <p class="text-lg font-bold" x-text="stats.conversionRate"></p>
+                </div>
+                <i class="fas fa-chart-line text-green-200 text-lg"></i>
+            </div>
+        </div>
+        
+        <!-- Average Quality Score -->
+        <div class="bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg shadow p-3 text-white">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-purple-100 text-xs uppercase">Avg Quality</p>
+                    <p class="text-lg font-bold" x-text="stats.avgQuality + '%'"></p>
+                </div>
+                <i class="fas fa-star text-purple-200 text-lg"></i>
+            </div>
+        </div>
+        
+        <!-- Total Credits Spent -->
+        <div class="bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg shadow p-3 text-white">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-orange-100 text-xs uppercase">Credits</p>
+                    <p class="text-lg font-bold" x-text="stats.totalCredits.toLocaleString()"></p>
+                </div>
+                <i class="fas fa-coins text-orange-200 text-lg"></i>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Agent Performance Section -->
+    <div x-show="listings.length > 0 && dataSource === 'pf' && users.length > 0" class="bg-white rounded-lg shadow mb-6 overflow-hidden">
+        <div class="p-4 border-b border-gray-100 flex items-center justify-between">
+            <h3 class="text-base font-semibold">
+                <i class="fas fa-users text-indigo-500 mr-2"></i>Agent Performance
+            </h3>
+            <span class="text-xs text-gray-500" x-text="users.length + ' agents'"></span>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-xs">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Agent</th>
+                        <th class="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Listings</th>
+                        <th class="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Live</th>
+                        <th class="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Leads</th>
+                        <th class="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Avg Q</th>
+                        <th class="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Credits</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    <template x-for="agent in agentStats" :key="agent.id">
+                        <tr class="hover:bg-gray-50 cursor-pointer" @click="selectedUser = agent.id; calculateStats(); buildCharts()">
+                            <td class="px-3 py-2">
+                                <div class="flex items-center">
+                                    <div class="w-6 h-6 bg-indigo-100 rounded-full flex items-center justify-center mr-2">
+                                        <span class="text-indigo-600 font-medium text-xs" x-text="agent.name.charAt(0)"></span>
+                                    </div>
+                                    <span class="font-medium truncate max-w-[100px]" x-text="agent.name"></span>
+                                </div>
+                            </td>
+                            <td class="px-3 py-2 text-center font-medium" x-text="agent.listings"></td>
+                            <td class="px-3 py-2 text-center text-green-600" x-text="agent.live"></td>
+                            <td class="px-3 py-2 text-center text-purple-600 font-medium" x-text="agent.leads"></td>
+                            <td class="px-3 py-2 text-center">
+                                <span :class="agent.avgQuality >= 70 ? 'text-green-600' : agent.avgQuality >= 50 ? 'text-yellow-600' : 'text-red-600'" x-text="agent.avgQuality + '%'"></span>
+                            </td>
+                            <td class="px-3 py-2 text-right text-orange-600" x-text="agent.credits"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- Charts Section -->
+    <div x-show="listings.length > 0" class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        
+        <!-- Property Types Chart -->
+        <div class="bg-white rounded-lg shadow p-4">
+            <h3 class="text-sm font-semibold mb-3">
+                <i class="fas fa-home text-indigo-500 mr-1"></i>Property Types
+            </h3>
+            <div class="space-y-2">
+                <template x-for="(item, index) in charts.propertyTypes.slice(0, 5)" :key="item.label">
+                    <div>
+                        <div class="flex justify-between text-xs mb-0.5">
+                            <span class="font-medium capitalize truncate max-w-[80px]" x-text="item.label.replace(/-/g, ' ')"></span>
+                            <span class="text-gray-500" x-text="item.count"></span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-1.5">
+                            <div class="h-1.5 rounded-full" :style="'width: ' + item.percent + '%; background-color: ' + getColor(index)"></div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+        
+        <!-- Status Distribution -->
+        <div class="bg-white rounded-lg shadow p-4">
+            <h3 class="text-sm font-semibold mb-3">
+                <i class="fas fa-chart-pie text-green-500 mr-1"></i>Status
+            </h3>
+            <div class="space-y-2">
+                <template x-for="item in charts.statuses" :key="item.label">
+                    <div>
+                        <div class="flex justify-between text-xs mb-0.5">
+                            <span class="font-medium capitalize" x-text="item.label"></span>
+                            <span class="text-gray-500" x-text="item.count"></span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-1.5">
+                            <div class="h-1.5 rounded-full" :style="'width: ' + item.percent + '%; background-color: ' + getStatusColor(item.label)"></div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+        
+        <!-- Locations -->
+        <div class="bg-white rounded-lg shadow p-4">
+            <h3 class="text-sm font-semibold mb-3">
+                <i class="fas fa-map-marker-alt text-red-500 mr-1"></i>Locations
+            </h3>
+            <div class="space-y-2">
+                <template x-for="(item, index) in charts.locations.slice(0, 5)" :key="item.label">
+                    <div>
+                        <div class="flex justify-between text-xs mb-0.5">
+                            <span class="font-medium truncate max-w-[80px]" x-text="item.label"></span>
+                            <span class="text-gray-500" x-text="item.count"></span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-1.5">
+                            <div class="h-1.5 rounded-full" :style="'width: ' + item.percent + '%; background-color: ' + getColor(index)"></div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+        
+        <!-- Bedrooms -->
+        <div class="bg-white rounded-lg shadow p-4">
+            <h3 class="text-sm font-semibold mb-3">
+                <i class="fas fa-bed text-purple-500 mr-1"></i>Bedrooms
+            </h3>
+            <div class="space-y-2">
+                <template x-for="(item, index) in charts.bedrooms" :key="item.label">
+                    <div>
+                        <div class="flex justify-between text-xs mb-0.5">
+                            <span class="font-medium" x-text="item.label === 'studio' ? 'Studio' : item.label + ' BR'"></span>
+                            <span class="text-gray-500" x-text="item.count"></span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-1.5">
+                            <div class="h-1.5 rounded-full" :style="'width: ' + item.percent + '%; background-color: ' + getColor(index)"></div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+        
+        <!-- Lead Channels -->
+        <div class="bg-white rounded-lg shadow p-4">
+            <h3 class="text-sm font-semibold mb-3">
+                <i class="fas fa-phone-alt text-green-500 mr-1"></i>Lead Channels
+            </h3>
+            <div class="space-y-2">
+                <template x-for="(item, index) in charts.leadChannels" :key="item.label">
+                    <div>
+                        <div class="flex justify-between text-xs mb-0.5">
+                            <span class="font-medium capitalize" x-text="item.label"></span>
+                            <span class="text-gray-500" x-text="item.count"></span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-1.5">
+                            <div class="h-1.5 rounded-full" :style="'width: ' + item.percent + '%; background-color: ' + getChannelColor(item.label)"></div>
+                        </div>
+                    </div>
+                </template>
+                <p x-show="charts.leadChannels.length === 0" class="text-gray-400 text-xs">No data</p>
+            </div>
+        </div>
+        
+        <!-- Exposure Types -->
+        <div class="bg-white rounded-lg shadow p-4">
+            <h3 class="text-sm font-semibold mb-3">
+                <i class="fas fa-bullhorn text-orange-500 mr-1"></i>Exposure
+            </h3>
+            <div class="space-y-2">
+                <template x-for="(item, index) in charts.exposureTypes" :key="item.label">
+                    <div>
+                        <div class="flex justify-between text-xs mb-0.5">
+                            <span class="font-medium capitalize" x-text="item.label"></span>
+                            <span class="text-gray-500" x-text="item.count"></span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-1.5">
+                            <div class="h-1.5 rounded-full" :style="'width: ' + item.percent + '%; background-color: ' + getExposureColor(item.label)"></div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+        
+        <!-- Sale vs Rent -->
+        <div class="bg-white rounded-lg shadow p-4 col-span-2">
+            <h3 class="text-sm font-semibold mb-3">
+                <i class="fas fa-exchange-alt text-blue-500 mr-1"></i>Sale vs Rent
+            </h3>
+            <div class="flex gap-4">
+                <template x-for="(item, index) in charts.offerings" :key="item.label">
+                    <div class="flex-1">
+                        <div class="flex justify-between text-xs mb-0.5">
+                            <span class="font-medium capitalize" x-text="item.label"></span>
+                            <span class="text-gray-500" x-text="item.count + ' (' + item.percent + '%)'"></span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-1.5">
+                            <div class="h-1.5 rounded-full" :style="'width: ' + item.percent + '%; background-color: ' + (item.label === 'sale' ? '#3b82f6' : '#22c55e')"></div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+        
+    </div>
+    
+    <!-- Listings Table -->
+    <div x-show="filteredListings.length > 0" class="bg-white rounded-lg shadow overflow-hidden">
+        <div class="p-4 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3">
+            <h3 class="text-base font-semibold">
+                <i class="fas fa-list text-indigo-500 mr-2"></i>Listings Details
+            </h3>
+            <div class="flex flex-wrap items-center gap-3">
+                <!-- Page Size Selector -->
+                <div class="flex items-center gap-2">
+                    <label class="text-sm text-gray-500">Show:</label>
+                    <select x-model.number="pageSize" @change="currentPage = 1"
+                            class="border border-gray-300 rounded px-2 py-1 text-sm focus:ring-2 focus:ring-indigo-500">
+                        <option value="10">10</option>
+                        <option value="25">25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                        <option :value="sortedListings.length">All</option>
+                    </select>
+                </div>
+                <!-- Page Info -->
+                <span class="text-sm text-gray-500" x-text="'Page ' + currentPage + ' of ' + totalPages + ' (' + sortedListings.length + ' listings)'"></span>
+                <span x-show="dataSource === 'pf'" class="text-xs text-indigo-500">
+                    <i class="fas fa-external-link-alt mr-1"></i>Click to view on PF
+                </span>
+            </div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-xs">
+                <thead class="bg-gray-50 sticky top-0">
+                    <tr>
+                        <th @click="sortTable('reference')" class="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
+                            <div class="flex items-center gap-1">Ref <span x-show="tableSortColumn === 'reference'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
+                        </th>
+                        <th @click="sortTable('type')" class="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
+                            <div class="flex items-center gap-1">Type <span x-show="tableSortColumn === 'type'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
+                        </th>
+                        <th @click="sortTable('bedrooms')" class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
+                            <div class="flex items-center justify-center gap-1">BR <span x-show="tableSortColumn === 'bedrooms'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
+                        </th>
+                        <th class="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase">Location</th>
+                        <th @click="sortTable('qualityScore')" class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100" title="Quality Score">
+                            <div class="flex items-center justify-center gap-1">Q% <span x-show="tableSortColumn === 'qualityScore'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
+                        </th>
+                        <th class="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase">Agent</th>
+                        <th @click="sortTable('price')" class="px-2 py-2 text-right text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
+                            <div class="flex items-center justify-end gap-1">Price <span x-show="tableSortColumn === 'price'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
+                        </th>
+                        <th @click="sortTable('status')" class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
+                            <div class="flex items-center justify-center gap-1">Status <span x-show="tableSortColumn === 'status'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
+                        </th>
+                        <th @click="sortTable('leads')" class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
+                            <div class="flex items-center justify-center gap-1">Leads <span x-show="tableSortColumn === 'leads'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
+                        </th>
+                        <th class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase" x-show="dataSource === 'pf'"></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    <template x-for="listing in paginatedListings" :key="listing.id || listing.reference">
+                        <tr class="hover:bg-gray-50">
+                            <!-- Reference -->
+                            <td class="px-2 py-1.5 font-mono text-xs text-gray-600" x-text="listing.reference || listing.id || '-'"></td>
+                            <!-- Property Type with Category/Offering badge -->
+                            <td class="px-2 py-1.5">
+                                <div class="flex items-center gap-1">
+                                    <span class="capitalize text-xs" x-text="(listing.type || listing.property_type || '-').replace(/-/g, ' ')"></span>
+                                    <span class="text-xs px-1 rounded" 
+                                          :class="listing.offering === 'sale' ? 'bg-blue-50 text-blue-600' : 'bg-green-50 text-green-600'"
+                                          x-text="listing.offering === 'sale' ? 'S' : 'R'" :title="listing.offering"></span>
+                                </div>
+                            </td>
+                            <!-- Bedrooms -->
+                            <td class="px-2 py-1.5 text-center text-xs" x-text="getBedrooms(listing)"></td>
+                            <!-- Location (click to copy location + ID) -->
+                            <td class="px-2 py-1.5 cursor-pointer hover:bg-indigo-50" 
+                                @click.stop="copyLocationWithId(listing)"
+                                :title="'Click to copy: ' + getLocation(listing) + (listing.location?.id ? ' (ID: ' + listing.location.id + ')' : '')">
+                                <div class="max-w-[120px] truncate text-xs hover:text-indigo-600" 
+                                     x-text="getLocation(listing)"></div>
+                            </td>
+                            <!-- Quality Score -->
+                            <td class="px-2 py-1.5 text-center">
+                                <span class="text-xs font-medium" 
+                                      :class="{
+                                          'text-green-600': (listing.qualityScore?.value || 0) >= 80,
+                                          'text-yellow-600': (listing.qualityScore?.value || 0) >= 50 && (listing.qualityScore?.value || 0) < 80,
+                                          'text-red-600': (listing.qualityScore?.value || 0) < 50 && listing.qualityScore?.value
+                                      }"
+                                      x-text="listing.qualityScore?.value || '-'"></span>
+                            </td>
+                            <!-- Agent -->
+                            <td class="px-2 py-1.5">
+                                <div class="max-w-[80px] truncate text-xs" :title="getAgentName(listing)" x-text="getAgentName(listing)"></div>
+                            </td>
+                            <!-- Price -->
+                            <td class="px-2 py-1.5 text-right text-xs font-medium" x-text="formatPrice(listing.price)"></td>
+                            <!-- Status -->
+                            <td class="px-2 py-1.5 text-center">
+                                <span class="px-1.5 py-0.5 text-xs rounded-full" 
+                                      :class="{
+                                          'bg-green-100 text-green-700': getStatus(listing) === 'live',
+                                          'bg-gray-100 text-gray-600': getStatus(listing) === 'draft',
+                                          'bg-red-100 text-red-700': getStatus(listing) === 'takendown',
+                                          'bg-yellow-100 text-yellow-700': !['live', 'draft', 'takendown'].includes(getStatus(listing))
+                                      }"
+                                      x-text="getStatus(listing)">
+                                </span>
+                            </td>
+                            <!-- Leads Received -->
+                            <td class="px-2 py-1.5 text-center">
+                                <span class="text-xs font-medium" :class="getLeadsCount(listing) > 0 ? 'text-green-600' : 'text-gray-400'" x-text="getLeadsCount(listing)"></span>
+                            </td>
+                            <!-- Action -->
+                            <td class="px-2 py-1.5 text-center" x-show="dataSource === 'pf'">
+                                <a :href="getPFPortalUrl(listing)" target="_blank" @click.stop
+                                   class="text-indigo-600 hover:text-indigo-800"
+                                   title="View on PropertyFinder.ae">
+                                    <i class="fas fa-external-link-alt text-xs"></i>
+                                </a>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+        <!-- Pagination Navigation -->
+        <div class="px-3 py-2 border-t border-gray-100 flex flex-wrap items-center justify-between gap-2 bg-gray-50 text-xs">
+            <div class="text-gray-500">
+                <span class="font-medium" x-text="((currentPage - 1) * pageSize) + 1"></span>-<span class="font-medium" x-text="Math.min(currentPage * pageSize, sortedListings.length)"></span>
+                of <span class="font-medium" x-text="sortedListings.length"></span>
+            </div>
+            <div class="flex items-center gap-1">
+                <button @click="currentPage = 1" :disabled="currentPage === 1"
+                        class="px-2 py-1 border rounded transition-colors"
+                        :class="currentPage === 1 ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-white text-gray-700 hover:bg-gray-100'">
+                    <i class="fas fa-angle-double-left"></i>
+                </button>
+                <button @click="currentPage--" :disabled="currentPage === 1"
+                        class="px-2 py-1 border rounded transition-colors"
+                        :class="currentPage === 1 ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-white text-gray-700 hover:bg-gray-100'">
+                    <i class="fas fa-angle-left"></i>
+                </button>
+                <span class="px-2 text-gray-600" x-text="currentPage + '/' + totalPages"></span>
+                <button @click="currentPage++" :disabled="currentPage >= totalPages"
+                        class="px-2 py-1 border rounded transition-colors"
+                        :class="currentPage >= totalPages ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-white text-gray-700 hover:bg-gray-100'">
+                    <i class="fas fa-angle-right"></i>
+                </button>
+                <button @click="currentPage = totalPages" :disabled="currentPage >= totalPages"
+                        class="px-2 py-1 border rounded transition-colors"
+                        :class="currentPage >= totalPages ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-white text-gray-700 hover:bg-gray-100'">
+                    <i class="fas fa-angle-double-right"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    </div><!-- End Content Section -->
+    
+</div>
+
+<script>
+function insightsData() {
+    return {
+        dataSource: 'pf',
+        dataLoaded: false,
+        loading: false,
+        errorMessage: '',
+        cachedAt: null,
+        loadForUser: '',
+        fromCache: false,
+        
+        pfListings: [],
+        localListings: {{ local_listings | tojson | safe }},
+        users: [],
+        availableUsers: [],
+        leads: [],
+        locations: {},
+        selectedUser: '',
+        
+        stats: {
+            total: 0,
+            live: 0,
+            draft: 0,
+            takendown: 0,
+            livePercent: 0,
+            totalLeads: 0,
+            conversionRate: 0,
+            avgQuality: 0,
+            totalImpressions: 0,
+            totalClicks: 0,
+            avgCTR: 0,
+            totalCredits: 0,
+            avgCredits: 0
+        },
+        
+        charts: {
+            propertyTypes: [],
+            statuses: [],
+            locations: [],
+            bedrooms: [],
+            leadChannels: [],
+            exposureTypes: [],
+            offerings: []
+        },
+        
+        // Table sorting
+        tableSortColumn: 'leads',
+        tableSortDir: 'desc',
+        
+        // Pagination
+        currentPage: 1,
+        pageSize: 25,
+        
+        // Agent stats
+        agentStats: [],
+        
+        get listings() {
+            return this.dataSource === 'pf' ? this.pfListings : this.localListings;
+        },
+        
+        get filteredListings() {
+            let list = this.listings;
+            if (this.selectedUser && this.dataSource === 'pf') {
+                const selectedId = String(this.selectedUser);
+                list = list.filter(l => {
+                    const agentId = String(l.assignedTo?.id || l.publicProfile?.id || l.agent?.id || l.userId || 'unassigned');
+                    return agentId === selectedId;
+                });
+            }
+            return list;
+        },
+        
+        get sortedListings() {
+            let list = [...this.filteredListings];
+            const col = this.tableSortColumn;
+            const dir = this.tableSortDir;
+            
+            list.sort((a, b) => {
+                let aVal, bVal;
+                
+                switch(col) {
+                    case 'reference':
+                        aVal = a.reference || a.id || '';
+                        bVal = b.reference || b.id || '';
+                        break;
+                    case 'category':
+                        aVal = a.category || '';
+                        bVal = b.category || '';
+                        break;
+                    case 'type':
+                        aVal = a.type || a.property_type || '';
+                        bVal = b.type || b.property_type || '';
+                        break;
+                    case 'bedrooms':
+                        aVal = a.bedrooms === 'studio' ? 0 : (parseInt(a.bedrooms) || -1);
+                        bVal = b.bedrooms === 'studio' ? 0 : (parseInt(b.bedrooms) || -1);
+                        break;
+                    case 'qualityScore':
+                        aVal = a.qualityScore?.value || 0;
+                        bVal = b.qualityScore?.value || 0;
+                        break;
+                    case 'credits':
+                        aVal = a.credits?.spent ?? a.creditsSpent ?? 0;
+                        bVal = b.credits?.spent ?? b.creditsSpent ?? 0;
+                        break;
+                    case 'price':
+                        aVal = a.price?.amounts?.yearly || a.price?.amounts?.sale || a.price?.amounts?.monthly || a.price || 0;
+                        bVal = b.price?.amounts?.yearly || b.price?.amounts?.sale || b.price?.amounts?.monthly || b.price || 0;
+                        break;
+                    case 'status':
+                        aVal = this.getStatus(a);
+                        bVal = this.getStatus(b);
+                        break;
+                    case 'leads':
+                        aVal = this.getLeadsCount(a);
+                        bVal = this.getLeadsCount(b);
+                        break;
+                    case 'impressions':
+                        aVal = a.statistics?.impressions ?? a.impressions ?? 0;
+                        bVal = b.statistics?.impressions ?? b.impressions ?? 0;
+                        break;
+                    case 'clicks':
+                        aVal = a.statistics?.clicks ?? a.clicks ?? 0;
+                        bVal = b.statistics?.clicks ?? b.clicks ?? 0;
+                        break;
+                    default:
+                        aVal = 0;
+                        bVal = 0;
+                }
+                
+                if (typeof aVal === 'string') {
+                    aVal = aVal.toLowerCase();
+                    bVal = bVal.toLowerCase();
+                }
+                
+                if (aVal < bVal) return dir === 'asc' ? -1 : 1;
+                if (aVal > bVal) return dir === 'asc' ? 1 : -1;
+                return 0;
+            });
+            
+            return list;
+        },
+        
+        get totalPages() {
+            if (!this.pageSize || this.pageSize >= this.sortedListings.length) return 1;
+            return Math.ceil(this.sortedListings.length / this.pageSize);
+        },
+        
+        get paginatedListings() {
+            if (!this.pageSize || this.pageSize >= this.sortedListings.length) {
+                return this.sortedListings;
+            }
+            const start = (this.currentPage - 1) * this.pageSize;
+            const end = start + this.pageSize;
+            return this.sortedListings.slice(start, end);
+        },
+        
+        sortTable(column) {
+            if (this.tableSortColumn === column) {
+                this.tableSortDir = this.tableSortDir === 'asc' ? 'desc' : 'asc';
+            } else {
+                this.tableSortColumn = column;
+                this.tableSortDir = 'desc';
+            }
+            // Reset to first page when sorting changes
+            this.currentPage = 1;
+        },
+        
+        getPaginationPages() {
+            const total = this.totalPages;
+            const current = this.currentPage;
+            const pages = [];
+            
+            if (total <= 7) {
+                // Show all pages if 7 or less
+                for (let i = 1; i <= total; i++) {
+                    pages.push(i);
+                }
+            } else {
+                // Always show first page
+                pages.push(1);
+                
+                if (current > 3) {
+                    pages.push('...');
+                }
+                
+                // Show pages around current
+                const start = Math.max(2, current - 1);
+                const end = Math.min(total - 1, current + 1);
+                
+                for (let i = start; i <= end; i++) {
+                    pages.push(i);
+                }
+                
+                if (current < total - 2) {
+                    pages.push('...');
+                }
+                
+                // Always show last page
+                pages.push(total);
+            }
+            
+            return pages;
+        },
+        
+        getSelectedUserName() {
+            if (!this.selectedUser) return '';
+            const user = this.users.find(u => (u.publicProfile?.id || u.id) == this.selectedUser);
+            return user ? (user.firstName || '') + ' ' + (user.lastName || '') : '';
+        },
+        
+        getLeadsCount(listing) {
+            const listingId = String(listing.id || listing.reference || '');
+            if (!listingId) return 0;
+            
+            return this.leads.filter(lead => {
+                const leadListingId = String(lead.listing?.id || lead.listing?.reference || lead.listingId || '');
+                return leadListingId === listingId;
+            }).length;
+        },
+        
+        getTotalLeadsForListings() {
+            let total = 0;
+            const listingIds = new Set(this.filteredListings.map(l => String(l.id || l.reference || '')));
+            
+            this.leads.forEach(lead => {
+                const leadListingId = String(lead.listing?.id || lead.listing?.reference || lead.listingId || '');
+                if (listingIds.has(leadListingId)) {
+                    total++;
+                }
+            });
+            
+            return total;
+        },
+        
+        formatNumber(val) {
+            if (val === null || val === undefined) return '-';
+            return Number(val).toLocaleString();
+        },
+        
+        getCacheAge() {
+            if (!this.cachedAt) return 'unknown';
+            const age = Math.round((Date.now() - new Date(this.cachedAt).getTime()) / 1000);
+            if (age < 60) return age + 's';
+            if (age < 3600) return Math.round(age / 60) + 'm';
+            return Math.round(age / 3600) + 'h';
+        },
+        
+        async loadPFData(forceRefresh = false) {
+            this.loading = true;
+            this.errorMessage = '';
+            
+            try {
+                let url = '/api/pf/insights';
+                const params = new URLSearchParams();
+                if (this.loadForUser) {
+                    params.set('user_id', this.loadForUser);
+                }
+                if (forceRefresh) {
+                    params.set('refresh', 'true');
+                }
+                if (params.toString()) {
+                    url += '?' + params.toString();
+                }
+                
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data.success || data.listings?.length > 0) {
+                    this.pfListings = data.listings || [];
+                    this.users = data.users || [];
+                    this.availableUsers = data.users || [];
+                    this.leads = data.leads || [];
+                    this.locations = data.locations || {};
+                    this.cachedAt = data.cached_at;
+                    this.dataLoaded = true;
+                    this.fromCache = data.from_cache || false;
+                    
+                    // If loaded for specific user, set the filter
+                    if (this.loadForUser) {
+                        this.selectedUser = this.loadForUser;
+                    }
+                    
+                    this.calculateStats();
+                    this.buildCharts();
+                    
+                    // Show cache indicator
+                    if (data.from_cache && !forceRefresh) {
+                        console.log('Data loaded from cache, cached at:', data.cached_at);
+                    }
+                } else {
+                    this.errorMessage = data.error || 'Failed to load data';
+                }
+            } catch (error) {
+                this.errorMessage = 'Network error: ' + error.message;
+            } finally {
+                this.loading = false;
+            }
+        },
+        
+        async init() {
+            // Fetch app settings to get default agent and auto-load PF data
+            try {
+                const settingsResponse = await fetch('/api/settings');
+                const settings = await settingsResponse.json();
+                
+                if (settings.success && settings.settings.default_pf_agent_id) {
+                    // Set default agent filter
+                    this.loadForUser = settings.settings.default_pf_agent_id;
+                }
+            } catch (error) {
+                console.log('Could not load default settings:', error);
+            }
+            
+            // Always auto-load PF data on page load
+            this.dataSource = 'pf';
+            await this.loadPFData();
+            
+            // Watch for data source changes
+            this.$watch('dataSource', () => {
+                if (this.dataSource === 'local' || this.dataLoaded) {
+                    this.calculateStats();
+                    this.buildCharts();
+                }
+            });
+        },
+        
+        getStatus(listing) {
+            return listing.state?.type || listing.status || 'unknown';
+        },
+        
+        getTitle(listing) {
+            if (listing.title?.en) return listing.title.en;
+            if (listing.title?.ar) return listing.title.ar;
+            if (typeof listing.title === 'string') return listing.title;
+            if (listing.title_en) return listing.title_en;
+            return listing.reference || '-';
+        },
+        
+        getAgentName(listing) {
+            // PropertyFinder API structure - check assignedTo first
+            if (listing.assignedTo?.name) return listing.assignedTo.name;
+            if (listing.assignedTo?.firstName) {
+                return (listing.assignedTo.firstName + ' ' + (listing.assignedTo.lastName || '')).trim();
+            }
+            if (listing.publicProfile?.name) return listing.publicProfile.name;
+            if (listing.agent?.name) return listing.agent.name;
+            if (listing.agent?.firstName) {
+                return (listing.agent.firstName + ' ' + (listing.agent.lastName || '')).trim();
+            }
+            // Look up from users list
+            const agentId = listing.assignedTo?.id || listing.publicProfile?.id || listing.agent?.id || listing.userId;
+            if (agentId) {
+                const user = this.users.find(u => u.id == agentId || u.publicProfile?.id == agentId);
+                if (user) {
+                    if (user.name) return user.name;
+                    return (user.firstName + ' ' + (user.lastName || '')).trim();
+                }
+            }
+            // Local database format
+            if (listing.assigned_agent) return listing.assigned_agent;
+            return '-';
+        },
+        
+        getBedrooms(listing) {
+            const beds = listing.bedrooms;
+            if (beds === 'studio' || beds === 'Studio') return 'Studio';
+            if (beds === null || beds === undefined) return '-';
+            return beds.toString();
+        },
+        
+        formatSize(size) {
+            if (!size) return '-';
+            // Handle PF API size structure
+            const sqft = size.sqft || size.value || size;
+            if (typeof sqft !== 'number') return '-';
+            return sqft.toLocaleString() + ' sqft';
+        },
+        
+        getLocation(listing) {
+            // Handle PropertyFinder API location structure
+            const loc = listing.location;
+            if (loc) {
+                // First, try to look up from locations map by ID
+                if (loc.id && this.locations[String(loc.id)]) {
+                    return this.locations[String(loc.id)];
+                }
+                // API response: location has name and tree
+                if (loc.name) return loc.name;
+                if (loc.fullName?.en) return loc.fullName.en;
+                if (loc.fullName?.ar) return loc.fullName.ar;
+                // Build from tree if available (array of {id, type, name})
+                if (loc.tree && Array.isArray(loc.tree) && loc.tree.length > 0) {
+                    const names = loc.tree.map(t => t.name).filter(n => n);
+                    if (names.length > 0) {
+                        return names.slice(-3).reverse().join(', ');
+                    }
+                }
+                // Handle local database format (location is a string)
+                if (typeof loc === 'string' && loc) {
+                    if (listing.city) return loc + ', ' + listing.city;
+                    return loc;
+                }
+                // Return location ID if nothing else
+                if (loc.id) return `Location ${loc.id}`;
+            }
+            // Fallback to other location fields
+            if (listing.city) return listing.city;
+            if (listing.emirate) return listing.emirate;
+            return '-';
+        },
+        
+        copyLocationWithId(listing) {
+            const locationName = this.getLocation(listing);
+            const locationId = listing.location?.id || '';
+            const textToCopy = locationId ? `${locationName} (ID: ${locationId})` : locationName;
+            
+            // Try modern clipboard API first, fallback to execCommand
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(textToCopy).then(() => {
+                    this.showCopyToast(textToCopy);
+                }).catch(err => {
+                    console.error('Clipboard API failed:', err);
+                    this.fallbackCopy(textToCopy);
+                });
+            } else {
+                this.fallbackCopy(textToCopy);
+            }
+        },
+        
+        fallbackCopy(text) {
+            // Fallback for non-HTTPS or older browsers
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            textArea.style.position = 'fixed';
+            textArea.style.left = '-999999px';
+            textArea.style.top = '-999999px';
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {
+                document.execCommand('copy');
+                this.showCopyToast(text);
+            } catch (err) {
+                console.error('Fallback copy failed:', err);
+                alert('Copy failed. Text: ' + text);
+            }
+            document.body.removeChild(textArea);
+        },
+        
+        showCopyToast(text) {
+            const toast = document.createElement('div');
+            toast.className = 'fixed bottom-4 right-4 bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg z-50';
+            toast.innerHTML = '<i class="fas fa-check mr-2"></i>Copied: ' + text;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 2000);
+        },
+        
+        calculateStats() {
+            const listings = this.filteredListings;
+            this.stats.total = listings.length;
+            
+            // Count by status (PF API uses state.type)
+            this.stats.live = listings.filter(l => 
+                l.state?.type === 'live' || l.status === 'live' || l.status === 'published'
+            ).length;
+            this.stats.draft = listings.filter(l => 
+                l.state?.type === 'draft' || l.status === 'draft'
+            ).length;
+            this.stats.takendown = listings.filter(l => 
+                l.state?.type === 'takendown' || l.status === 'takendown'
+            ).length;
+            
+            this.stats.livePercent = this.stats.total > 0 
+                ? Math.round((this.stats.live / this.stats.total) * 100) 
+                : 0;
+            
+            // Calculate total leads for current filtered listings
+            this.stats.totalLeads = this.getTotalLeadsForListings();
+            
+            // Conversion rate: leads per listing
+            this.stats.conversionRate = this.stats.live > 0 
+                ? (this.stats.totalLeads / this.stats.live).toFixed(2)
+                : 0;
+            
+            // Average quality score
+            let totalQuality = 0;
+            let qualityCount = 0;
+            listings.forEach(l => {
+                const quality = l.qualityScore?.value || 0;
+                if (quality > 0) {
+                    totalQuality += quality;
+                    qualityCount++;
+                }
+            });
+            this.stats.avgQuality = qualityCount > 0 
+                ? Math.round(totalQuality / qualityCount) 
+                : 0;
+            
+            // Total impressions and clicks
+            let totalImpressions = 0;
+            let totalClicks = 0;
+            listings.forEach(l => {
+                totalImpressions += l.statistics?.impressions ?? l.impressions ?? 0;
+                totalClicks += l.statistics?.clicks ?? l.clicks ?? 0;
+            });
+            this.stats.totalImpressions = totalImpressions;
+            this.stats.totalClicks = totalClicks;
+            
+            // Average CTR
+            this.stats.avgCTR = totalImpressions > 0 
+                ? ((totalClicks / totalImpressions) * 100).toFixed(2)
+                : 0;
+            
+            // Total credits spent
+            let totalCredits = 0;
+            listings.forEach(l => {
+                totalCredits += l.credits?.spent ?? l.creditsSpent ?? 0;
+            });
+            this.stats.totalCredits = totalCredits;
+            this.stats.avgCredits = this.stats.total > 0 
+                ? Math.round(totalCredits / this.stats.total)
+                : 0;
+            
+            // Build agent performance stats
+            this.buildAgentPerformance();
+        },
+        
+        buildCharts() {
+            const listings = this.filteredListings;
+            
+            // Property Types
+            this.charts.propertyTypes = this.groupBy(listings, l => l.type || 'Unknown');
+            
+            // Statuses
+            this.charts.statuses = this.groupBy(listings, l => l.state?.type || l.status || 'unknown');
+            
+            // Locations
+            this.charts.locations = this.groupBy(listings, l => this.getLocation(l));
+            
+            // Bedrooms
+            const bedroomData = this.groupBy(listings, l => {
+                const beds = l.bedrooms;
+                if (beds === 'studio') return 'Studio';
+                return beds || 'N/A';
+            });
+            const bedroomOrder = ['Studio', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'N/A'];
+            this.charts.bedrooms = bedroomData.sort((a, b) => 
+                bedroomOrder.indexOf(a.label) - bedroomOrder.indexOf(b.label)
+            );
+            
+            // Lead Channels (from leads data) - filter by selected agent's listings
+            const channelCounts = {};
+            // Get listing IDs for the filtered listings
+            const filteredListingIds = new Set(listings.map(l => String(l.id || l.reference || '')));
+            
+            // Filter leads to only those matching filtered listings
+            const filteredLeads = this.leads.filter(lead => {
+                const leadListingId = String(lead.listing?.id || lead.listing?.reference || lead.listingId || '');
+                return filteredListingIds.has(leadListingId);
+            });
+            
+            filteredLeads.forEach(lead => {
+                const channel = lead.channel || lead.source || 'Unknown';
+                channelCounts[channel] = (channelCounts[channel] || 0) + 1;
+            });
+            const totalLeads = filteredLeads.length;
+            this.charts.leadChannels = Object.entries(channelCounts).map(([label, count]) => ({
+                label: label.charAt(0).toUpperCase() + label.slice(1),
+                count,
+                percent: totalLeads > 0 ? Math.round((count / totalLeads) * 100) : 0
+            })).sort((a, b) => b.count - a.count);
+            
+            // Exposure/Product Types
+            const exposureCounts = {};
+            listings.forEach(l => {
+                // Handle products as array or object
+                let products = l.products;
+                if (products && !Array.isArray(products)) {
+                    // If it's an object, try to extract product type
+                    const type = products.type || products.name || 'Standard';
+                    exposureCounts[type] = (exposureCounts[type] || 0) + 1;
+                } else if (Array.isArray(products) && products.length > 0) {
+                    products.forEach(p => {
+                        const type = p.type || p.name || 'Standard';
+                        exposureCounts[type] = (exposureCounts[type] || 0) + 1;
+                    });
+                } else {
+                    // No products, use featured flag or default to Standard
+                    const type = l.featured ? 'Featured' : (l.premium ? 'Premium' : 'Standard');
+                    exposureCounts[type] = (exposureCounts[type] || 0) + 1;
+                }
+            });
+            const totalForExposure = listings.length;
+            this.charts.exposureTypes = Object.entries(exposureCounts).map(([label, count]) => ({
+                label: label.charAt(0).toUpperCase() + label.slice(1).replace(/-/g, ' '),
+                count,
+                percent: totalForExposure > 0 ? Math.round((count / totalForExposure) * 100) : 0
+            })).sort((a, b) => b.count - a.count);
+            
+            // Offerings (sale vs rent)
+            this.charts.offerings = this.groupBy(listings, l => 
+                (l.category || l.offering || 'Unknown').charAt(0).toUpperCase() + 
+                (l.category || l.offering || 'Unknown').slice(1)
+            );
+        },
+        
+        buildAgentPerformance() {
+            // Use filtered listings if agent is selected, otherwise all listings
+            const listings = this.selectedUser ? this.filteredListings : this.listings;
+            const agentMap = {};
+            
+            listings.forEach(l => {
+                const agentId = String(l.assignedTo?.id || l.publicProfile?.id || l.agent?.id || l.userId || 'unassigned');
+                const agentName = this.getAgentName(l);
+                
+                if (!agentMap[agentId]) {
+                    agentMap[agentId] = {
+                        id: agentId,
+                        name: agentName,
+                        listings: 0,
+                        live: 0,
+                        leads: 0,
+                        impressions: 0,
+                        clicks: 0,
+                        totalQuality: 0,
+                        qualityCount: 0,
+                        credits: 0
+                    };
+                }
+                
+                const agent = agentMap[agentId];
+                agent.listings++;
+                
+                if (l.state?.type === 'live' || l.status === 'live') {
+                    agent.live++;
+                }
+                
+                // Count leads for this listing
+                const listingId = String(l.id || l.reference || '');
+                const leadCount = this.leads.filter(lead => {
+                    const leadListingId = String(lead.listing?.id || lead.listing?.reference || lead.listingId || '');
+                    return leadListingId === listingId;
+                }).length;
+                agent.leads += leadCount;
+                
+                // Stats
+                agent.impressions += l.statistics?.impressions ?? l.impressions ?? 0;
+                agent.clicks += l.statistics?.clicks ?? l.clicks ?? 0;
+                agent.credits += l.credits?.spent ?? l.creditsSpent ?? 0;
+                
+                const quality = l.qualityScore?.value || 0;
+                if (quality > 0) {
+                    agent.totalQuality += quality;
+                    agent.qualityCount++;
+                }
+            });
+            
+            // Convert to array and calculate derived metrics
+            this.agentStats = Object.values(agentMap).map(agent => ({
+                ...agent,
+                ctr: agent.impressions > 0 ? ((agent.clicks / agent.impressions) * 100).toFixed(1) : '0',
+                avgQuality: agent.qualityCount > 0 ? Math.round(agent.totalQuality / agent.qualityCount) : 0
+            })).sort((a, b) => b.leads - a.leads); // Sort by leads descending
+        },
+        
+        getPFListingUrl(listing) {
+            // Generate PropertyFinder Expert listing URL
+            // PF Expert dashboard URL: https://expert.propertyfinder.ae/en/listings/{id}
+            if (listing.url) return listing.url;
+            if (listing.portalUrl) return listing.portalUrl;
+            if (listing.links?.portal) return listing.links.portal;
+            if (listing.links?.view) return listing.links.view;
+            
+            // Construct PF Expert URL from listing ID/reference
+            const id = listing.id || listing.reference;
+            if (id) {
+                return `https://expert.propertyfinder.ae/en/listings/${id}`;
+            }
+            return null;
+        },
+        
+        getPFPortalUrl(listing) {
+            // Generate public PropertyFinder.ae listing URL
+            // Format: https://propertyfinder.ae/go/{id}
+            const id = listing.id || listing.reference;
+            if (id) {
+                return `https://propertyfinder.ae/go/${id}`;
+            }
+            return '#';
+        },
+        
+        openInPF(listing) {
+            const url = this.getPFPortalUrl(listing);
+            if (url && url !== '#') {
+                window.open(url, '_blank');
+            }
+        },
+        
+        formatDateShort(dateStr) {
+            if (!dateStr) return '-';
+            try {
+                const date = new Date(dateStr);
+                const now = new Date();
+                const diffDays = Math.floor((date - now) / (1000 * 60 * 60 * 24));
+                
+                // Show relative for expiry dates in the future
+                if (diffDays >= 0 && diffDays <= 7) {
+                    return diffDays === 0 ? 'Today' : `${diffDays}d`;
+                }
+                
+                // Short format: Jan 15
+                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            } catch {
+                return '-';
+            }
+        },
+        
+        isExpiringSoon(dateStr) {
+            if (!dateStr) return false;
+            try {
+                const date = new Date(dateStr);
+                const now = new Date();
+                const diffDays = Math.floor((date - now) / (1000 * 60 * 60 * 24));
+                return diffDays >= 0 && diffDays <= 7;
+            } catch {
+                return false;
+            }
+        },
+        
+        getCTR(listing) {
+            const impressions = listing.statistics?.impressions ?? listing.impressions ?? 0;
+            const clicks = listing.statistics?.clicks ?? listing.clicks ?? 0;
+            if (!impressions || impressions === 0) return '-';
+            const ctr = (clicks / impressions) * 100;
+            return ctr.toFixed(1) + '%';
+        },
+        
+        groupBy(items, keyFn) {
+            const groups = {};
+            items.forEach(item => {
+                const key = keyFn(item) || 'Unknown';
+                groups[key] = (groups[key] || 0) + 1;
+            });
+            
+            const total = items.length;
+            return Object.entries(groups)
+                .map(([label, count]) => ({
+                    label,
+                    count,
+                    percent: total > 0 ? Math.round((count / total) * 100) : 0
+                }))
+                .sort((a, b) => b.count - a.count);
+        },
+        
+        formatPrice(price) {
+            if (!price) return '-';
+            // Handle PF API price structure
+            const amount = price.amounts?.yearly || price.amounts?.sale || price.amounts?.monthly || price;
+            if (typeof amount !== 'number') return '-';
+            
+            if (amount >= 1000000) {
+                return 'AED ' + (amount / 1000000).toFixed(1) + 'M';
+            }
+            if (amount >= 1000) {
+                return 'AED ' + (amount / 1000).toFixed(0) + 'K';
+            }
+            return 'AED ' + amount.toLocaleString();
+        },
+        
+        getColor(index) {
+            const colors = [
+                '#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#f97316',
+                '#eab308', '#22c55e', '#14b8a6', '#06b6d4', '#3b82f6'
+            ];
+            return colors[index % colors.length];
+        },
+        
+        getStatusColor(status) {
+            const statusColors = {
+                'live': '#22c55e',
+                'published': '#22c55e',
+                'draft': '#6b7280',
+                'takendown': '#ef4444',
+                'pending': '#f59e0b'
+            };
+            return statusColors[status?.toLowerCase()] || '#6b7280';
+        },
+        
+        getChannelColor(channel) {
+            const channelColors = {
+                'whatsapp': '#25D366',
+                'email': '#3b82f6',
+                'call': '#f97316',
+                'phone': '#f97316',
+                'sms': '#8b5cf6',
+                'chat': '#06b6d4',
+                'form': '#ec4899',
+                'unknown': '#6b7280'
+            };
+            return channelColors[channel?.toLowerCase()] || '#6b7280';
+        },
+        
+        getExposureColor(exposure) {
+            const exposureColors = {
+                'featured': '#f59e0b',
+                'premium': '#8b5cf6',
+                'standard': '#6b7280',
+                'signature': '#ec4899',
+                'spotlight': '#ef4444',
+                'basic': '#9ca3af'
+            };
+            return exposureColors[exposure?.toLowerCase()] || '#6b7280';
+        }
+    };
+}
+</script>
+{% endblock %}

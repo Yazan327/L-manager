@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Listing - PropertyFinder{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb mb-2">
+            <li class="breadcrumb-item"><a href="/listings">Listings</a></li>
+            <li class="breadcrumb-item"><a href="/listings/{{ listing.id }}">{{ listing.reference_number or listing.id[:8] }}</a></li>
+            <li class="breadcrumb-item active">Edit</li>
+        </ol>
+    </nav>
+    <h1><i class="bi bi-pencil me-2"></i>Edit Listing</h1>
+</div>
+
+<form method="POST" action="/listings/{{ listing.id }}/edit">
+    <div class="row g-4">
+        <!-- Main Form -->
+        <div class="col-md-8">
+            <!-- Basic Information -->
+            <div class="card p-4 mb-4">
+                <h5 class="mb-4"><i class="bi bi-info-circle me-2"></i>Basic Information</h5>
+                
+                <div class="mb-3">
+                    <label class="form-label">Title <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" name="title" required 
+                           value="{{ listing.title or '' }}">
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-control" name="description" rows="4">{{ listing.description or '' }}</textarea>
+                </div>
+                
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Property Type</label>
+                        <select class="form-select" name="property_type">
+                            {% for code, name in property_types %}
+                            <option value="{{ code }}" {% if listing.property_type == code %}selected{% endif %}>{{ name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Offering Type</label>
+                        <select class="form-select" name="offering_type" id="offering_type">
+                            <option value="sale" {% if listing.offering_type == 'sale' %}selected{% endif %}>For Sale</option>
+                            <option value="rent" {% if listing.offering_type == 'rent' %}selected{% endif %}>For Rent</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Price -->
+            <div class="card p-4 mb-4">
+                <h5 class="mb-4"><i class="bi bi-cash me-2"></i>Price</h5>
+                
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Price</label>
+                        <div class="input-group">
+                            <span class="input-group-text">AED</span>
+                            <input type="number" class="form-control" name="price" 
+                                   value="{{ listing.price.amount if listing.price else '' }}" min="0" step="1">
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Currency</label>
+                        <select class="form-select" name="currency">
+                            <option value="AED" {% if not listing.price or listing.price.currency == 'AED' %}selected{% endif %}>AED</option>
+                            <option value="USD" {% if listing.price and listing.price.currency == 'USD' %}selected{% endif %}>USD</option>
+                            <option value="EUR" {% if listing.price and listing.price.currency == 'EUR' %}selected{% endif %}>EUR</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3" id="rent_frequency_container" 
+                         style="display: {% if listing.offering_type == 'rent' %}block{% else %}none{% endif %};">
+                        <label class="form-label">Frequency</label>
+                        <select class="form-select" name="rent_frequency">
+                            <option value="yearly" {% if listing.price and listing.price.frequency == 'yearly' %}selected{% endif %}>Yearly</option>
+                            <option value="monthly" {% if listing.price and listing.price.frequency == 'monthly' %}selected{% endif %}>Monthly</option>
+                            <option value="weekly" {% if listing.price and listing.price.frequency == 'weekly' %}selected{% endif %}>Weekly</option>
+                            <option value="daily" {% if listing.price and listing.price.frequency == 'daily' %}selected{% endif %}>Daily</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Property Details -->
+            <div class="card p-4">
+                <h5 class="mb-4"><i class="bi bi-house me-2"></i>Property Details</h5>
+                
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <label class="form-label">Bedrooms</label>
+                        <select class="form-select" name="bedrooms">
+                            <option value="">Select</option>
+                            {% for i in range(8) %}
+                            <option value="{{ i }}" {% if listing.bedrooms == i %}selected{% endif %}>
+                                {{ 'Studio' if i == 0 else (i if i < 7 else '7+') }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Bathrooms</label>
+                        <select class="form-select" name="bathrooms">
+                            <option value="">Select</option>
+                            {% for i in range(1, 7) %}
+                            <option value="{{ i }}" {% if listing.bathrooms == i %}selected{% endif %}>
+                                {{ i if i < 6 else '6+' }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Size (sqft)</label>
+                        <input type="number" class="form-control" name="size" 
+                               value="{{ listing.size or '' }}" min="0">
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Sidebar -->
+        <div class="col-md-4">
+            <!-- Current Status -->
+            <div class="card p-4 mb-4">
+                <h5 class="mb-4"><i class="bi bi-flag me-2"></i>Status</h5>
+                
+                <div class="d-flex align-items-center">
+                    <span class="badge-status badge-{{ listing.status or 'draft' }} me-2">
+                        {{ listing.status or 'draft' }}
+                    </span>
+                    <span class="text-muted small">Current status</span>
+                </div>
+                
+                {% if listing.status == 'draft' %}
+                <p class="text-muted small mt-3 mb-0">
+                    You can publish this listing after saving your changes.
+                </p>
+                {% endif %}
+            </div>
+            
+            <!-- Submit -->
+            <div class="card p-4">
+                <h5 class="mb-4"><i class="bi bi-save me-2"></i>Save Changes</h5>
+                
+                <div class="d-grid gap-2">
+                    <button type="submit" class="btn btn-pf btn-lg">
+                        <i class="bi bi-check-lg me-1"></i> Save Changes
+                    </button>
+                    <a href="/listings/{{ listing.id }}" class="btn btn-outline-secondary">
+                        Cancel
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.getElementById('offering_type').addEventListener('change', function() {
+    const container = document.getElementById('rent_frequency_container');
+    container.style.display = this.value === 'rent' ? 'block' : 'none';
+});
+</script>
+{% endblock %}

@@ -1,0 +1,21 @@
+# Railway ignore file
+.git
+.gitignore
+.env
+.env.local
+*.md
+*.txt
+!requirements.txt
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.coverage
+htmlcov
+.vscode
+.idea
+*.db
+data/*.db
+uploads/*
+!uploads/.gitkeep
+*.log

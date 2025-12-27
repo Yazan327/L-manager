@@ -1,0 +1,108 @@
+[
+  {
+    "title": {
+      "en": "Luxury 2BR Apartment in Dubai Marina"
+    },
+    "description": {
+      "en": "Stunning 2 bedroom apartment with full marina view. Modern finishes, spacious layout, and premium amenities."
+    },
+    "type": "apartment",
+    "category": "residential",
+    "uaeEmirate": "dubai",
+    "price": {
+      "type": "sale",
+      "amounts": {
+        "sale": 2500000
+      },
+      "downpayment": 250000
+    },
+    "location": {
+      "id": 12345
+    },
+    "bedrooms": "2",
+    "bathrooms": "3",
+    "size": 1450,
+    "reference": "REF-001",
+    "compliance": {
+      "type": "rera",
+      "listingAdvertisementNumber": "7116777484"
+    },
+    "projectStatus": "completed",
+    "furnishingType": "furnished",
+    "parkingSlots": 1,
+    "amenities": ["shared-gym", "shared-pool", "concierge", "security"],
+    "media": {
+      "images": [
+        { "original": { "url": "https://example.com/image1.jpg" } },
+        { "original": { "url": "https://example.com/image2.jpg" } }
+      ]
+    },
+    "assignedTo": {
+      "id": 123456
+    }
+  },
+  {
+    "title": {
+      "en": "Spacious Villa in Arabian Ranches"
+    },
+    "description": {
+      "en": "Beautiful 4 bedroom villa with private pool and garden. Perfect family home in a gated community."
+    },
+    "type": "villa",
+    "category": "residential",
+    "uaeEmirate": "dubai",
+    "price": {
+      "type": "sale",
+      "amounts": {
+        "sale": 5500000
+      },
+      "downpayment": 550000
+    },
+    "location": {
+      "id": 23456
+    },
+    "bedrooms": "4",
+    "bathrooms": "5",
+    "size": 4200,
+    "plotSize": 6500,
+    "reference": "REF-002",
+    "projectStatus": "completed",
+    "furnishingType": "unfurnished",
+    "parkingSlots": 2,
+    "amenities": ["private-pool", "private-garden", "maids-room"],
+    "assignedTo": {
+      "id": 123456
+    }
+  },
+  {
+    "title": {
+      "en": "Modern 1BR for Rent in Downtown"
+    },
+    "description": {
+      "en": "Stylish 1 bedroom apartment with Burj Khalifa view. Walking distance to Dubai Mall."
+    },
+    "type": "apartment",
+    "category": "residential",
+    "uaeEmirate": "dubai",
+    "price": {
+      "type": "yearly",
+      "amounts": {
+        "yearly": 95000
+      },
+      "numberOfCheques": 4
+    },
+    "location": {
+      "id": 34567
+    },
+    "bedrooms": "1",
+    "bathrooms": "2",
+    "size": 850,
+    "reference": "REF-003",
+    "projectStatus": "completed",
+    "furnishingType": "furnished",
+    "amenities": ["shared-gym", "shared-pool", "shared-spa", "covered-parking"],
+    "assignedTo": {
+      "id": 123456
+    }
+  }
+]

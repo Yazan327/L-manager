@@ -1,0 +1,1896 @@
+{% extends "base.html" %}
+
+{% block title %}Bulk Upload - L-Manager{% endblock %}
+{% block page_title %}Bulk Upload{% endblock %}
+
+{% block content %}
+<div x-data="bulkUpload()" class="max-w-6xl">
+    <!-- Step Indicator -->
+    <div class="mb-6">
+        <div class="flex items-center justify-center">
+            <div class="flex items-center">
+                <div :class="step >= 1 ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-600'" 
+                     class="w-10 h-10 rounded-full flex items-center justify-center font-semibold">1</div>
+                <span class="ml-2 font-medium" :class="step >= 1 ? 'text-indigo-600' : 'text-gray-400'">Upload File</span>
+            </div>
+            <div class="w-16 h-1 mx-4" :class="step >= 2 ? 'bg-indigo-600' : 'bg-gray-200'"></div>
+            <div class="flex items-center">
+                <div :class="step >= 2 ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-600'" 
+                     class="w-10 h-10 rounded-full flex items-center justify-center font-semibold">2</div>
+                <span class="ml-2 font-medium" :class="step >= 2 ? 'text-indigo-600' : 'text-gray-400'">Map Columns</span>
+            </div>
+            <div class="w-16 h-1 mx-4" :class="step >= 3 ? 'bg-indigo-600' : 'bg-gray-200'"></div>
+            <div class="flex items-center">
+                <div :class="step >= 3 ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-600'" 
+                     class="w-10 h-10 rounded-full flex items-center justify-center font-semibold">3</div>
+                <span class="ml-2 font-medium" :class="step >= 3 ? 'text-indigo-600' : 'text-gray-400'">Results</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Step 1: Upload File -->
+    <div x-show="step === 1" class="bg-white rounded-lg shadow mb-6">
+        <div class="p-6">
+            <h3 class="text-lg font-semibold mb-4">Step 1: Upload Listings File</h3>
+            <p class="text-gray-600 mb-6">Upload a JSON or CSV file containing your property listings.</p>
+            
+            <!-- Drag & Drop Zone -->
+            <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center"
+                 :class="{ 'border-indigo-500 bg-indigo-50': dragOver }"
+                 @dragover.prevent="dragOver = true"
+                 @dragleave.prevent="dragOver = false"
+                 @drop.prevent="handleDrop($event)">
+                
+                <template x-if="!selectedFile">
+                    <div>
+                        <i class="fas fa-cloud-upload-alt text-5xl text-gray-400 mb-4"></i>
+                        <p class="text-gray-600 mb-2">Drag and drop your file here, or</p>
+                        <label class="cursor-pointer">
+                            <span class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition">
+                                Browse Files
+                            </span>
+                            <input type="file" class="hidden" accept=".json,.csv" @change="handleFileSelect($event)">
+                        </label>
+                        <p class="text-sm text-gray-500 mt-4">Supported formats: JSON, CSV (max 16MB)</p>
+                    </div>
+                </template>
+                
+                <template x-if="selectedFile">
+                    <div class="flex items-center justify-center space-x-4">
+                        <i class="fas fa-file-alt text-4xl text-indigo-500"></i>
+                        <div class="text-left">
+                            <p class="font-medium" x-text="selectedFile.name"></p>
+                            <p class="text-sm text-gray-500" x-text="formatFileSize(selectedFile.size)"></p>
+                        </div>
+                        <button @click="resetFile()" class="text-red-500 hover:text-red-700">
+                            <i class="fas fa-times-circle text-2xl"></i>
+                        </button>
+                    </div>
+                </template>
+            </div>
+            
+            <!-- Next Button -->
+            <div class="mt-6 flex justify-end">
+                <button @click="parseFile()" 
+                        :disabled="!selectedFile || parsing"
+                        class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                    <template x-if="!parsing">
+                        <span>Next: Map Columns <i class="fas fa-arrow-right ml-2"></i></span>
+                    </template>
+                    <template x-if="parsing">
+                        <span><i class="fas fa-spinner fa-spin mr-2"></i>Parsing file...</span>
+                    </template>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Step 2: Column Mapping -->
+    <div x-show="step === 2" x-cloak class="bg-white rounded-lg shadow mb-6">
+        <div class="p-6">
+            <h3 class="text-lg font-semibold mb-2">Step 2: Map Your Columns</h3>
+            <p class="text-gray-600 mb-6">Match your CSV columns to PropertyFinder listing fields. Fields marked with * are required.</p>
+            
+            <!-- File Info -->
+            <div class="bg-gray-50 rounded-lg p-4 mb-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <span class="text-sm text-gray-500">File:</span>
+                        <span class="font-medium ml-2" x-text="selectedFile?.name"></span>
+                    </div>
+                    <div>
+                        <span class="text-sm text-gray-500">Rows found:</span>
+                        <span class="font-medium ml-2" x-text="csvData.length"></span>
+                    </div>
+                    <div>
+                        <span class="text-sm text-gray-500">Columns:</span>
+                        <span class="font-medium ml-2" x-text="csvHeaders.length"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Mapping Table -->
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">PropertyFinder Field</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Your CSV Column</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Sample Data</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                        <!-- Core Details (Required) -->
+                        <tr class="bg-red-50">
+                            <td colspan="3" class="px-4 py-2 text-xs font-semibold text-red-700 uppercase">
+                                <i class="fas fa-asterisk mr-1"></i>Core Details (Required)
+                            </td>
+                        </tr>
+                        <template x-for="field in coreFields" :key="field.key">
+                            <tr class="hover:bg-gray-50">
+                                <td class="px-4 py-3">
+                                    <span class="font-medium" x-text="field.label"></span>
+                                    <span x-show="field.required" class="text-red-500">*</span>
+                                    <p class="text-xs text-gray-500" x-text="field.description"></p>
+                                </td>
+                                <td class="px-4 py-3">
+                                    <select x-model="columnMapping[field.key]" 
+                                            class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 text-sm">
+                                        <option value="" x-text="field.required ? '-- Select Column --' : '-- Skip --'"></option>
+                                        <template x-for="header in csvHeaders" :key="header">
+                                            <option :value="header" x-text="header"></option>
+                                        </template>
+                                        <option value="__custom__">✏️ Custom Value...</option>
+                                    </select>
+                                    <input x-show="columnMapping[field.key] === '__custom__'" 
+                                           x-model="customValues[field.key]"
+                                           type="text" 
+                                           placeholder="Enter custom value"
+                                           class="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                                </td>
+                                <td class="px-4 py-3 text-sm text-gray-500">
+                                    <span x-text="getSampleValue(columnMapping[field.key])"></span>
+                                </td>
+                            </tr>
+                        </template>
+                        
+                        <!-- Specifications -->
+                        <tr class="bg-green-50">
+                            <td colspan="3" class="px-4 py-2 text-xs font-semibold text-green-700 uppercase">
+                                <i class="fas fa-ruler-combined mr-1"></i>Specifications
+                            </td>
+                        </tr>
+                        <template x-for="field in specFields" :key="field.key">
+                            <tr class="hover:bg-gray-50">
+                                <td class="px-4 py-3">
+                                    <span class="font-medium" x-text="field.label"></span>
+                                    <span x-show="field.required" class="text-red-500">*</span>
+                                    <p class="text-xs text-gray-500" x-text="field.description"></p>
+                                </td>
+                                <td class="px-4 py-3">
+                                    <select x-model="columnMapping[field.key]" 
+                                            class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 text-sm">
+                                        <option value="" x-text="field.required ? '-- Select Column --' : '-- Skip --'"></option>
+                                        <template x-for="header in csvHeaders" :key="header">
+                                            <option :value="header" x-text="header"></option>
+                                        </template>
+                                        <option value="__custom__">✏️ Custom Value...</option>
+                                    </select>
+                                    <input x-show="columnMapping[field.key] === '__custom__'" 
+                                           x-model="customValues[field.key]"
+                                           type="text" 
+                                           placeholder="Enter custom value"
+                                           class="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                                </td>
+                                <td class="px-4 py-3 text-sm text-gray-500">
+                                    <span x-text="getSampleValue(columnMapping[field.key])"></span>
+                                </td>
+                            </tr>
+                        </template>
+                        
+                        <!-- Price -->
+                        <tr class="bg-yellow-50">
+                            <td colspan="3" class="px-4 py-2 text-xs font-semibold text-yellow-700 uppercase">
+                                <i class="fas fa-money-bill-wave mr-1"></i>Price
+                            </td>
+                        </tr>
+                        <template x-for="field in priceFields" :key="field.key">
+                            <tr class="hover:bg-gray-50">
+                                <td class="px-4 py-3">
+                                    <span class="font-medium" x-text="field.label"></span>
+                                    <span x-show="field.required" class="text-red-500">*</span>
+                                    <p class="text-xs text-gray-500" x-text="field.description"></p>
+                                </td>
+                                <td class="px-4 py-3">
+                                    <select x-model="columnMapping[field.key]" 
+                                            class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 text-sm">
+                                        <option value="" x-text="field.required ? '-- Select Column --' : '-- Skip --'"></option>
+                                        <template x-for="header in csvHeaders" :key="header">
+                                            <option :value="header" x-text="header"></option>
+                                        </template>
+                                        <option value="__custom__">✏️ Custom Value...</option>
+                                    </select>
+                                    <input x-show="columnMapping[field.key] === '__custom__'" 
+                                           x-model="customValues[field.key]"
+                                           type="text" 
+                                           placeholder="Enter custom value"
+                                           class="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                                </td>
+                                <td class="px-4 py-3 text-sm text-gray-500">
+                                    <span x-text="getSampleValue(columnMapping[field.key])"></span>
+                                </td>
+                            </tr>
+                        </template>
+                        
+                        <!-- Title & Description -->
+                        <tr class="bg-indigo-50">
+                            <td colspan="3" class="px-4 py-2 text-xs font-semibold text-indigo-700 uppercase">
+                                <i class="fas fa-align-left mr-1"></i>Title & Description
+                            </td>
+                        </tr>
+                        <template x-for="field in descriptionFields" :key="field.key">
+                            <tr class="hover:bg-gray-50">
+                                <td class="px-4 py-3">
+                                    <span class="font-medium" x-text="field.label"></span>
+                                    <span x-show="field.required" class="text-red-500">*</span>
+                                    <p class="text-xs text-gray-500" x-text="field.description"></p>
+                                </td>
+                                <td class="px-4 py-3">
+                                    <select x-model="columnMapping[field.key]" 
+                                            class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 text-sm">
+                                        <option value="" x-text="field.required ? '-- Select Column --' : '-- Skip --'"></option>
+                                        <template x-for="header in csvHeaders" :key="header">
+                                            <option :value="header" x-text="header"></option>
+                                        </template>
+                                        <option value="__custom__">✏️ Custom Value...</option>
+                                    </select>
+                                    <input x-show="columnMapping[field.key] === '__custom__'" 
+                                           x-model="customValues[field.key]"
+                                           type="text" 
+                                           placeholder="Enter custom value"
+                                           class="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                                </td>
+                                <td class="px-4 py-3 text-sm text-gray-500">
+                                    <span x-text="getSampleValue(columnMapping[field.key])"></span>
+                                </td>
+                            </tr>
+                        </template>
+                        
+                        <!-- Media -->
+                        <tr class="bg-pink-50">
+                            <td colspan="3" class="px-4 py-2 text-xs font-semibold text-pink-700 uppercase">
+                                <i class="fas fa-images mr-1"></i>Media
+                            </td>
+                        </tr>
+                        <template x-for="field in mediaFields" :key="field.key">
+                            <tr class="hover:bg-gray-50">
+                                <td class="px-4 py-3">
+                                    <span class="font-medium" x-text="field.label"></span>
+                                    <p class="text-xs text-gray-500" x-text="field.description"></p>
+                                </td>
+                                <td class="px-4 py-3">
+                                    <select x-model="columnMapping[field.key]" 
+                                            class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 text-sm">
+                                        <option value="">-- Skip --</option>
+                                        <template x-for="header in csvHeaders" :key="header">
+                                            <option :value="header" x-text="header"></option>
+                                        </template>
+                                        <option value="__custom__">✏️ Custom Value...</option>
+                                    </select>
+                                    <input x-show="columnMapping[field.key] === '__custom__'" 
+                                           x-model="customValues[field.key]"
+                                           type="text" 
+                                           placeholder="Enter custom value"
+                                           class="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                                </td>
+                                <td class="px-4 py-3 text-sm text-gray-500">
+                                    <span x-text="getSampleValue(columnMapping[field.key])"></span>
+                                </td>
+                            </tr>
+                        </template>
+                        
+                        <!-- Amenities -->
+                        <tr class="bg-teal-50">
+                            <td colspan="3" class="px-4 py-2 text-xs font-semibold text-teal-700 uppercase">
+                                <i class="fas fa-swimming-pool mr-1"></i>Amenities
+                            </td>
+                        </tr>
+                        <template x-for="field in amenityFields" :key="field.key">
+                            <tr class="hover:bg-gray-50">
+                                <td class="px-4 py-3">
+                                    <span class="font-medium" x-text="field.label"></span>
+                                    <p class="text-xs text-gray-500" x-text="field.description"></p>
+                                </td>
+                                <td class="px-4 py-3">
+                                    <select x-model="columnMapping[field.key]" 
+                                            class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 text-sm">
+                                        <option value="">-- Skip --</option>
+                                        <template x-for="header in csvHeaders" :key="header">
+                                            <option :value="header" x-text="header"></option>
+                                        </template>
+                                        <option value="__custom__">✏️ Custom Value...</option>
+                                    </select>
+                                    <input x-show="columnMapping[field.key] === '__custom__'" 
+                                           x-model="customValues[field.key]"
+                                           type="text" 
+                                           placeholder="e.g., balcony, central-ac, security"
+                                           class="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                                </td>
+                                <td class="px-4 py-3 text-sm text-gray-500">
+                                    <span x-text="getSampleValue(columnMapping[field.key])"></span>
+                                </td>
+                            </tr>
+                        </template>
+                        
+                        <!-- Compliance (RERA/ADREC) -->
+                        <tr class="bg-orange-50">
+                            <td colspan="3" class="px-4 py-2 text-xs font-semibold text-orange-700 uppercase">
+                                <i class="fas fa-shield-alt mr-1"></i>Compliance (Dubai/Abu Dhabi)
+                            </td>
+                        </tr>
+                        <template x-for="field in complianceFields" :key="field.key">
+                            <tr class="hover:bg-gray-50">
+                                <td class="px-4 py-3">
+                                    <span class="font-medium" x-text="field.label"></span>
+                                    <p class="text-xs text-gray-500" x-text="field.description"></p>
+                                </td>
+                                <td class="px-4 py-3">
+                                    <select x-model="columnMapping[field.key]" 
+                                            class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 text-sm">
+                                        <option value="">-- Skip --</option>
+                                        <template x-for="header in csvHeaders" :key="header">
+                                            <option :value="header" x-text="header"></option>
+                                        </template>
+                                        <option value="__custom__">✏️ Custom Value...</option>
+                                    </select>
+                                    <input x-show="columnMapping[field.key] === '__custom__'" 
+                                           x-model="customValues[field.key]"
+                                           type="text" 
+                                           :placeholder="field.key === 'compliance_type' ? 'rera, dtcm, or adrec' : 'Permit number'"
+                                           class="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                                </td>
+                                <td class="px-4 py-3 text-sm text-gray-500">
+                                    <span x-text="getSampleValue(columnMapping[field.key])"></span>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- Options -->
+            <div class="mt-6 p-4 bg-gray-50 rounded-lg">
+                <h4 class="font-medium mb-3">Options</h4>
+                <div class="flex items-center space-x-6">
+                    <label class="flex items-center">
+                        <input type="checkbox" x-model="publishAfterUpload" class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                        <span class="ml-2 text-sm text-gray-700">Publish listings after creation</span>
+                    </label>
+                    <label class="flex items-center">
+                        <input type="checkbox" x-model="skipInvalid" class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                        <span class="ml-2 text-sm text-gray-700">Skip rows with missing required fields</span>
+                    </label>
+                </div>
+            </div>
+            
+
+            
+            <!-- Preview -->
+            <div class="mt-6">
+                <h4 class="font-medium mb-3">Preview (First 3 rows)</h4>
+                <div class="overflow-x-auto border rounded-lg">
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">#</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Title</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Type</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Price</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Location</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Beds</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Amenities</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Agent</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y">
+                            <template x-for="(row, idx) in previewRows" :key="idx">
+                                <tr>
+                                    <td class="px-3 py-2 text-gray-500" x-text="idx + 1"></td>
+                                    <td class="px-3 py-2" x-text="getMappedValue(row, 'title_en') || '-'"></td>
+                                    <td class="px-3 py-2" x-text="getMappedValue(row, 'property_type') || '-'"></td>
+                                    <td class="px-3 py-2" x-text="getMappedValue(row, 'price') || '-'"></td>
+                                    <td class="px-3 py-2" x-text="getMappedValue(row, 'location') || getMappedValue(row, 'city') || '-'"></td>
+                                    <td class="px-3 py-2" x-text="getMappedValue(row, 'bedrooms') || '-'"></td>
+                                    <td class="px-3 py-2 max-w-xs truncate" x-text="getMappedValue(row, 'amenities') || '-'" :title="getMappedValue(row, 'amenities')"></td>
+                                    <td class="px-3 py-2" x-text="getMappedValue(row, 'assigned_agent') || '-'"></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- Buttons -->
+            <div class="mt-6 flex justify-between">
+                <button @click="step = 1" class="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
+                    <i class="fas fa-arrow-left mr-2"></i>Back
+                </button>
+                <button @click="processUpload()" 
+                        :disabled="!validateMapping() || uploading"
+                        class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                    <template x-if="!uploading">
+                        <span><i class="fas fa-upload mr-2"></i>Create <span x-text="csvData.length"></span> Listings</span>
+                    </template>
+                    <template x-if="uploading">
+                        <span><i class="fas fa-spinner fa-spin mr-2"></i>Processing...</span>
+                    </template>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Step 3: Results -->
+    <div x-show="step === 3" x-cloak class="bg-white rounded-lg shadow mb-6">
+        <div class="p-6">
+            <h3 class="text-lg font-semibold mb-4">Upload Results</h3>
+            
+            <!-- Summary -->
+            <div class="grid grid-cols-3 gap-4 mb-6">
+                <div class="bg-gray-50 rounded-lg p-4 text-center">
+                    <p class="text-3xl font-bold text-gray-900" x-text="results?.total || 0"></p>
+                    <p class="text-sm text-gray-500">Total</p>
+                </div>
+                <div class="bg-green-50 rounded-lg p-4 text-center">
+                    <p class="text-3xl font-bold text-green-600" x-text="results?.successful || 0"></p>
+                    <p class="text-sm text-gray-500">Successful</p>
+                </div>
+                <div class="bg-red-50 rounded-lg p-4 text-center">
+                    <p class="text-3xl font-bold text-red-600" x-text="results?.failed || 0"></p>
+                    <p class="text-sm text-gray-500">Failed</p>
+                </div>
+            </div>
+            
+            <!-- Progress Bar -->
+            <div x-show="uploading" class="mb-6">
+                <div class="flex justify-between text-sm text-gray-600 mb-1">
+                    <span>Processing...</span>
+                    <span x-text="uploadProgress + '%'"></span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2">
+                    <div class="bg-indigo-600 h-2 rounded-full transition-all duration-300" :style="'width: ' + uploadProgress + '%'"></div>
+                </div>
+            </div>
+            
+            <!-- Errors -->
+            <template x-if="results?.errors?.length > 0">
+                <div class="border border-red-200 rounded-lg overflow-hidden mb-6">
+                    <div class="bg-red-50 px-4 py-2 border-b border-red-200 flex justify-between items-center">
+                        <span class="font-medium text-red-800">Errors (<span x-text="results.errors.length"></span>)</span>
+                        <button @click="downloadErrors()" class="text-sm text-red-600 hover:underline">
+                            <i class="fas fa-download mr-1"></i>Download Error Report
+                        </button>
+                    </div>
+                    <div class="max-h-60 overflow-y-auto">
+                        <template x-for="(error, idx) in results.errors" :key="idx">
+                            <div class="px-4 py-3 border-b border-red-100 last:border-0">
+                                <p class="font-medium text-red-800">Row <span x-text="error.row || error.reference"></span></p>
+                                <p class="text-sm text-red-600" x-text="error.error"></p>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </template>
+            
+            <!-- Success -->
+            <template x-if="results?.successful > 0">
+                <div class="text-center py-6 border border-green-200 rounded-lg bg-green-50 mb-6">
+                    <i class="fas fa-check-circle text-5xl text-green-500 mb-3"></i>
+                    <p class="text-green-700 font-medium" x-text="results.successful + ' listings created successfully!'"></p>
+                </div>
+            </template>
+            
+            <!-- Actions -->
+            <div class="flex justify-between">
+                <button @click="resetAll()" class="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
+                    <i class="fas fa-redo mr-2"></i>Upload More
+                </button>
+                <a href="{{ url_for('listings') }}" class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition">
+                    View Listings <i class="fas fa-arrow-right ml-2"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Comprehensive Bulk Upload Guide -->
+    <div x-show="step === 1" class="bg-white rounded-lg shadow" x-data="{ guideSection: 'overview' }">
+        <div class="p-6">
+            <h3 class="text-lg font-semibold mb-4 flex items-center">
+                <i class="fas fa-book text-indigo-500 mr-2"></i>Complete Bulk Upload Guide
+            </h3>
+            
+            <!-- Guide Navigation -->
+            <div class="flex flex-wrap gap-2 mb-6">
+                <button @click="guideSection = 'overview'" 
+                        :class="guideSection === 'overview' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700'"
+                        class="px-4 py-2 rounded-lg text-sm font-medium transition">
+                    <i class="fas fa-info-circle mr-1"></i>Overview
+                </button>
+                <button @click="guideSection = 'fields'" 
+                        :class="guideSection === 'fields' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700'"
+                        class="px-4 py-2 rounded-lg text-sm font-medium transition">
+                    <i class="fas fa-list-alt mr-1"></i>All Fields
+                </button>
+                <button @click="guideSection = 'values'" 
+                        :class="guideSection === 'values' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700'"
+                        class="px-4 py-2 rounded-lg text-sm font-medium transition">
+                    <i class="fas fa-tags mr-1"></i>Valid Values
+                </button>
+                <button @click="guideSection = 'amenities'" 
+                        :class="guideSection === 'amenities' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700'"
+                        class="px-4 py-2 rounded-lg text-sm font-medium transition">
+                    <i class="fas fa-swimming-pool mr-1"></i>Amenities
+                </button>
+                <button @click="guideSection = 'sample'" 
+                        :class="guideSection === 'sample' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700'"
+                        class="px-4 py-2 rounded-lg text-sm font-medium transition">
+                    <i class="fas fa-file-download mr-1"></i>Sample CSV
+                </button>
+                <button @click="guideSection = 'tips'" 
+                        :class="guideSection === 'tips' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700'"
+                        class="px-4 py-2 rounded-lg text-sm font-medium transition">
+                    <i class="fas fa-lightbulb mr-1"></i>Tips
+                </button>
+            </div>
+            
+            <!-- Overview Section -->
+            <div x-show="guideSection === 'overview'" class="space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="p-4 border rounded-lg">
+                        <h4 class="font-medium text-gray-700 mb-2"><i class="fas fa-file-csv text-green-500 mr-2"></i>CSV Files</h4>
+                        <p class="text-sm text-gray-600 mb-2">Upload any CSV file and map columns in the next step. Your columns will be detected automatically.</p>
+                        <ul class="text-xs text-gray-500 space-y-1">
+                            <li>• Comma, semicolon, or tab delimited</li>
+                            <li>• First row must be headers</li>
+                            <li>• UTF-8 encoding recommended</li>
+                        </ul>
+                    </div>
+                    <div class="p-4 border rounded-lg">
+                        <h4 class="font-medium text-gray-700 mb-2"><i class="fas fa-file-code text-blue-500 mr-2"></i>JSON Files</h4>
+                        <p class="text-sm text-gray-600 mb-2">Upload a JSON file with an array of listing objects.</p>
+                        <ul class="text-xs text-gray-500 space-y-1">
+                            <li>• Array of objects: <code class="bg-gray-100 px-1">[{...}, {...}]</code></li>
+                            <li>• Or nested: <code class="bg-gray-100 px-1">{"listings": [...]}</code></li>
+                            <li>• Max 16MB file size</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <div class="p-4 bg-indigo-50 rounded-lg">
+                    <h4 class="font-medium text-indigo-700 mb-2"><i class="fas fa-magic mr-2"></i>How Column Mapping Works</h4>
+                    <ol class="text-sm text-indigo-600 space-y-2">
+                        <li><strong>1.</strong> Upload your file - we detect all column headers</li>
+                        <li><strong>2.</strong> Match each PropertyFinder field to your CSV column</li>
+                        <li><strong>3.</strong> Use "Custom Value" to set the same value for all rows (e.g., same agent for all listings)</li>
+                        <li><strong>4.</strong> Preview your data and create listings</li>
+                    </ol>
+                </div>
+            </div>
+            
+            <!-- All Fields Section -->
+            <div x-show="guideSection === 'fields'" class="space-y-4">
+                <p class="text-sm text-gray-600 mb-4">Fields marked with <span class="text-red-500">*</span> are required by PropertyFinder API. Use exact API field names for best compatibility.</p>
+                
+                <!-- Core Details -->
+                <div class="border rounded-lg overflow-hidden">
+                    <div class="bg-red-50 px-4 py-2 font-medium text-red-700 text-sm">
+                        <i class="fas fa-asterisk mr-1"></i>Core Details (Required)
+                    </div>
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-2 text-left">API Field</th>
+                                <th class="px-4 py-2 text-left">Description</th>
+                                <th class="px-4 py-2 text-left">Example</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y">
+                            <tr><td class="px-4 py-2 font-medium">uaeEmirate <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">UAE Emirate (lowercase)</td><td class="px-4 py-2 text-gray-500">dubai, abu_dhabi, northern_emirates</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">category <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">Property category</td><td class="px-4 py-2 text-gray-500">residential, commercial</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">type <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">Property type (full name)</td><td class="px-4 py-2 text-gray-500">apartment, villa, townhouse, office-space</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">location_id <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">Location ID from Locations API</td><td class="px-4 py-2 text-gray-500">12345 (integer)</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">assigned_to_id <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">Public Profile ID of agent</td><td class="px-4 py-2 text-gray-500">123456 (integer)</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">reference <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">Your unique reference</td><td class="px-4 py-2 text-gray-500">REF-12345</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Specifications -->
+                <div class="border rounded-lg overflow-hidden">
+                    <div class="bg-green-50 px-4 py-2 font-medium text-green-700 text-sm">
+                        <i class="fas fa-ruler-combined mr-1"></i>Specifications
+                    </div>
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-2 text-left">API Field</th>
+                                <th class="px-4 py-2 text-left">Description</th>
+                                <th class="px-4 py-2 text-left">Example</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y">
+                            <tr><td class="px-4 py-2 font-medium">bedrooms <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">String: studio, 1-30</td><td class="px-4 py-2 text-gray-500">"studio", "1", "2", "3"</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">bathrooms <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">String: none, 1-20</td><td class="px-4 py-2 text-gray-500">"none", "1", "2", "3"</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">size <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">Size in sqft (number)</td><td class="px-4 py-2 text-gray-500">1450</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">furnishingType <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">Furnishing status</td><td class="px-4 py-2 text-gray-500">unfurnished, semi-furnished, furnished</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">projectStatus <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">Completion status</td><td class="px-4 py-2 text-gray-500">completed, off_plan, completed_primary, off_plan_primary</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">parkingSlots</td><td class="px-4 py-2 text-gray-600">Parking spaces (integer)</td><td class="px-4 py-2 text-gray-500">1, 2</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">plotSize</td><td class="px-4 py-2 text-gray-600">Plot size in sqft</td><td class="px-4 py-2 text-gray-500">6500</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">floorNumber</td><td class="px-4 py-2 text-gray-600">Floor number (string)</td><td class="px-4 py-2 text-gray-500">"7"</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">age</td><td class="px-4 py-2 text-gray-600">Years since handover</td><td class="px-4 py-2 text-gray-500">5</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">developer</td><td class="px-4 py-2 text-gray-600">Developer name</td><td class="px-4 py-2 text-gray-500">Emaar, Damac</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Price -->
+                <div class="border rounded-lg overflow-hidden">
+                    <div class="bg-yellow-50 px-4 py-2 font-medium text-yellow-700 text-sm">
+                        <i class="fas fa-money-bill-wave mr-1"></i>Price (API Structure)
+                    </div>
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-2 text-left">CSV Field</th>
+                                <th class="px-4 py-2 text-left">Maps to API</th>
+                                <th class="px-4 py-2 text-left">Example</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y">
+                            <tr><td class="px-4 py-2 font-medium">price_type <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">price.type</td><td class="px-4 py-2 text-gray-500">sale, yearly, monthly, daily, weekly</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">price_amount <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">price.amounts.{sale|yearly|...}</td><td class="px-4 py-2 text-gray-500">2500000</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">downpayment</td><td class="px-4 py-2 text-gray-600">price.downpayment</td><td class="px-4 py-2 text-gray-500">250000 (for sale)</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">number_of_cheques</td><td class="px-4 py-2 text-gray-600">price.numberOfCheques</td><td class="px-4 py-2 text-gray-500">4 (for rent)</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Title & Description -->
+                <div class="border rounded-lg overflow-hidden">
+                    <div class="bg-indigo-50 px-4 py-2 font-medium text-indigo-700 text-sm">
+                        <i class="fas fa-align-left mr-1"></i>Title & Description
+                    </div>
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-2 text-left">CSV Field</th>
+                                <th class="px-4 py-2 text-left">Maps to API</th>
+                                <th class="px-4 py-2 text-left">Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y">
+                            <tr><td class="px-4 py-2 font-medium">title_en <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">title.en</td><td class="px-4 py-2 text-gray-500">Max 50 chars, no emojis/HTML</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">title_ar</td><td class="px-4 py-2 text-gray-600">title.ar</td><td class="px-4 py-2 text-gray-500">Arabic title (optional)</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">description_en <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">description.en</td><td class="px-4 py-2 text-gray-500">Max 2000 chars, no emojis/HTML</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">description_ar</td><td class="px-4 py-2 text-gray-600">description.ar</td><td class="px-4 py-2 text-gray-500">Arabic description (optional)</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Compliance (DLD/RERA/ADREC) -->
+                <div class="border rounded-lg overflow-hidden">
+                    <div class="bg-orange-50 px-4 py-2 font-medium text-orange-700 text-sm">
+                        <i class="fas fa-shield-alt mr-1"></i>Compliance (Required for Dubai/Abu Dhabi)
+                    </div>
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-2 text-left">CSV Field</th>
+                                <th class="px-4 py-2 text-left">Maps to API</th>
+                                <th class="px-4 py-2 text-left">Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y">
+                            <tr><td class="px-4 py-2 font-medium">compliance_type</td><td class="px-4 py-2 text-gray-600">compliance.type</td><td class="px-4 py-2 text-gray-500">rera, dtcm (Dubai), adrec (Abu Dhabi)</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">permit_number</td><td class="px-4 py-2 text-gray-600">compliance.listingAdvertisementNumber</td><td class="px-4 py-2 text-gray-500">7116777484 (RERA permit)</td></tr>
+                        </tbody>
+                    </table>
+                    <div class="p-3 bg-orange-50 text-sm text-orange-700">
+                        <strong>Note:</strong> Dubai requires RERA permit. Abu Dhabi format: <code>PermitNumber#BrokerLicenseNo</code>
+                    </div>
+                </div>
+                
+                <!-- Media -->
+                <div class="border rounded-lg overflow-hidden">
+                    <div class="bg-pink-50 px-4 py-2 font-medium text-pink-700 text-sm">
+                        <i class="fas fa-images mr-1"></i>Media
+                    </div>
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-2 text-left">CSV Field</th>
+                                <th class="px-4 py-2 text-left">Maps to API</th>
+                                <th class="px-4 py-2 text-left">Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y">
+                            <tr><td class="px-4 py-2 font-medium">images</td><td class="px-4 py-2 text-gray-600">media.images[].original.url</td><td class="px-4 py-2 text-gray-500">Comma-separated public URLs (valid 1hr+)</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">video_tour</td><td class="px-4 py-2 text-gray-600">media.videos.default</td><td class="px-4 py-2 text-gray-500">YouTube/video URL</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">video_360</td><td class="px-4 py-2 text-gray-600">media.videos.view360</td><td class="px-4 py-2 text-gray-500">360° virtual tour URL</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- Valid Values Section -->
+            <div x-show="guideSection === 'values'" class="space-y-4">
+                <p class="text-sm text-gray-600 mb-4">Use these exact values in your CSV/JSON. The API uses full property type names, not codes.</p>
+                
+                <!-- Property Types - Residential -->
+                <div class="border rounded-lg overflow-hidden">
+                    <div class="bg-blue-50 px-4 py-2 font-medium text-blue-700 text-sm">Residential Property Types</div>
+                    <div class="p-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">apartment</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">villa</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">townhouse</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">penthouse</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">duplex</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">hotel-apartment</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">twin-house</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">bungalow</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">compound</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">palace</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Property Types - Commercial -->
+                <div class="border rounded-lg overflow-hidden">
+                    <div class="bg-purple-50 px-4 py-2 font-medium text-purple-700 text-sm">Commercial Property Types</div>
+                    <div class="p-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">office-space</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">shop</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">warehouse</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">retail</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">show-room</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">factory</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">whole-building</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">full-floor</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">half-floor</div>
+                        </div>
+                        <div class="text-center p-2 bg-gray-50 rounded">
+                            <div class="text-sm font-mono">land</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Other Values -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="border rounded-lg p-4">
+                        <h5 class="font-medium mb-2">category</h5>
+                        <ul class="text-sm space-y-1 font-mono">
+                            <li class="flex items-center"><span class="w-2 h-2 bg-green-500 rounded-full mr-2"></span>residential</li>
+                            <li class="flex items-center"><span class="w-2 h-2 bg-blue-500 rounded-full mr-2"></span>commercial</li>
+                        </ul>
+                    </div>
+                    <div class="border rounded-lg p-4">
+                        <h5 class="font-medium mb-2">price.type</h5>
+                        <ul class="text-sm space-y-1 font-mono">
+                            <li class="flex items-center"><span class="w-2 h-2 bg-green-500 rounded-full mr-2"></span>sale</li>
+                            <li class="flex items-center"><span class="w-2 h-2 bg-blue-500 rounded-full mr-2"></span>yearly</li>
+                            <li class="flex items-center"><span class="w-2 h-2 bg-purple-500 rounded-full mr-2"></span>monthly</li>
+                            <li class="flex items-center"><span class="w-2 h-2 bg-orange-500 rounded-full mr-2"></span>weekly</li>
+                            <li class="flex items-center"><span class="w-2 h-2 bg-red-500 rounded-full mr-2"></span>daily</li>
+                        </ul>
+                    </div>
+                    <div class="border rounded-lg p-4">
+                        <h5 class="font-medium mb-2">furnishingType</h5>
+                        <ul class="text-sm space-y-1 font-mono">
+                            <li class="flex items-center"><span class="w-2 h-2 bg-gray-400 rounded-full mr-2"></span>unfurnished</li>
+                            <li class="flex items-center"><span class="w-2 h-2 bg-yellow-500 rounded-full mr-2"></span>semi-furnished</li>
+                            <li class="flex items-center"><span class="w-2 h-2 bg-green-500 rounded-full mr-2"></span>furnished</li>
+                        </ul>
+                    </div>
+                    <div class="border rounded-lg p-4">
+                        <h5 class="font-medium mb-2">projectStatus</h5>
+                        <ul class="text-sm space-y-1 font-mono">
+                            <li class="flex items-center"><span class="w-2 h-2 bg-green-500 rounded-full mr-2"></span>completed</li>
+                            <li class="flex items-center"><span class="w-2 h-2 bg-orange-500 rounded-full mr-2"></span>off_plan</li>
+                            <li class="flex items-center"><span class="w-2 h-2 bg-blue-500 rounded-full mr-2"></span>completed_primary</li>
+                            <li class="flex items-center"><span class="w-2 h-2 bg-purple-500 rounded-full mr-2"></span>off_plan_primary</li>
+                        </ul>
+                    </div>
+                    <div class="border rounded-lg p-4">
+                        <h5 class="font-medium mb-2">bedrooms</h5>
+                        <ul class="text-sm space-y-1 font-mono">
+                            <li>studio, 1, 2, 3, 4... up to 30</li>
+                        </ul>
+                    </div>
+                    <div class="border rounded-lg p-4">
+                        <h5 class="font-medium mb-2">bathrooms</h5>
+                        <ul class="text-sm space-y-1 font-mono">
+                            <li>none, 1, 2, 3, 4... up to 20</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <!-- Emirates -->
+                <div class="border rounded-lg p-4">
+                    <h5 class="font-medium mb-2">uaeEmirate (lowercase, underscores)</h5>
+                    <div class="flex flex-wrap gap-2 text-sm font-mono">
+                        <span class="px-3 py-1 bg-gray-100 rounded">dubai</span>
+                        <span class="px-3 py-1 bg-gray-100 rounded">abu_dhabi</span>
+                        <span class="px-3 py-1 bg-gray-100 rounded">northern_emirates</span>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-2">Note: Sharjah, Ajman, RAK, Fujairah, UAQ are all under "northern_emirates"</p>
+                </div>
+                
+                <!-- Compliance Types -->
+                <div class="border rounded-lg p-4">
+                    <h5 class="font-medium mb-2">compliance.type (by emirate)</h5>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
+                        <div class="bg-red-50 p-3 rounded">
+                            <strong class="text-red-700">Dubai:</strong>
+                            <span class="font-mono ml-2">rera</span> or <span class="font-mono">dtcm</span>
+                        </div>
+                        <div class="bg-blue-50 p-3 rounded">
+                            <strong class="text-blue-700">Abu Dhabi:</strong>
+                            <span class="font-mono ml-2">adrec</span>
+                        </div>
+                        <div class="bg-gray-50 p-3 rounded">
+                            <strong class="text-gray-700">Northern:</strong>
+                            <span class="text-sm ml-2">No compliance required</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Amenities Section -->
+            <div x-show="guideSection === 'amenities'" class="space-y-4">
+                <p class="text-sm text-gray-600">Use comma-separated or pipe-separated values in your CSV. Example: <code class="bg-gray-100 px-2 py-1 rounded">balcony, central-ac, security</code></p>
+                
+                <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">balcony</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">barbecue-area</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">built-in-wardrobes</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">central-ac</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">childrens-play-area</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">childrens-pool</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">concierge</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">conference-room</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">covered-parking</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">dining-in-building</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">electricity</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">fibre-optics</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">fixed-phone</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">flood-drainage</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">kitchen-appliances</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">lobby-in-building</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">maid-service</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">maids-room</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">networked</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">no-services</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">pets-allowed</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">private-garden</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">private-gym</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">private-jacuzzi</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">private-pool</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">sanitation</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">security</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">shared-gym</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">shared-pool</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">shared-spa</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">study</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">vastu-compliant</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">view-of-landmark</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">view-of-water</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">walk-in-closet</span>
+                    <span class="px-3 py-2 bg-teal-50 text-teal-700 rounded text-sm text-center">waters</span>
+                </div>
+            </div>
+            
+            <!-- Sample CSV Section -->
+            <div x-show="guideSection === 'sample'" class="space-y-4">
+                <p class="text-sm text-gray-600">Here's a sample CSV structure matching the PropertyFinder API:</p>
+                
+                <div class="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
+                    <pre class="text-xs">title_en,description_en,type,category,uaeEmirate,price_type,price_amount,downpayment,location_id,bedrooms,bathrooms,size,reference,compliance_type,permit_number,projectStatus,furnishingType,parkingSlots,amenities,images,assigned_to_id
+"Stunning 2BR Marina View","Beautiful apartment with panoramic views...",apartment,residential,dubai,sale,2500000,250000,12345,2,3,1450,REF-001,rera,7116777484,completed,furnished,1,"balcony,central-ac,shared-pool","https://example.com/img1.jpg,https://example.com/img2.jpg",123456
+"Modern 1BR for Rent","Stylish apartment near Dubai Mall...",apartment,residential,dubai,yearly,95000,,34567,1,2,850,REF-002,rera,7116888495,completed,furnished,1,"shared-gym,shared-pool","https://example.com/img3.jpg",123456</pre>
+                </div>
+                
+                <div class="p-4 bg-blue-50 rounded-lg">
+                    <h5 class="font-medium text-blue-700 mb-2"><i class="fas fa-info-circle mr-1"></i>Important Notes</h5>
+                    <ul class="text-sm text-blue-600 space-y-1">
+                        <li>• <strong>location_id:</strong> Must be a valid Location ID from the PropertyFinder Locations API</li>
+                        <li>• <strong>assigned_to_id:</strong> The Public Profile ID of the agent (from Users API)</li>
+                        <li>• <strong>permit_number:</strong> Required for Dubai (RERA) and Abu Dhabi (ADREC)</li>
+                        <li>• <strong>images:</strong> URLs must be publicly accessible for at least 1 hour</li>
+                        <li>• <strong>type:</strong> Use full names like "apartment", "villa", not codes</li>
+                    </ul>
+                </div>
+                
+                <div class="flex gap-4">
+                    <button onclick="downloadSampleCSV()" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition text-sm">
+                        <i class="fas fa-download mr-2"></i>Download Sample CSV
+                    </button>
+                    <button onclick="downloadSampleJSON()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition text-sm">
+                        <i class="fas fa-download mr-2"></i>Download Sample JSON
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Tips Section -->
+            <div x-show="guideSection === 'tips'" class="space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="p-4 bg-green-50 border border-green-200 rounded-lg">
+                        <h5 class="font-medium text-green-700 mb-2"><i class="fas fa-check-circle mr-1"></i>Do's</h5>
+                        <ul class="text-sm text-green-600 space-y-1">
+                            <li>• Use UTF-8 encoding for Arabic text</li>
+                            <li>• Keep titles under 100 characters</li>
+                            <li>• Keep descriptions under 5000 characters</li>
+                            <li>• Use API property types (apartment, villa, etc.)</li>
+                            <li>• Include at least one image URL</li>
+                            <li>• Use consistent formatting for all rows</li>
+                            <li>• Use "Custom Value" for same agent on all listings</li>
+                            <li>• Image URLs must be publicly accessible for 1+ hour</li>
+                        </ul>
+                    </div>
+                    <div class="p-4 bg-red-50 border border-red-200 rounded-lg">
+                        <h5 class="font-medium text-red-700 mb-2"><i class="fas fa-times-circle mr-1"></i>Don'ts</h5>
+                        <ul class="text-sm text-red-600 space-y-1">
+                            <li>• Don't include currency symbols in price (just numbers)</li>
+                            <li>• Don't use commas in numbers (2500000 not 2,500,000)</li>
+                            <li>• Don't leave required fields empty</li>
+                            <li>• Don't exceed file size limit (16MB)</li>
+                            <li>• Don't use special characters in reference</li>
+                            <li>• Don't include HTML or emojis in title/description</li>
+                            <li>• Don't use "rent" - use "yearly", "monthly", etc.</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <div class="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                    <h5 class="font-medium text-yellow-700 mb-2"><i class="fas fa-lightbulb mr-1"></i>Pro Tips</h5>
+                    <ul class="text-sm text-yellow-700 space-y-1">
+                        <li><strong>Same agent for all:</strong> Select "Custom Value" for assigned_agent and enter the email once</li>
+                        <li><strong>Images:</strong> Separate multiple image URLs with commas or pipes (|)</li>
+                        <li><strong>Amenities:</strong> Use exact values like "balcony, central-ac" - no spaces in names</li>
+                        <li><strong>Reference:</strong> Use unique references for each listing to avoid duplicates</li>
+                        <li><strong>Preview:</strong> Check the preview table before submitting to catch errors early</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function downloadSampleCSV() {
+    const csv = `title_en,title_ar,description_en,type,category,uaeEmirate,price_type,price_amount,downpayment,number_of_cheques,location_id,bedrooms,bathrooms,size,plot_size,reference,compliance_type,permit_number,projectStatus,furnishingType,parkingSlots,amenities,images,video_tour,video_360,assigned_to_id
+"Luxury 2BR Marina Apartment",,"Beautiful apartment with panoramic marina views. Modern finishes and premium amenities.",apartment,residential,dubai,sale,2500000,250000,,12345,2,3,1450,,REF-001,rera,7116777484,completed,furnished,1,"shared-gym,shared-pool,security,balcony","https://example.com/img1.jpg,https://example.com/img2.jpg",,,123456
+"Spacious 4BR Villa Arabian Ranches",,"Beautiful villa with private pool and garden. Perfect for families in gated community.",villa,residential,dubai,sale,5500000,550000,,23456,4,5,4200,6500,REF-002,rera,7116888495,completed,unfurnished,2,"private-pool,private-garden,maids-room","https://example.com/img3.jpg,https://example.com/img4.jpg",,,123456
+"Modern 1BR Downtown for Rent",,"Stylish apartment with Burj Khalifa view. Walking distance to Dubai Mall.",apartment,residential,dubai,yearly,95000,,4,34567,1,2,850,,REF-003,rera,7116999506,completed,furnished,1,"shared-gym,shared-pool,shared-spa,covered-parking","https://example.com/img5.jpg","https://youtube.com/watch?v=abc123",,123456`;
+    
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'sample_listings_pf_api.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+function downloadSampleJSON() {
+    const json = {
+        listings: [
+            {
+                title: { en: "Luxury 2BR Marina Apartment" },
+                description: { en: "Beautiful apartment with panoramic marina views. Modern finishes and premium amenities." },
+                type: "apartment",
+                category: "residential",
+                uaeEmirate: "dubai",
+                price: {
+                    type: "sale",
+                    amounts: { sale: 2500000 },
+                    downpayment: 250000
+                },
+                location: { id: 12345 },
+                bedrooms: "2",
+                bathrooms: "3",
+                size: 1450,
+                reference: "REF-001",
+                compliance: {
+                    type: "rera",
+                    listingAdvertisementNumber: "7116777484"
+                },
+                projectStatus: "completed",
+                furnishingType: "furnished",
+                parkingSlots: 1,
+                amenities: ["shared-gym", "shared-pool", "security", "balcony"],
+                media: {
+                    images: [
+                        { original: { url: "https://example.com/img1.jpg" } },
+                        { original: { url: "https://example.com/img2.jpg" } }
+                    ]
+                },
+                assignedTo: { id: 123456 }
+            },
+            {
+                title: { en: "Modern 1BR for Rent" },
+                description: { en: "Stylish apartment with Burj Khalifa view." },
+                type: "apartment",
+                category: "residential",
+                uaeEmirate: "dubai",
+                price: {
+                    type: "yearly",
+                    amounts: { yearly: 95000 },
+                    numberOfCheques: 4
+                },
+                location: { id: 34567 },
+                bedrooms: "1",
+                bathrooms: "2",
+                size: 850,
+                reference: "REF-003",
+                compliance: {
+                    type: "rera",
+                    listingAdvertisementNumber: "7116999506"
+                },
+                projectStatus: "completed",
+                furnishingType: "furnished",
+                parkingSlots: 1,
+                amenities: ["shared-gym", "shared-pool", "shared-spa"],
+                media: {
+                    images: [
+                        { original: { url: "https://example.com/img5.jpg" } }
+                    ],
+                    videos: {
+                        default: "https://youtube.com/watch?v=abc123"
+                    }
+                },
+                assignedTo: { id: 123456 }
+            }
+        ]
+    };
+    
+    const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'sample_listings_pf_api.json';
+    a.click();
+    URL.revokeObjectURL(url);
+}
+</script>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function bulkUpload() {
+    // Defaults from settings
+    const defaults = {
+        agent_email: '{{ defaults.agent_email | default("", true) }}',
+        agent_id: '{{ defaults.agent_id | default("", true) }}',
+        owner_email: '{{ defaults.owner_email | default("", true) }}'
+    };
+    
+    return {
+        step: 1,
+        dragOver: false,
+        selectedFile: null,
+        parsing: false,
+        uploading: false,
+        uploadProgress: 0,
+        publishAfterUpload: false,
+        skipInvalid: true,
+        locationCache: {},  // Cache for location ID lookups
+        
+        csvHeaders: [],
+        csvData: [],
+        columnMapping: {},
+        customValues: {},
+        defaults: defaults,
+        results: null,
+        
+        // Field definitions - PropertyFinder API Fields (camelCase)
+        coreFields: [
+            { key: 'uaeEmirate', label: 'UAE Emirate', description: 'dubai, abu_dhabi, northern_emirates', required: true, autoMap: ['uaeemirate', 'emirate', 'uae_emirate', 'uae emirate'] },
+            { key: 'category', label: 'Category', description: 'residential or commercial', required: true, autoMap: ['category'] },
+            { key: 'type', label: 'Property Type', description: 'apartment, villa, townhouse, office-space, etc.', required: true, autoMap: ['type', 'property_type', 'property type', 'propertytype'] },
+            { key: 'location_text', label: 'Location (Text)', description: 'Building, Area, City - will auto-search for Location ID', required: false, autoMap: ['location', 'adrees', 'address', 'area', 'community', 'tower', 'building'] },
+            { key: 'location_id', label: 'Location ID (Optional)', description: 'If you have the ID, otherwise use Location Text', required: false, autoMap: ['location_id', 'locationid'] },
+            { key: 'assigned_to_id', label: 'Assigned Agent ID', description: 'Uses default from Settings if not mapped', required: false, autoMap: ['assigned_to_id', 'agent_id', 'agent'] },
+            { key: 'reference', label: 'Reference', description: 'Your unique reference (max 50 chars)', required: true, autoMap: ['reference', 'ref', 'listing_id', 'external_reference', 'unit number'] },
+            { key: 'availableFrom', label: 'Available From', description: 'Date (YYYY-MM-DD) or leave empty', required: false, autoMap: ['availablefrom', 'available_from', 'availability'] }
+        ],
+        specFields: [
+            { key: 'bedrooms', label: 'Bedrooms', description: 'studio, 1, 2, 3... up to 30', required: true, autoMap: ['bedrooms', 'bedroom', 'beds', 'br'] },
+            { key: 'bathrooms', label: 'Bathrooms', description: 'none, 1, 2, 3... up to 20', required: true, autoMap: ['bathrooms', 'bathroom', 'baths', 'ba'] },
+            { key: 'size', label: 'Size (sqft)', description: 'Property size in sqft (number)', required: true, autoMap: ['size', 'area', 'total area', 'total area (sq ft)', 'sqft', 'built_up_area'] },
+            { key: 'furnishingType', label: 'Furnishing Type', description: 'unfurnished, semi-furnished, furnished', required: true, autoMap: ['furnishingtype', 'furnishing', 'furnished'] },
+            { key: 'projectStatus', label: 'Project Status', description: 'completed, off_plan, completed_primary, off_plan_primary', required: true, autoMap: ['projectstatus', 'project_status', 'project status', 'status', 'completion_status'] },
+            { key: 'parkingSlots', label: 'Parking Slots', description: 'Number of parking spaces (integer)', required: false, autoMap: ['parkingslots', 'parking_slots', 'parking slots', 'parking'] },
+            { key: 'plotSize', label: 'Plot Size', description: 'Plot size in sqft (for villas/land)', required: false, autoMap: ['plotsize', 'plot_size', 'plot size', 'land_area'] },
+            { key: 'floorNumber', label: 'Floor Number', description: 'Floor number (string)', required: false, autoMap: ['floornumber', 'floor_number', 'floor'] },
+            { key: 'age', label: 'Property Age', description: 'Years since handover (integer)', required: false, autoMap: ['age', 'property_age', 'year_built'] },
+            { key: 'developer', label: 'Developer', description: 'Developer name', required: false, autoMap: ['developer', 'project name', 'project_name'] },
+            { key: 'unitNumber', label: 'Unit Number', description: 'Unit/Apt number (internal use)', required: false, autoMap: ['unitnumber', 'unit_number', 'unit number', 'unit'] }
+        ],
+        priceFields: [
+            { key: 'price_type', label: 'Price Type', description: 'sale, yearly, monthly, daily, weekly', required: true, autoMap: ['price_type', 'pricetype', 'offering_type', 'offeringtype', 'offering type'] },
+            { key: 'price_amount', label: 'Price Amount (AED)', description: 'Price in AED (number, no commas)', required: true, autoMap: ['price_amount', 'price', 'list price', 'list_price', 'listprice', 'amount'] },
+            { key: 'downpayment', label: 'Down Payment', description: 'Down payment for sale (0 if none)', required: false, autoMap: ['downpayment', 'down_payment', 'dp value', 'dp_value', 'dpvalue'] },
+            { key: 'number_of_cheques', label: 'Number of Cheques', description: 'For rent (1-12)', required: false, autoMap: ['number_of_cheques', 'cheques', 'no_of_cheques'] }
+        ],
+        mediaFields: [
+            { key: 'images', label: 'Images', description: 'Comma-separated public image URLs (valid 1hr+)', required: false, autoMap: ['images', 'media', 'photos', 'image_urls'] },
+            { key: 'video_tour', label: 'Video Tour URL', description: 'YouTube or video URL (media.videos.default)', required: false, autoMap: ['video_tour', 'videotour', 'video', 'youtube'] },
+            { key: 'video_360', label: '360° Tour URL', description: 'Virtual tour URL (media.videos.view360)', required: false, autoMap: ['video_360', 'video360', '360_tour', 'virtual_tour'] }
+        ],
+        descriptionFields: [
+            { key: 'title_en', label: 'Title (English)', description: 'Max 50 chars, no emojis/HTML', required: true, autoMap: ['title_en', 'title', 'titleen', 'name'] },
+            { key: 'title_ar', label: 'Title (Arabic)', description: 'Arabic title (optional)', required: false, autoMap: ['title_ar', 'titlear', 'arabic_title'] },
+            { key: 'description_en', label: 'Description (English)', description: 'Max 2000 chars, no emojis/HTML', required: true, autoMap: ['description_en', 'description', 'descriptionen', 'desc'] },
+            { key: 'description_ar', label: 'Description (Arabic)', description: 'Arabic description (optional)', required: false, autoMap: ['description_ar', 'descriptionar', 'arabic_description'] }
+        ],
+        amenityFields: [
+            { key: 'amenities', label: 'Amenities', description: 'Comma-separated: balcony, central-ac, shared-pool, etc.', required: false, autoMap: ['amenities', 'ameneties', 'features'] }
+        ],
+        complianceFields: [
+            { key: 'compliance_type', label: 'Compliance Type', description: 'rera (Dubai), dtcm (Dubai hotels), adrec (Abu Dhabi)', required: false, autoMap: ['compliance_type', 'compliancetype', 'permit_type'] },
+            { key: 'permit_number', label: 'Permit Number', description: 'RERA/ADREC permit number', required: false, autoMap: ['permit_number', 'permitnumber', 'rera_permit', 'noc'] }
+        ],
+        
+
+        
+        get previewRows() {
+            return this.csvData.slice(0, 3);
+        },
+        
+        handleDrop(event) {
+            this.dragOver = false;
+            const files = event.dataTransfer.files;
+            if (files.length > 0) {
+                this.validateAndSetFile(files[0]);
+            }
+        },
+        
+        handleFileSelect(event) {
+            const files = event.target.files;
+            if (files.length > 0) {
+                this.validateAndSetFile(files[0]);
+            }
+        },
+        
+        validateAndSetFile(file) {
+            const validExtensions = ['json', 'csv'];
+            const extension = file.name.split('.').pop().toLowerCase();
+            
+            if (!validExtensions.includes(extension)) {
+                alert('Invalid file type. Please upload a JSON or CSV file.');
+                return;
+            }
+            
+            if (file.size > 16 * 1024 * 1024) {
+                alert('File too large. Maximum size is 16MB.');
+                return;
+            }
+            
+            this.selectedFile = file;
+            this.results = null;
+        },
+        
+        resetFile() {
+            this.selectedFile = null;
+            this.csvHeaders = [];
+            this.csvData = [];
+            this.columnMapping = {};
+            this.customValues = {};
+        },
+        
+        applyDefaults() {
+            // Apply default agent ID from settings (if not already mapped)
+            if (this.defaults.agent_id && !this.columnMapping['assigned_to_id']) {
+                this.columnMapping['assigned_to_id'] = '__custom__';
+                this.customValues['assigned_to_id'] = this.defaults.agent_id;
+            }
+            // Apply default owner email from settings  
+            if (this.defaults.owner_email) {
+                this.columnMapping['owner_id'] = '__custom__';
+                this.customValues['owner_id'] = this.defaults.owner_email;
+            }
+        },
+        
+        async searchLocation(searchText) {
+            // Check cache first
+            if (this.locationCache[searchText]) {
+                return this.locationCache[searchText];
+            }
+            
+            try {
+                const response = await fetch(`/api/locations?search=${encodeURIComponent(searchText)}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    // PropertyFinder API returns data.data array with location objects
+                    const locations = data.data || data.locations || [];
+                    if (locations.length > 0) {
+                        const locationId = locations[0].id;
+                        this.locationCache[searchText] = locationId;
+                        return locationId;
+                    }
+                }
+            } catch (error) {
+                console.error('Location search error:', error);
+            }
+            return null;
+        },
+        
+        resetAll() {
+            this.step = 1;
+            this.resetFile();
+            this.results = null;
+            this.uploadProgress = 0;
+        },
+        
+        formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        },
+        
+        async parseFile() {
+            if (!this.selectedFile) return;
+            
+            this.parsing = true;
+            const extension = this.selectedFile.name.split('.').pop().toLowerCase();
+            
+            try {
+                const text = await this.selectedFile.text();
+                
+                if (extension === 'json') {
+                    this.parseJSON(text);
+                } else {
+                    this.parseCSV(text);
+                }
+                
+                // Auto-map columns based on header names
+                this.autoMapColumns();
+                
+                // Apply defaults from settings
+                this.applyDefaults();
+                
+                this.step = 2;
+            } catch (error) {
+                alert('Error parsing file: ' + error.message);
+            } finally {
+                this.parsing = false;
+            }
+        },
+        
+        autoMapColumns() {
+            // Build a mapping of normalized header names to actual header names
+            const normalizedHeaders = {};
+            this.csvHeaders.forEach(header => {
+                const normalized = header.toLowerCase().trim().replace(/[\s_-]+/g, ' ').replace(/[()]/g, '');
+                normalizedHeaders[normalized] = header;
+            });
+            
+            console.log('CSV Headers:', this.csvHeaders);
+            console.log('Normalized headers:', normalizedHeaders);
+            
+            // Auto-map each field based on autoMap aliases
+            for (const field of this.allFields) {
+                if (!field.autoMap) continue;
+                
+                for (const alias of field.autoMap) {
+                    const normalizedAlias = alias.toLowerCase().trim().replace(/[\s_-]+/g, ' ');
+                    
+                    // Check exact match first
+                    if (normalizedHeaders[normalizedAlias]) {
+                        this.columnMapping[field.key] = normalizedHeaders[normalizedAlias];
+                        console.log(`Mapped ${field.key} to ${normalizedHeaders[normalizedAlias]} (exact match: ${normalizedAlias})`);
+                        break;
+                    }
+                    
+                    // Check if any header contains this alias
+                    for (const [normalized, original] of Object.entries(normalizedHeaders)) {
+                        if (normalized.includes(normalizedAlias) || normalizedAlias.includes(normalized)) {
+                            if (!this.columnMapping[field.key]) {
+                                this.columnMapping[field.key] = original;
+                                console.log(`Mapped ${field.key} to ${original} (partial match: ${normalized} ~ ${normalizedAlias})`);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            console.log('Final column mapping:', this.columnMapping);
+        },
+        
+        parseJSON(text) {
+            let data = JSON.parse(text);
+            if (data.listings) data = data.listings;
+            if (data.data) data = data.data;
+            if (!Array.isArray(data)) data = [data];
+            
+            this.csvData = data;
+            if (data.length > 0) {
+                this.csvHeaders = Object.keys(data[0]);
+            }
+        },
+        
+        parseCSV(text) {
+            // Detect delimiter from first line
+            const firstLineEnd = text.indexOf('\n');
+            const firstLine = text.substring(0, firstLineEnd > 0 ? firstLineEnd : text.length);
+            let delimiter = ',';
+            if (firstLine.includes('\t')) delimiter = '\t';
+            else if (firstLine.split(';').length > firstLine.split(',').length) delimiter = ';';
+            
+            // Parse CSV properly handling multi-line quoted fields
+            const rows = [];
+            let currentRow = [];
+            let currentValue = '';
+            let inQuotes = false;
+            
+            for (let i = 0; i < text.length; i++) {
+                const char = text[i];
+                const nextChar = text[i + 1];
+                
+                if (char === '"') {
+                    if (inQuotes && nextChar === '"') {
+                        // Escaped quote ""
+                        currentValue += '"';
+                        i++;
+                    } else {
+                        // Toggle quote state
+                        inQuotes = !inQuotes;
+                    }
+                } else if (char === delimiter && !inQuotes) {
+                    currentRow.push(currentValue.trim());
+                    currentValue = '';
+                } else if ((char === '\n' || char === '\r') && !inQuotes) {
+                    // End of row (skip \r in \r\n)
+                    if (char === '\r' && nextChar === '\n') {
+                        i++;
+                    }
+                    if (currentValue || currentRow.length > 0) {
+                        currentRow.push(currentValue.trim());
+                        if (currentRow.some(v => v)) { // Only add non-empty rows
+                            rows.push(currentRow);
+                        }
+                        currentRow = [];
+                        currentValue = '';
+                    }
+                } else {
+                    currentValue += char;
+                }
+            }
+            
+            // Don't forget the last row
+            if (currentValue || currentRow.length > 0) {
+                currentRow.push(currentValue.trim());
+                if (currentRow.some(v => v)) {
+                    rows.push(currentRow);
+                }
+            }
+            
+            if (rows.length < 2) {
+                throw new Error('CSV file must have a header row and at least one data row');
+            }
+            
+            // First row is headers
+            this.csvHeaders = rows[0];
+            console.log('=== CSV PARSING DEBUG ===');
+            console.log('Total rows parsed:', rows.length);
+            console.log('Header row columns:', this.csvHeaders.length);
+            console.log('CSV Headers:', this.csvHeaders);
+            if (rows.length > 1) {
+                console.log('Data row 1 columns:', rows[1].length);
+                console.log('Data row 1 first 5 values:', rows[1].slice(0, 5));
+            }
+            
+            // Parse data rows
+            this.csvData = [];
+            for (let i = 1; i < rows.length; i++) {
+                const values = rows[i];
+                // Handle rows with different column counts (pad or trim)
+                const row = {};
+                this.csvHeaders.forEach((header, idx) => {
+                    row[header] = values[idx] !== undefined ? values[idx] : '';
+                });
+                this.csvData.push(row);
+                console.log(`Row ${i} object keys:`, Object.keys(row).length, 'Sample:', row['Title_en'] || row['title_en'] || '(no title)');
+            }
+            
+            console.log('Final csvData length:', this.csvData.length);
+            if (this.csvData.length > 0) {
+                console.log('First row data sample:', {
+                    'Title_en': this.csvData[0]['Title_en'],
+                    'Description_en': this.csvData[0]['Description_en']?.substring(0, 50) + '...',
+                    'Ameneties': this.csvData[0]['Ameneties'],
+                    'Property Type': this.csvData[0]['Property Type']
+                });
+            }
+            console.log('=========================');
+        },
+            }
+            
+            console.log('Parsed data rows:', this.csvData.length);
+        },
+        
+        parseCSVLine(line, delimiter) {
+            const result = [];
+            let current = '';
+            let inQuotes = false;
+            
+            for (let i = 0; i < line.length; i++) {
+                const char = line[i];
+                
+                if (char === '"') {
+                    inQuotes = !inQuotes;
+                } else if (char === delimiter && !inQuotes) {
+                    result.push(current.trim());
+                    current = '';
+                } else {
+                    current += char;
+                }
+            }
+            result.push(current.trim());
+            
+            return result;
+        },
+        
+        getSampleValue(column) {
+            if (!column || column === '__custom__') return '';
+            if (this.csvData.length > 0 && this.csvData[0][column]) {
+                const val = this.csvData[0][column];
+                return val.length > 50 ? val.substring(0, 50) + '...' : val;
+            }
+            return '';
+        },
+        
+        getMappedValue(row, fieldKey) {
+            const column = this.columnMapping[fieldKey];
+            if (column === '__custom__') {
+                return this.customValues[fieldKey] || '';
+            }
+            return column ? row[column] : '';
+        },
+        
+        validateMapping() {
+            // Check all required fields
+            const requiredKeys = [
+                ...this.coreFields.filter(f => f.required).map(f => f.key),
+                ...this.specFields.filter(f => f.required).map(f => f.key),
+                ...this.priceFields.filter(f => f.required).map(f => f.key),
+                ...this.descriptionFields.filter(f => f.required).map(f => f.key)
+            ];
+            
+            for (const key of requiredKeys) {
+                const mapping = this.columnMapping[key];
+                if (!mapping) return false;
+                if (mapping === '__custom__' && !this.customValues[key]) return false;
+            }
+            return true;
+        },
+        
+        get allFields() {
+            return [...this.coreFields, ...this.specFields, ...this.priceFields, ...this.descriptionFields, ...this.mediaFields, ...this.amenityFields, ...this.complianceFields];
+        },
+        
+        async processUpload() {
+            if (!this.validateMapping()) {
+                alert('Please map all required fields before uploading.');
+                return;
+            }
+            
+            this.uploading = true;
+            this.uploadProgress = 0;
+            this.results = { total: this.csvData.length, successful: 0, failed: 0, results: [], errors: [] };
+            this.step = 3;
+            
+            // Transform data based on mapping (with async location lookups)
+            const listings = [];
+            for (let idx = 0; idx < this.csvData.length; idx++) {
+                const row = this.csvData[idx];
+                const listing = await this.transformRow(row, idx);
+                listings.push(listing);
+                this.uploadProgress = Math.round((idx + 1) / this.csvData.length * 50); // 50% for transform
+            }
+            
+            try {
+                // Save to LOCAL database instead of PF API
+                const response = await fetch('/api/local/listings/bulk', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        listings: listings
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error || 'Upload failed');
+                }
+                
+                this.results = {
+                    total: listings.length,
+                    successful: data.created,
+                    failed: data.errors,
+                    results: [],
+                    errors: data.error_details || []
+                };
+                this.uploadProgress = 100;
+            } catch (error) {
+                this.results.errors.push({ reference: 'Upload', error: error.message });
+            } finally {
+                this.uploading = false;
+            }
+        },
+        
+        async transformRow(row, index) {
+            const listing = {};
+            
+            // Map all fields from CSV
+            for (const field of this.allFields) {
+                let value = this.getMappedValue(row, field.key);
+                if (value !== '' && value !== null && value !== undefined) {
+                    listing[field.key] = value;
+                }
+            }
+            
+            // Debug: log amenities mapping
+            if (index === 0) {
+                console.log('=== AMENITIES DEBUG ===');
+                console.log('Amenities column mapping:', this.columnMapping['amenities']);
+                console.log('Raw row:', row);
+                console.log('Raw row[Ameneties]:', row['Ameneties']);
+                console.log('listing.amenities after mapping:', listing.amenities);
+            }
+            
+            // Convert to PropertyFinder API structure
+            const pfListing = {};
+            
+            // Valid property types from API
+            const validPropertyTypes = [
+                'apartment', 'villa', 'townhouse', 'penthouse', 'duplex', 'office-space',
+                'shop', 'warehouse', 'retail', 'land', 'full-floor', 'half-floor',
+                'whole-building', 'hotel-apartment', 'compound', 'farm', 'chalet',
+                'rest-house', 'staff-accommodation', 'labor-camp', 'bulk-sale-unit',
+                'bulk-rent-unit', 'show-room', 'restaurant', 'cafeteria', 'clinic',
+                'medical-facility', 'business-center', 'co-working-space', 'factory',
+                'bungalow', 'palace', 'twin-house', 'ivilla', 'cabin', 'roof'
+            ];
+            
+            // Residential property types (for auto-category detection)
+            const residentialTypes = [
+                'apartment', 'villa', 'townhouse', 'penthouse', 'duplex', 'hotel-apartment',
+                'compound', 'chalet', 'rest-house', 'bungalow', 'palace', 'twin-house',
+                'ivilla', 'cabin', 'farm'
+            ];
+            
+            // Core fields - UAE Emirate
+            if (listing.uaeEmirate) {
+                let emirate = String(listing.uaeEmirate).toLowerCase().trim();
+                if (['ajman', 'sharjah', 'rak', 'ras al khaimah', 'fujairah', 'umm al quwain'].some(e => emirate.includes(e))) {
+                    emirate = 'northern_emirates';
+                } else if (emirate.includes('abu') || emirate.includes('dhabi')) {
+                    emirate = 'abu_dhabi';
+                } else if (emirate.includes('dubai')) {
+                    emirate = 'dubai';
+                }
+                pfListing.uaeEmirate = emirate;
+            }
+            
+            // Property Type - normalize to API values
+            if (listing.type) {
+                let propType = String(listing.type).toLowerCase().trim().replace(/\s+/g, '-');
+                // Common mappings
+                const typeMap = {
+                    'flat': 'apartment',
+                    'apt': 'apartment',
+                    'office': 'office-space',
+                    'shop': 'shop',
+                    'store': 'shop',
+                    'land': 'land',
+                    'plot': 'land',
+                    'warehouse': 'warehouse',
+                    'villa': 'villa',
+                    'townhouse': 'townhouse',
+                    'town-house': 'townhouse',
+                    'penthouse': 'penthouse',
+                    'pent-house': 'penthouse',
+                    'duplex': 'duplex',
+                    'studio': 'apartment' // Studio is bedroom type, not property type
+                };
+                pfListing.type = typeMap[propType] || (validPropertyTypes.includes(propType) ? propType : 'apartment');
+            }
+            
+            // Category - auto-detect from type if not provided
+            if (listing.category) {
+                pfListing.category = String(listing.category).toLowerCase().trim();
+            } else if (pfListing.type) {
+                pfListing.category = residentialTypes.includes(pfListing.type) ? 'residential' : 'commercial';
+            }
+            
+            if (listing.reference) pfListing.reference = String(listing.reference).substring(0, 50);
+            if (listing.availableFrom) pfListing.availableFrom = listing.availableFrom;
+            
+            // Location - try ID first, then search by text
+            if (listing.location_id) {
+                pfListing.location = { id: parseInt(listing.location_id) };
+            } else if (listing.location_text) {
+                const locationId = await this.searchLocation(listing.location_text);
+                if (locationId) {
+                    pfListing.location = { id: locationId };
+                }
+                pfListing._locationText = listing.location_text;
+            }
+            
+            // Assigned agent - use default from settings if not mapped
+            if (listing.assigned_to_id) {
+                pfListing.assignedTo = { id: parseInt(listing.assigned_to_id) };
+            } else if (this.defaults.agent_id) {
+                pfListing.assignedTo = { id: parseInt(this.defaults.agent_id) };
+            }
+            
+            // Bedrooms - must be string: 'studio', '1'-'30'
+            if (listing.bedrooms) {
+                let beds = String(listing.bedrooms).toLowerCase().trim();
+                const match = beds.match(/(\d+|studio)/i);
+                if (match) {
+                    beds = match[1].toLowerCase();
+                    if (beds === '0') beds = 'studio';
+                }
+                pfListing.bedrooms = beds;
+            }
+            
+            // Bathrooms - must be string: 'none', '1'-'20'
+            if (listing.bathrooms) {
+                let baths = String(listing.bathrooms).toLowerCase().trim();
+                const match = baths.match(/(\d+|none)/i);
+                if (match) {
+                    baths = match[1].toLowerCase();
+                    if (baths === '0') baths = 'none';
+                }
+                pfListing.bathrooms = baths;
+            }
+            
+            // Size - number (sqft)
+            if (listing.size) {
+                pfListing.size = parseFloat(String(listing.size).replace(/[^0-9.]/g, '')) || 0;
+            }
+            if (listing.plotSize) {
+                pfListing.plotSize = parseFloat(String(listing.plotSize).replace(/[^0-9.]/g, '')) || 0;
+            }
+            
+            // Furnishing Type - normalize
+            if (listing.furnishingType) {
+                let furn = String(listing.furnishingType).toLowerCase().trim();
+                const furnMap = {
+                    'furnished': 'furnished',
+                    'fully furnished': 'furnished',
+                    'fully-furnished': 'furnished',
+                    'semi furnished': 'semi-furnished',
+                    'semi-furnished': 'semi-furnished',
+                    'partially furnished': 'semi-furnished',
+                    'unfurnished': 'unfurnished',
+                    'not furnished': 'unfurnished',
+                    'none': 'unfurnished'
+                };
+                pfListing.furnishingType = furnMap[furn] || 'unfurnished';
+            }
+            
+            // Project Status - normalize
+            if (listing.projectStatus) {
+                let status = String(listing.projectStatus).toLowerCase().trim().replace(/[\s-]+/g, '_');
+                const statusMap = {
+                    'ready': 'completed',
+                    'completed': 'completed',
+                    'complete': 'completed',
+                    'handover': 'completed',
+                    'off_plan': 'off_plan',
+                    'offplan': 'off_plan',
+                    'off-plan': 'off_plan',
+                    'under_construction': 'off_plan',
+                    'primary': 'completed_primary',
+                    'completed_primary': 'completed_primary',
+                    'off_plan_primary': 'off_plan_primary'
+                };
+                pfListing.projectStatus = statusMap[status] || 'completed';
+            }
+            
+            // Other specs
+            if (listing.parkingSlots) pfListing.parkingSlots = parseInt(String(listing.parkingSlots).replace(/[^0-9]/g, '')) || 0;
+            if (listing.floorNumber) pfListing.floorNumber = String(listing.floorNumber);
+            if (listing.age) pfListing.age = parseInt(listing.age) || 0;
+            if (listing.developer) pfListing.developer = String(listing.developer);
+            if (listing.unitNumber) pfListing.unitNumber = String(listing.unitNumber);
+            
+            // Price structure (API format)
+            if (listing.price_type || listing.price_amount) {
+                let priceType = String(listing.price_type || 'sale').toLowerCase().trim();
+                // Normalize price type
+                const priceTypeMap = {
+                    'sale': 'sale',
+                    'sell': 'sale',
+                    'buy': 'sale',
+                    'rent': 'yearly',
+                    'yearly': 'yearly',
+                    'annual': 'yearly',
+                    'monthly': 'monthly',
+                    'daily': 'daily',
+                    'weekly': 'weekly'
+                };
+                priceType = priceTypeMap[priceType] || 'sale';
+                
+                const priceAmount = Math.round(parseFloat(String(listing.price_amount || 0).replace(/[^0-9.]/g, '')) || 0);
+                
+                pfListing.price = {
+                    type: priceType,
+                    amounts: {}
+                };
+                pfListing.price.amounts[priceType] = priceAmount;
+                
+                if (listing.downpayment && priceType === 'sale') {
+                    pfListing.price.downpayment = parseInt(String(listing.downpayment).replace(/[^0-9]/g, '')) || 0;
+                }
+                if (listing.number_of_cheques && priceType !== 'sale') {
+                    pfListing.price.numberOfCheques = parseInt(listing.number_of_cheques) || 1;
+                }
+            }
+            
+            // Title & Description (multilingual, with limits per API docs)
+            if (listing.title_en || listing.title_ar) {
+                pfListing.title = {};
+                if (listing.title_en) pfListing.title.en = String(listing.title_en).substring(0, 100);
+                if (listing.title_ar) pfListing.title.ar = String(listing.title_ar).substring(0, 100);
+            }
+            if (listing.description_en || listing.description_ar) {
+                pfListing.description = {};
+                if (listing.description_en) pfListing.description.en = String(listing.description_en).substring(0, 5000);
+                if (listing.description_ar) pfListing.description.ar = String(listing.description_ar).substring(0, 5000);
+            }
+            
+            // Compliance (Dubai: rera/dtcm, Abu Dhabi: adrec)
+            if (listing.compliance_type && listing.permit_number) {
+                const compType = String(listing.compliance_type).toLowerCase().trim();
+                pfListing.compliance = {
+                    type: ['rera', 'dtcm', 'adrec'].includes(compType) ? compType : 'rera',
+                    listingAdvertisementNumber: String(listing.permit_number)
+                };
+            }
+            
+            // Media - Images (must be original.url format)
+            if (listing.images) {
+                const imageUrls = String(listing.images).split(/[,|]/)
+                    .map(url => url.trim())
+                    .filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
+                if (imageUrls.length > 0) {
+                    pfListing.media = pfListing.media || {};
+                    pfListing.media.images = imageUrls.map(url => ({ original: { url } }));
+                }
+            }
+            
+            // Media - Videos
+            if (listing.video_tour || listing.video_360) {
+                pfListing.media = pfListing.media || {};
+                pfListing.media.videos = {};
+                if (listing.video_tour) pfListing.media.videos.default = String(listing.video_tour).trim();
+                if (listing.video_360) pfListing.media.videos.view360 = String(listing.video_360).trim();
+            }
+            
+            // Amenities (convert to API format: lowercase with hyphens)
+            if (listing.amenities) {
+                const validAmenities = [
+                    'central-ac', 'built-in-wardrobes', 'kitchen-appliances', 'security',
+                    'concierge', 'private-gym', 'shared-gym', 'private-jacuzzi', 'shared-spa',
+                    'covered-parking', 'maids-room', 'barbecue-area', 'shared-pool',
+                    'childrens-pool', 'private-garden', 'private-pool', 'view-of-water',
+                    'walk-in-closet', 'lobby-in-building', 'electricity', 'waters',
+                    'sanitation', 'no-services', 'fixed-phone', 'fibre-optics',
+                    'flood-drainage', 'balcony', 'networked', 'view-of-landmark',
+                    'dining-in-building', 'conference-room', 'study', 'maid-service',
+                    'childrens-play-area', 'pets-allowed', 'vastu-compliant'
+                ];
+                
+                // Parse amenities string - support comma, pipe, or semicolon separated
+                const rawAmenities = String(listing.amenities).split(/[,|;]/)
+                    .map(a => a.trim().toLowerCase().replace(/\s+/g, '-').replace(/_/g, '-'))
+                    .filter(a => a);
+                
+                console.log('Raw amenities from CSV:', listing.amenities);
+                console.log('Parsed amenities:', rawAmenities);
+                
+                // Filter to valid ones, but also try fuzzy matching
+                const amenityList = rawAmenities.filter(a => {
+                    if (validAmenities.includes(a)) return true;
+                    // Try without trailing 's' (e.g., "pet-allowed" -> "pets-allowed")
+                    // Try with 's' added
+                    const withS = a + 's';
+                    const withoutS = a.endsWith('s') ? a.slice(0, -1) : null;
+                    if (validAmenities.includes(withS)) return true;
+                    if (withoutS && validAmenities.includes(withoutS)) return true;
+                    console.log('Skipping invalid amenity:', a);
+                    return false;
+                });
+                
+                // Normalize amenities (handle plurals)
+                const normalizedAmenities = amenityList.map(a => {
+                    if (validAmenities.includes(a)) return a;
+                    const withS = a + 's';
+                    if (validAmenities.includes(withS)) return withS;
+                    const withoutS = a.endsWith('s') ? a.slice(0, -1) : null;
+                    if (withoutS && validAmenities.includes(withoutS)) return withoutS;
+                    return a;
+                });
+                
+                if (normalizedAmenities.length > 0) {
+                    pfListing.amenities = normalizedAmenities;
+                    console.log('Final amenities for API:', normalizedAmenities);
+                }
+            }
+            
+            // Add row reference for tracking
+            pfListing._rowIndex = index + 1;
+            
+            return pfListing;
+        },
+        
+        downloadErrors() {
+            if (!this.results?.errors?.length) return;
+            
+            const csv = 'Row,Error\n' + this.results.errors.map(e => 
+                `"${e.row || e.reference}","${e.error.replace(/"/g, '""')}"`
+            ).join('\n');
+            
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'upload_errors.csv';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+    }
+}
+</script>
+{% endblock %}

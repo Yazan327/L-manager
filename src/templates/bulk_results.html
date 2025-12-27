@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{% block title %}Bulk Upload Results - PropertyFinder{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1><i class="bi bi-clipboard-check me-2"></i>Bulk Upload Results</h1>
+</div>
+
+<!-- Summary Cards -->
+<div class="row g-4 mb-4">
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="d-flex align-items-center">
+                <div class="stat-icon bg-primary bg-opacity-10 text-primary me-3">
+                    <i class="bi bi-list-ol"></i>
+                </div>
+                <div>
+                    <div class="stat-value">{{ result.total }}</div>
+                    <div class="stat-label">Total Processed</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="d-flex align-items-center">
+                <div class="stat-icon bg-success bg-opacity-10 text-success me-3">
+                    <i class="bi bi-check-circle"></i>
+                </div>
+                <div>
+                    <div class="stat-value">{{ result.successful }}</div>
+                    <div class="stat-label">Successful</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="d-flex align-items-center">
+                <div class="stat-icon bg-danger bg-opacity-10 text-danger me-3">
+                    <i class="bi bi-x-circle"></i>
+                </div>
+                <div>
+                    <div class="stat-value">{{ result.failed }}</div>
+                    <div class="stat-label">Failed</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="d-flex align-items-center">
+                <div class="stat-icon bg-info bg-opacity-10 text-info me-3">
+                    <i class="bi bi-percent"></i>
+                </div>
+                <div>
+                    <div class="stat-value">{{ result.success_rate }}</div>
+                    <div class="stat-label">Success Rate</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Actions -->
+<div class="d-flex gap-2 mb-4">
+    <a href="/listings" class="btn btn-pf">
+        <i class="bi bi-list me-1"></i> View All Listings
+    </a>
+    <a href="/bulk" class="btn btn-outline-pf">
+        <i class="bi bi-cloud-upload me-1"></i> Upload More
+    </a>
+</div>
+
+<!-- Successful Results -->
+{% if result.results %}
+<div class="card mb-4">
+    <div class="card-header bg-success text-white">
+        <i class="bi bi-check-circle me-2"></i>Successfully Created ({{ result.successful }})
+    </div>
+    <div class="table-responsive">
+        <table class="table mb-0">
+            <thead>
+                <tr>
+                    <th>Reference</th>
+                    <th>Listing ID</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in result.results %}
+                <tr>
+                    <td>{{ item.reference }}</td>
+                    <td><code>{{ item.listing_id }}</code></td>
+                    <td><span class="badge bg-success">{{ item.status }}</span></td>
+                    <td>
+                        {% if item.listing_id %}
+                        <a href="/listings/{{ item.listing_id }}" class="btn btn-sm btn-outline-primary">
+                            <i class="bi bi-eye me-1"></i> View
+                        </a>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- Failed Results -->
+{% if result.errors %}
+<div class="card">
+    <div class="card-header bg-danger text-white">
+        <i class="bi bi-x-circle me-2"></i>Failed ({{ result.failed }})
+    </div>
+    <div class="table-responsive">
+        <table class="table mb-0">
+            <thead>
+                <tr>
+                    <th>Reference</th>
+                    <th>Error</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in result.errors %}
+                <tr>
+                    <td>{{ item.reference }}</td>
+                    <td class="text-danger">{{ item.error }}</td>
+                    <td><span class="badge bg-danger">{{ item.status }}</span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

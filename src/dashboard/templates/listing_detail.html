@@ -1,0 +1,518 @@
+{% extends "base.html" %}
+
+{% block title %}{{ listing.title.en if listing.title is mapping else (listing.title_en or listing.title or 'Listing') }} - L-Manager{% endblock %}
+{% block page_title %}Listing Details{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl">
+    <!-- Header -->
+    <div class="bg-white rounded-lg shadow mb-6">
+        <div class="p-6">
+            <div class="flex items-start justify-between">
+                <div>
+                    {% set title = listing.title.en if listing.title is mapping else (listing.title_en or listing.title or 'Untitled') %}
+                    <h1 class="text-2xl font-bold text-gray-900">{{ title }}</h1>
+                    <p class="text-gray-500 mt-1">
+                        {% if listing.reference %}Ref: {{ listing.reference }} | {% endif %}
+                        {{ listing.type or listing.property_type }} | {{ (listing.price.type if listing.price is mapping else listing.offering_type)|default('')|title }}
+                    </p>
+                </div>
+                <div class="flex items-center space-x-3">
+                    {% set status = listing.portals.propertyfinder.isLive|default(false) if listing.portals else (listing.status == 'live') %}
+                    <span class="inline-flex px-3 py-1 text-sm font-medium rounded-full
+                        {% if status %}bg-green-100 text-green-800
+                        {% elif listing.status == 'draft' %}bg-yellow-100 text-yellow-800
+                        {% else %}bg-gray-100 text-gray-800{% endif %}">
+                        {% if status %}Live{% else %}{{ listing.status|default('draft')|title }}{% endif %}
+                    </span>
+                    {% if listing.featured %}
+                    <span class="inline-flex px-3 py-1 text-sm font-medium rounded-full bg-indigo-100 text-indigo-800">
+                        <i class="fas fa-star mr-1"></i>Featured
+                    </span>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <!-- Price -->
+            <div class="mt-4">
+                <span class="text-3xl font-bold text-indigo-600">
+                    {% if listing.price is mapping and listing.price.amounts %}
+                        {% set price_type = listing.price.type|default('sale') %}
+                        {% set amount = listing.price.amounts[price_type]|default(listing.price.amounts.sale)|default(listing.price.amounts.yearly)|default(0) %}
+                        AED {{ "{:,.0f}".format(amount) }}
+                    {% elif listing.price %}
+                        AED {{ "{:,.0f}".format(listing.price) }}
+                    {% else %}Price on Request{% endif %}
+                </span>
+                {% if listing.price is mapping and listing.price.type and listing.price.type != 'sale' %}
+                <span class="text-gray-500">/ {{ listing.price.type }}</span>
+                {% elif listing.offering_type == 'rent' and listing.rent_frequency %}
+                <span class="text-gray-500">/ {{ listing.rent_frequency }}</span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <!-- Performance Stats Cards with Slide Effect -->
+    {% set stats = listing.statistics if listing.statistics else {} %}
+    {% set credits_info = listing.credits if listing.credits else {} %}
+    {% set views_val = (stats.views or listing.views or 0)|int %}
+    {% set impressions_val = (stats.impressions or listing.impressions or 0)|int %}
+    {% set clicks_val = (stats.clicks or listing.clicks or 0)|int %}
+    {% set credits_spent = (credits_info.spent if credits_info.spent else (listing.creditsSpent if listing.creditsSpent else 0))|int %}
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <!-- Credits Card -->
+        <div class="group bg-white rounded-lg shadow overflow-hidden cursor-pointer transform transition-all duration-300 hover:scale-105 hover:shadow-lg hover:-translate-y-1">
+            <div class="p-4 relative">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Credits</p>
+                        <p class="text-2xl font-bold text-amber-600 mt-1">
+                            {{ credits_spent }}
+                        </p>
+                    </div>
+                    <div class="p-3 bg-amber-100 rounded-full group-hover:bg-amber-200 transition-colors">
+                        <i class="fas fa-coins text-amber-600 text-lg"></i>
+                    </div>
+                </div>
+                <!-- Slide-up detail on hover -->
+                <div class="absolute inset-x-0 bottom-0 bg-amber-600 text-white text-xs py-1 px-3 transform translate-y-full group-hover:translate-y-0 transition-transform duration-300">
+                    <span class="flex items-center justify-between">
+                        <span>Remaining: {{ credits_info.remaining|default('-') }}</span>
+                        <i class="fas fa-arrow-up"></i>
+                    </span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Views Card -->
+        <div class="group bg-white rounded-lg shadow overflow-hidden cursor-pointer transform transition-all duration-300 hover:scale-105 hover:shadow-lg hover:-translate-y-1">
+            <div class="p-4 relative">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Views</p>
+                        <p class="text-2xl font-bold text-blue-600 mt-1">
+                            {{ "{:,}".format(views_val) }}
+                        </p>
+                    </div>
+                    <div class="p-3 bg-blue-100 rounded-full group-hover:bg-blue-200 transition-colors">
+                        <i class="fas fa-eye text-blue-600 text-lg"></i>
+                    </div>
+                </div>
+                <!-- Slide-up detail on hover -->
+                <div class="absolute inset-x-0 bottom-0 bg-blue-600 text-white text-xs py-1 px-3 transform translate-y-full group-hover:translate-y-0 transition-transform duration-300">
+                    <span class="flex items-center justify-between">
+                        <span>Page views</span>
+                        <i class="fas fa-arrow-up"></i>
+                    </span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Impressions Card -->
+        <div class="group bg-white rounded-lg shadow overflow-hidden cursor-pointer transform transition-all duration-300 hover:scale-105 hover:shadow-lg hover:-translate-y-1">
+            <div class="p-4 relative">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Impressions</p>
+                        <p class="text-2xl font-bold text-purple-600 mt-1">
+                            {{ "{:,}".format(impressions_val) }}
+                        </p>
+                    </div>
+                    <div class="p-3 bg-purple-100 rounded-full group-hover:bg-purple-200 transition-colors">
+                        <i class="fas fa-chart-line text-purple-600 text-lg"></i>
+                    </div>
+                </div>
+                <!-- Slide-up detail on hover -->
+                <div class="absolute inset-x-0 bottom-0 bg-purple-600 text-white text-xs py-1 px-3 transform translate-y-full group-hover:translate-y-0 transition-transform duration-300">
+                    <span class="flex items-center justify-between">
+                        <span>Search appearances</span>
+                        <i class="fas fa-arrow-up"></i>
+                    </span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Clicks Card -->
+        <div class="group bg-white rounded-lg shadow overflow-hidden cursor-pointer transform transition-all duration-300 hover:scale-105 hover:shadow-lg hover:-translate-y-1">
+            <div class="p-4 relative">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Clicks</p>
+                        <p class="text-2xl font-bold text-green-600 mt-1">
+                            {{ "{:,}".format(clicks_val) }}
+                        </p>
+                    </div>
+                    <div class="p-3 bg-green-100 rounded-full group-hover:bg-green-200 transition-colors">
+                        <i class="fas fa-mouse-pointer text-green-600 text-lg"></i>
+                    </div>
+                </div>
+                <!-- Slide-up detail on hover -->
+                {% set ctr = ((clicks_val / impressions_val) * 100)|round(2) if impressions_val > 0 else 0 %}
+                <div class="absolute inset-x-0 bottom-0 bg-green-600 text-white text-xs py-1 px-3 transform translate-y-full group-hover:translate-y-0 transition-transform duration-300">
+                    <span class="flex items-center justify-between">
+                        <span>CTR: {{ ctr }}%</span>
+                        <i class="fas fa-arrow-up"></i>
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Main Content -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Media Section (Images, Videos) -->
+            {% set images = listing.media.images if listing.media else listing.images %}
+            {% set video_tour = listing.video_tour or listing.videoTour %}
+            {% set video_360 = listing.video_360 or listing.video360 %}
+            
+            {% if images and images|length > 0 %}
+            <div class="bg-white rounded-lg shadow overflow-hidden" x-data="{ currentImage: 0, showLightbox: false }">
+                <!-- Main Image -->
+                <div class="relative aspect-video bg-gray-200">
+                    {% for image in images %}
+                    {% set img_url = image.original.url if image is mapping and image.original else (image.medium.url if image is mapping and image.medium else image) %}
+                    <img x-show="currentImage === {{ loop.index0 }}" 
+                         src="{{ img_url }}" 
+                         class="w-full h-full object-cover cursor-pointer" 
+                         alt="Property image {{ loop.index }}"
+                         @click="showLightbox = true"
+                         onerror="this.src='https://via.placeholder.com/800x400?text=Image+Not+Found'">
+                    {% endfor %}
+                    
+                    <!-- Image Counter -->
+                    <div class="absolute top-3 right-3 bg-black/60 text-white px-3 py-1 rounded-full text-sm">
+                        <i class="fas fa-images mr-1"></i>
+                        <span x-text="currentImage + 1"></span> / {{ images|length }}
+                    </div>
+                    
+                    <!-- Navigation Arrows -->
+                    {% if images|length > 1 %}
+                    <button @click="currentImage = (currentImage - 1 + {{ images|length }}) % {{ images|length }}" 
+                            class="absolute left-3 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white w-10 h-10 rounded-full flex items-center justify-center transition">
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
+                    <button @click="currentImage = (currentImage + 1) % {{ images|length }}" 
+                            class="absolute right-3 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white w-10 h-10 rounded-full flex items-center justify-center transition">
+                        <i class="fas fa-chevron-right"></i>
+                    </button>
+                    {% endif %}
+                </div>
+                
+                <!-- Thumbnails -->
+                {% if images|length > 1 %}
+                <div class="p-3 flex gap-2 overflow-x-auto">
+                    {% for image in images %}
+                    {% set thumb_url = image.thumbnail.url if image is mapping and image.thumbnail else (image.small.url if image is mapping and image.small else image) %}
+                    <button @click="currentImage = {{ loop.index0 }}" 
+                            class="flex-shrink-0 w-20 h-16 rounded overflow-hidden border-2 transition"
+                            :class="currentImage === {{ loop.index0 }} ? 'border-indigo-500' : 'border-transparent hover:border-gray-300'">
+                        <img src="{{ thumb_url }}" 
+                             class="w-full h-full object-cover" 
+                             alt="Thumbnail {{ loop.index }}"
+                             onerror="this.parentElement.style.display='none'">
+                    </button>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                
+                <!-- Video Links -->
+                {% if video_tour or video_360 %}
+                <div class="p-3 border-t flex gap-2">
+                    {% if video_tour %}
+                    <a href="{{ video_tour }}" target="_blank" 
+                       class="inline-flex items-center px-3 py-1.5 bg-indigo-100 text-indigo-700 rounded-lg text-sm hover:bg-indigo-200 transition">
+                        <i class="fas fa-video mr-2"></i>Video Tour
+                    </a>
+                    {% endif %}
+                    {% if video_360 %}
+                    <a href="{{ video_360 }}" target="_blank" 
+                       class="inline-flex items-center px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg text-sm hover:bg-purple-200 transition">
+                        <i class="fas fa-vr-cardboard mr-2"></i>360° View
+                    </a>
+                    {% endif %}
+                </div>
+                {% endif %}
+                
+                <!-- Lightbox Modal -->
+                <div x-show="showLightbox" 
+                     x-transition:enter="transition ease-out duration-200"
+                     x-transition:enter-start="opacity-0"
+                     x-transition:enter-end="opacity-100"
+                     x-transition:leave="transition ease-in duration-150"
+                     x-transition:leave-start="opacity-100"
+                     x-transition:leave-end="opacity-0"
+                     class="fixed inset-0 z-50 bg-black/90 flex items-center justify-center"
+                     @keydown.escape.window="showLightbox = false"
+                     @keydown.arrow-left.window="if(showLightbox) currentImage = (currentImage - 1 + {{ images|length }}) % {{ images|length }}"
+                     @keydown.arrow-right.window="if(showLightbox) currentImage = (currentImage + 1) % {{ images|length }}">
+                    
+                    <!-- Close Button -->
+                    <button @click="showLightbox = false" class="absolute top-4 right-4 text-white hover:text-gray-300 z-10">
+                        <i class="fas fa-times text-2xl"></i>
+                    </button>
+                    
+                    <!-- Image Counter -->
+                    <div class="absolute top-4 left-4 text-white z-10">
+                        <span x-text="currentImage + 1"></span> / {{ images|length }}
+                    </div>
+                    
+                    <!-- Main Image -->
+                    <div class="relative max-w-5xl max-h-[90vh] mx-4">
+                        {% for image in images %}
+                        {% set full_url = image.original.url if image is mapping and image.original else (image.large.url if image is mapping and image.large else image) %}
+                        <img x-show="currentImage === {{ loop.index0 }}" 
+                             src="{{ full_url }}" 
+                             class="max-w-full max-h-[90vh] object-contain" 
+                             alt="Property image {{ loop.index }}">
+                        {% endfor %}
+                    </div>
+                    
+                    <!-- Navigation Arrows -->
+                    {% if images|length > 1 %}
+                    <button @click="currentImage = (currentImage - 1 + {{ images|length }}) % {{ images|length }}" 
+                            class="absolute left-4 top-1/2 -translate-y-1/2 bg-white/20 hover:bg-white/40 text-white w-12 h-12 rounded-full flex items-center justify-center transition">
+                        <i class="fas fa-chevron-left text-xl"></i>
+                    </button>
+                    <button @click="currentImage = (currentImage + 1) % {{ images|length }}" 
+                            class="absolute right-4 top-1/2 -translate-y-1/2 bg-white/20 hover:bg-white/40 text-white w-12 h-12 rounded-full flex items-center justify-center transition">
+                        <i class="fas fa-chevron-right text-xl"></i>
+                    </button>
+                    {% endif %}
+                </div>
+            </div>
+            {% elif video_tour or video_360 %}
+            <!-- Only Videos, No Images -->
+            <div class="bg-white rounded-lg shadow p-6">
+                <h3 class="text-lg font-semibold mb-4"><i class="fas fa-play-circle mr-2 text-indigo-500"></i>Videos</h3>
+                <div class="flex gap-3">
+                    {% if video_tour %}
+                    <a href="{{ video_tour }}" target="_blank" 
+                       class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition">
+                        <i class="fas fa-video mr-2"></i>Video Tour
+                    </a>
+                    {% endif %}
+                    {% if video_360 %}
+                    <a href="{{ video_360 }}" target="_blank" 
+                       class="inline-flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition">
+                        <i class="fas fa-vr-cardboard mr-2"></i>360° View
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+            
+            <!-- Description -->
+            <div class="bg-white rounded-lg shadow p-6">
+                <h3 class="text-lg font-semibold mb-4">Description</h3>
+                {% set description = listing.description.en if listing.description is mapping else (listing.description_en or listing.description) %}
+                <p class="text-gray-600 whitespace-pre-line">{{ description or 'No description provided.' }}</p>
+            </div>
+            
+            <!-- Amenities -->
+            {% if listing.amenities and listing.amenities|length > 0 %}
+            <div class="bg-white rounded-lg shadow p-6">
+                <h3 class="text-lg font-semibold mb-4">Amenities</h3>
+                <div class="flex flex-wrap gap-2">
+                    {% for amenity in listing.amenities %}
+                    <span class="px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm">
+                        {{ amenity }}
+                    </span>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <!-- Quick Details -->
+            <div class="bg-white rounded-lg shadow p-6">
+                <h3 class="text-lg font-semibold mb-4">Property Details</h3>
+                <dl class="space-y-3">
+                    {% if listing.bedrooms is not none %}
+                    <div class="flex justify-between">
+                        <dt class="text-gray-500"><i class="fas fa-bed mr-2"></i>Bedrooms</dt>
+                        <dd class="font-medium">{{ listing.bedrooms }}</dd>
+                    </div>
+                    {% endif %}
+                    {% if listing.bathrooms is not none %}
+                    <div class="flex justify-between">
+                        <dt class="text-gray-500"><i class="fas fa-bath mr-2"></i>Bathrooms</dt>
+                        <dd class="font-medium">{{ listing.bathrooms }}</dd>
+                    </div>
+                    {% endif %}
+                    {% if listing.size %}
+                    <div class="flex justify-between">
+                        <dt class="text-gray-500"><i class="fas fa-ruler-combined mr-2"></i>Size</dt>
+                        <dd class="font-medium">{{ "{:,.0f}".format(listing.size) }} sqft</dd>
+                    </div>
+                    {% endif %}
+                    {% if listing.plotSize or listing.plot_size %}
+                    <div class="flex justify-between">
+                        <dt class="text-gray-500"><i class="fas fa-vector-square mr-2"></i>Plot Size</dt>
+                        <dd class="font-medium">{{ "{:,.0f}".format(listing.plotSize or listing.plot_size) }} sqft</dd>
+                    </div>
+                    {% endif %}
+                    {% if listing.parkingSlots or listing.parking_slots or listing.parking %}
+                    <div class="flex justify-between">
+                        <dt class="text-gray-500"><i class="fas fa-car mr-2"></i>Parking</dt>
+                        <dd class="font-medium">{{ listing.parkingSlots or listing.parking_slots or listing.parking }}</dd>
+                    </div>
+                    {% endif %}
+                    {% if listing.furnishingType or listing.furnishing_type or listing.furnishing %}
+                    <div class="flex justify-between">
+                        <dt class="text-gray-500"><i class="fas fa-couch mr-2"></i>Furnishing</dt>
+                        <dd class="font-medium">{{ (listing.furnishingType or listing.furnishing_type or listing.furnishing)|replace('-', ' ')|title }}</dd>
+                    </div>
+                    {% endif %}
+                    {% if listing.projectStatus or listing.project_status or listing.completion_status %}
+                    <div class="flex justify-between">
+                        <dt class="text-gray-500"><i class="fas fa-check-circle mr-2"></i>Status</dt>
+                        <dd class="font-medium">{{ (listing.projectStatus or listing.project_status or listing.completion_status)|replace('_', ' ')|replace('-', ' ')|title }}</dd>
+                    </div>
+                    {% endif %}
+                </dl>
+            </div>
+            
+            <!-- Location -->
+            <div class="bg-white rounded-lg shadow p-6">
+                <h3 class="text-lg font-semibold mb-4">Location</h3>
+                {% if listing.location is mapping %}
+                <p class="text-gray-600">
+                    {% if listing.location.building %}{{ listing.location.building }}<br>{% endif %}
+                    {% if listing.location.sub_community %}{{ listing.location.sub_community }}<br>{% endif %}
+                    {% if listing.location.community %}{{ listing.location.community }}{% endif %}
+                    {% if listing.location.city %}, {{ listing.location.city }}{% endif %}
+                    {% if listing.location.id %}
+                    <span class="text-xs text-gray-400 cursor-pointer hover:text-indigo-600 ml-1" 
+                          onclick="copyLocationId('{{ listing.location.id }}')"
+                          title="Click to copy Location ID">
+                        (ID: <span class="underline">{{ listing.location.id }}</span> <i class="fas fa-copy text-xs"></i>)
+                    </span>
+                    {% endif %}
+                </p>
+                {% elif listing.location %}
+                <p class="text-gray-600">{{ listing.location }}{% if listing.city %}, {{ listing.city }}{% endif %}</p>
+                {% else %}
+                <p class="text-gray-500">No location specified</p>
+                {% endif %}
+            </div>
+            
+            <!-- Actions -->
+            <div class="bg-white rounded-lg shadow p-6">
+                <h3 class="text-lg font-semibold mb-4">Actions</h3>
+                <div class="space-y-3">
+                    <a href="{{ url_for('edit_listing', listing_id=listing.id) }}" 
+                       class="w-full flex items-center justify-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition">
+                        <i class="fas fa-edit mr-2"></i>Edit Listing
+                    </a>
+                    
+                    {% set is_live = listing.portals.propertyfinder.isLive if listing.portals else (listing.status == 'live') %}
+                    {% set is_pf_draft = listing.status == 'pf_draft' %}
+                    {% set is_local_draft = listing.status == 'draft' %}
+                    
+                    {% if is_local_draft %}
+                    <!-- Local draft - can send to PF draft or publish directly -->
+                    <form action="{{ url_for('send_to_pf_draft', listing_id=listing.id) }}" method="POST" class="w-full">
+                        <button type="submit" class="w-full flex items-center justify-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition">
+                            <i class="fas fa-cloud-upload-alt mr-2"></i>Send to PF Draft
+                        </button>
+                    </form>
+                    <form action="{{ url_for('api_publish_listing', listing_id=listing.id) }}" method="POST" class="w-full">
+                        <button type="submit" class="w-full flex items-center justify-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition">
+                            <i class="fas fa-check-circle mr-2"></i>Publish Directly
+                        </button>
+                    </form>
+                    {% elif is_pf_draft %}
+                    <!-- On PF as draft - can publish -->
+                    <form action="{{ url_for('api_publish_listing', listing_id=listing.id) }}" method="POST" class="w-full">
+                        <button type="submit" class="w-full flex items-center justify-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition">
+                            <i class="fas fa-check-circle mr-2"></i>Publish on PF
+                        </button>
+                    </form>
+                    {% elif not is_live %}
+                    <form action="{{ url_for('api_publish_listing', listing_id=listing.id) }}" method="POST" class="w-full">
+                        <button type="submit" class="w-full flex items-center justify-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition">
+                            <i class="fas fa-check-circle mr-2"></i>Publish
+                        </button>
+                    </form>
+                    {% else %}
+                    <form action="{{ url_for('api_unpublish_listing', listing_id=listing.id) }}" method="POST" class="w-full">
+                        <button type="submit" class="w-full flex items-center justify-center px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition">
+                            <i class="fas fa-pause-circle mr-2"></i>Unpublish
+                        </button>
+                    </form>
+                    {% endif %}
+                    
+                    <form action="{{ url_for('delete_listing_form', listing_id=listing.id) }}" method="POST" 
+                          onsubmit="return confirm('Are you sure you want to delete this listing?')">
+                        <button type="submit" class="w-full flex items-center justify-center px-4 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition">
+                            <i class="fas fa-trash mr-2"></i>Delete
+                        </button>
+                    </form>
+                    
+                    <!-- Duplicate Button -->
+                    <form action="{{ url_for('duplicate_listing', listing_id=listing.id) }}" method="POST">
+                        <button type="submit" class="w-full flex items-center justify-center px-4 py-2 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50 transition">
+                            <i class="fas fa-copy mr-2"></i>Duplicate
+                        </button>
+                    </form>
+                </div>
+            </div>
+            
+            <!-- Meta Info -->
+            <div class="bg-white rounded-lg shadow p-6">
+                <h3 class="text-lg font-semibold mb-4">Information</h3>
+                <dl class="space-y-2 text-sm">
+                    <div class="flex justify-between">
+                        <dt class="text-gray-500">ID</dt>
+                        <dd class="font-mono text-gray-700">{{ listing.id }}</dd>
+                    </div>
+                    {% if listing.reference %}
+                    <div class="flex justify-between">
+                        <dt class="text-gray-500">Reference</dt>
+                        <dd class="text-gray-700">{{ listing.reference }}</dd>
+                    </div>
+                    {% endif %}
+                    {% if listing.permit_number or listing.permitNumber %}
+                    <div class="flex justify-between">
+                        <dt class="text-gray-500">Permit #</dt>
+                        <dd class="text-gray-700">{{ listing.permit_number or listing.permitNumber }}</dd>
+                    </div>
+                    {% endif %}
+                    {% if listing.createdAt or listing.created_at %}
+                    <div class="flex justify-between">
+                        <dt class="text-gray-500">Created</dt>
+                        <dd class="text-gray-700">{{ listing.createdAt or listing.created_at }}</dd>
+                    </div>
+                    {% endif %}
+                </dl>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Back Button -->
+    <div class="mt-6">
+        <a href="{{ url_for('listings') }}" class="text-gray-600 hover:text-gray-800">
+            <i class="fas fa-arrow-left mr-2"></i>Back to Listings
+        </a>
+    </div>
+</div>
+
+<script>
+function copyLocationId(locationId) {
+    navigator.clipboard.writeText(locationId).then(function() {
+        // Show a brief toast notification
+        const toast = document.createElement('div');
+        toast.className = 'fixed bottom-4 right-4 bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg z-50';
+        toast.innerHTML = '<i class="fas fa-check mr-2"></i>Location ID copied: ' + locationId;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 2000);
+    }).catch(function(err) {
+        alert('Failed to copy: ' + err);
+    });
+}
+</script>
+{% endblock %}

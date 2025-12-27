@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block title %}Profile - L-Manager{% endblock %}
+{% block page_title %}My Profile{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl">
+    <!-- Profile Card -->
+    <div class="bg-white rounded-lg shadow mb-6">
+        <div class="p-6">
+            <div class="flex items-center mb-6">
+                <div class="w-20 h-20 bg-indigo-100 rounded-full flex items-center justify-center mr-4">
+                    <span class="text-indigo-600 text-3xl font-bold">{{ current_user.name[0]|upper }}</span>
+                </div>
+                <div>
+                    <h2 class="text-2xl font-bold text-gray-900">{{ current_user.name }}</h2>
+                    <p class="text-gray-500">{{ current_user.email }}</p>
+                    <span class="inline-flex px-2 py-1 text-xs font-medium rounded-full mt-2
+                        {% if current_user.role == 'admin' %}bg-red-100 text-red-800
+                        {% elif current_user.role == 'manager' %}bg-purple-100 text-purple-800
+                        {% elif current_user.role == 'agent' %}bg-blue-100 text-blue-800
+                        {% else %}bg-gray-100 text-gray-800{% endif %}">
+                        {{ current_user.role|title }}
+                    </span>
+                </div>
+            </div>
+            
+            <div class="grid grid-cols-2 gap-4 text-sm">
+                <div class="p-3 bg-gray-50 rounded-lg">
+                    <p class="text-gray-500">Member Since</p>
+                    <p class="font-medium">{{ current_user.created_at.strftime('%B %d, %Y') if current_user.created_at else 'N/A' }}</p>
+                </div>
+                <div class="p-3 bg-gray-50 rounded-lg">
+                    <p class="text-gray-500">Last Login</p>
+                    <p class="font-medium">{{ current_user.last_login.strftime('%B %d, %Y %H:%M') if current_user.last_login else 'First login!' }}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Update Profile Form -->
+    <div class="bg-white rounded-lg shadow mb-6">
+        <div class="p-6">
+            <h3 class="text-lg font-semibold mb-4">
+                <i class="fas fa-user-edit text-indigo-500 mr-2"></i>Update Profile
+            </h3>
+            
+            <form method="POST" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                    <input type="text" name="name" value="{{ current_user.name }}" required
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                    <input type="email" value="{{ current_user.email }}" disabled
+                           class="w-full border border-gray-200 rounded-lg px-4 py-2 bg-gray-50 text-gray-500 cursor-not-allowed">
+                    <p class="text-xs text-gray-400 mt-1">Contact an administrator to change your email.</p>
+                </div>
+                
+                <button type="submit" class="w-full bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition">
+                    <i class="fas fa-save mr-2"></i>Save Changes
+                </button>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Change Password Form -->
+    <div class="bg-white rounded-lg shadow">
+        <div class="p-6">
+            <h3 class="text-lg font-semibold mb-4">
+                <i class="fas fa-lock text-amber-500 mr-2"></i>Change Password
+            </h3>
+            
+            <form method="POST" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Current Password</label>
+                    <input type="password" name="current_password"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="Enter current password">
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">New Password</label>
+                    <input type="password" name="new_password" minlength="6"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="Enter new password (min. 6 characters)">
+                </div>
+                
+                <button type="submit" class="w-full bg-amber-600 text-white px-4 py-2 rounded-lg hover:bg-amber-700 transition">
+                    <i class="fas fa-key mr-2"></i>Update Password
+                </button>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Permissions -->
+    <div class="bg-white rounded-lg shadow mt-6">
+        <div class="p-6">
+            <h3 class="text-lg font-semibold mb-4">
+                <i class="fas fa-shield-alt text-green-500 mr-2"></i>Your Permissions
+            </h3>
+            
+            <div class="flex flex-wrap gap-2">
+                {% for perm in current_user.get_permissions() %}
+                <span class="inline-flex px-3 py-1 text-sm font-medium rounded-full bg-green-100 text-green-800">
+                    <i class="fas fa-check mr-1"></i>{{ perm }}
+                </span>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

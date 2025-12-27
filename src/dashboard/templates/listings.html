@@ -1,0 +1,490 @@
+{% extends "base.html" %}
+
+{% block title %}Listings - L-Manager{% endblock %}
+{% block page_title %}Listings{% endblock %}
+
+{% block content %}
+<div x-data="listingsPage()" x-init="init()">
+    <!-- Header Actions -->
+    <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+        <div class="flex flex-wrap items-center gap-3">
+            <!-- Search -->
+            <div class="relative">
+                <input type="text" placeholder="Search listings..." 
+                       class="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 w-64"
+                       x-model="searchQuery"
+                       @keyup.enter="applyFilters()">
+                <i class="fas fa-search absolute left-3 top-3 text-gray-400"></i>
+            </div>
+            
+            <!-- Status Filter -->
+            <select class="border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                    x-model="filterStatus" @change="applyFilters()">
+                <option value="">All Status</option>
+                <option value="live">Live</option>
+                <option value="draft">Draft</option>
+                <option value="unpublished">Unpublished</option>
+            </select>
+            
+            <!-- Sort By -->
+            <select class="border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                    x-model="sortBy" @change="applyFilters()">
+                <option value="updated_at">Last Updated</option>
+                <option value="created_at">Date Created</option>
+                <option value="price">Price</option>
+                <option value="views">Views</option>
+                <option value="leads">Leads</option>
+                <option value="bedrooms">Bedrooms</option>
+                <option value="size">Size</option>
+                <option value="reference">Reference</option>
+            </select>
+            
+            <!-- Sort Order -->
+            <button @click="toggleSortOrder()" class="p-2 border border-gray-300 rounded-lg hover:bg-gray-50" :title="sortOrder === 'desc' ? 'Descending' : 'Ascending'">
+                <i class="fas" :class="sortOrder === 'desc' ? 'fa-sort-amount-down' : 'fa-sort-amount-up'"></i>
+            </button>
+            
+            <!-- Per Page -->
+            <select class="border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500"
+                    x-model="perPage" @change="applyFilters()">
+                <option value="10">10 / page</option>
+                <option value="25">25 / page</option>
+                <option value="50">50 / page</option>
+                <option value="100">100 / page</option>
+            </select>
+        </div>
+        
+        <a href="{{ url_for('new_listing') }}" class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition inline-flex items-center">
+            <i class="fas fa-plus mr-2"></i>New Listing
+        </a>
+    </div>
+    
+    <!-- Results Summary -->
+    <div class="mb-4 flex items-center justify-between">
+        <p class="text-sm text-gray-600">
+            <span class="font-medium" x-text="pagination.total"></span> listings found
+            <span x-show="searchQuery" class="text-gray-400">for "<span x-text="searchQuery"></span>"</span>
+        </p>
+        <button @click="clearFilters()" x-show="searchQuery || filterStatus" 
+                class="text-sm text-indigo-600 hover:text-indigo-800">
+            <i class="fas fa-times mr-1"></i>Clear filters
+        </button>
+    </div>
+    
+    <!-- Listings Table -->
+    <div class="bg-white rounded-lg shadow overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="w-full">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-10">
+                            <input type="checkbox" class="rounded" @change="toggleSelectAll($event)">
+                        </th>
+                        <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:text-gray-700" @click="sortColumn('reference')">
+                            Property
+                            <i class="fas fa-sort ml-1" x-show="sortBy !== 'reference'"></i>
+                            <i class="fas" :class="sortOrder === 'asc' ? 'fa-sort-up' : 'fa-sort-down'" x-show="sortBy === 'reference'"></i>
+                        </th>
+                        <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                        <th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:text-gray-700" @click="sortColumn('bedrooms')">
+                            Beds
+                            <i class="fas fa-sort ml-1" x-show="sortBy !== 'bedrooms'"></i>
+                        </th>
+                        <th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase">Baths</th>
+                        <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:text-gray-700" @click="sortColumn('size')">
+                            Size
+                            <i class="fas fa-sort ml-1" x-show="sortBy !== 'size'"></i>
+                        </th>
+                        <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Location</th>
+                        <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:text-gray-700" @click="sortColumn('price')">
+                            Price
+                            <i class="fas fa-sort ml-1" x-show="sortBy !== 'price'"></i>
+                        </th>
+                        <th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:text-gray-700" @click="sortColumn('views')">
+                            <i class="fas fa-eye mr-1"></i>Views
+                        </th>
+                        <th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:text-gray-700" @click="sortColumn('leads')">
+                            <i class="fas fa-phone mr-1"></i>Leads
+                        </th>
+                        <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                        <th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for listing in listings %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-3 py-3">
+                            <input type="checkbox" class="rounded" value="{{ listing.id }}" x-model="selectedIds">
+                        </td>
+                        <td class="px-3 py-3">
+                            <div class="flex items-center">
+                                <div class="w-10 h-10 bg-gray-200 rounded-lg flex items-center justify-center mr-3 flex-shrink-0">
+                                    {% if listing.images and listing.images|length > 0 %}
+                                    <img src="{{ listing.images[0] }}" class="w-10 h-10 rounded-lg object-cover" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                                    <i class="fas fa-building text-gray-400 hidden"></i>
+                                    {% else %}
+                                    <i class="fas fa-building text-gray-400"></i>
+                                    {% endif %}
+                                </div>
+                                <div class="min-w-0">
+                                    {% set title = listing.title_en or listing.title or 'Untitled' %}
+                                    <a href="{{ url_for('view_listing', listing_id=listing.id) }}" 
+                                       class="text-sm font-medium text-gray-900 hover:text-indigo-600 truncate block max-w-[180px]">{{ title }}</a>
+                                    <div class="text-xs text-gray-500 font-mono">{{ listing.reference or 'No ref' }}</div>
+                                </div>
+                            </div>
+                        </td>
+                        <td class="px-3 py-3">
+                            <span class="text-sm text-gray-900 capitalize">{{ (listing.property_type or '-')|replace('-', ' ') }}</span>
+                            <div class="text-xs text-gray-500 capitalize">{{ listing.offering_type|default('')|title }}</div>
+                        </td>
+                        <td class="px-3 py-3 text-sm text-center">
+                            {% if listing.bedrooms == 'studio' or listing.bedrooms == 'Studio' %}
+                                <span class="text-xs bg-gray-100 px-2 py-1 rounded">Studio</span>
+                            {% elif listing.bedrooms %}
+                                {{ listing.bedrooms }}
+                            {% else %}-{% endif %}
+                        </td>
+                        <td class="px-3 py-3 text-sm text-center">
+                            {{ listing.bathrooms or '-' }}
+                        </td>
+                        <td class="px-3 py-3 text-sm text-gray-600">
+                            {% if listing.size %}
+                                {{ "{:,.0f}".format(listing.size) }} <span class="text-xs text-gray-400">sqft</span>
+                            {% else %}-{% endif %}
+                        </td>
+                        <td class="px-3 py-3 text-sm text-gray-600">
+                            <div class="max-w-[140px]" title="{{ listing.location }}{% if listing.city %}, {{ listing.city }}{% endif %}{% if listing.emirate %}, {{ listing.emirate }}{% endif %}">
+                                {% if listing.location %}
+                                    <div class="truncate">{{ listing.location }}</div>
+                                    {% if listing.city or listing.emirate %}
+                                    <div class="text-xs text-gray-400 truncate">{{ listing.city }}{% if listing.emirate %}, {{ listing.emirate }}{% endif %}</div>
+                                    {% endif %}
+                                {% elif listing.city %}
+                                    <div class="truncate">{{ listing.city }}</div>
+                                    {% if listing.emirate %}
+                                    <div class="text-xs text-gray-400">{{ listing.emirate }}</div>
+                                    {% endif %}
+                                {% elif listing.emirate %}
+                                    {{ listing.emirate }}
+                                {% else %}
+                                    <span class="text-gray-400">-</span>
+                                {% endif %}
+                            </div>
+                        </td>
+                        <td class="px-3 py-3">
+                            {% if listing.price %}
+                            <div class="text-sm font-medium text-gray-900">
+                                AED {{ "{:,.0f}".format(listing.price) }}
+                            </div>
+                            {% if listing.offering_type == 'rent' and listing.rent_frequency %}
+                            <div class="text-xs text-gray-500">{{ listing.rent_frequency }}</div>
+                            {% endif %}
+                            {% else %}
+                            <span class="text-gray-400">-</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-3 py-3 text-sm text-center">
+                            <span class="font-medium text-blue-600">{{ listing.views or 0 }}</span>
+                        </td>
+                        <td class="px-3 py-3 text-sm text-center">
+                            <span class="font-medium text-green-600">{{ listing.leads or 0 }}</span>
+                        </td>
+                        <td class="px-3 py-3">
+                            <span class="inline-flex px-2 py-1 text-xs font-medium rounded-full
+                                {% if listing.status == 'live' %}bg-green-100 text-green-800
+                                {% elif listing.status == 'draft' %}bg-yellow-100 text-yellow-800
+                                {% else %}bg-gray-100 text-gray-800{% endif %}">
+                                {{ listing.status|default('draft')|title }}
+                            </span>
+                        </td>
+                        <td class="px-3 py-3">
+                            <div class="flex items-center justify-center space-x-1">
+                                <a href="{{ url_for('view_listing', listing_id=listing.id) }}" 
+                                   class="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="View">
+                                    <i class="fas fa-eye"></i>
+                                </a>
+                                <a href="{{ url_for('edit_listing', listing_id=listing.id) }}" 
+                                   class="p-1.5 text-gray-600 hover:bg-gray-100 rounded" title="Edit">
+                                    <i class="fas fa-edit"></i>
+                                </a>
+                                {% if listing.status == 'draft' %}
+                                <button @click="sendToPfDraft('{{ listing.id }}')" 
+                                        class="p-1.5 text-purple-600 hover:bg-purple-50 rounded" title="Send to PF Draft">
+                                    <i class="fas fa-cloud-upload-alt"></i>
+                                </button>
+                                <button @click="publishListing('{{ listing.id }}')" 
+                                        class="p-1.5 text-green-600 hover:bg-green-50 rounded" title="Publish to PF">
+                                    <i class="fas fa-check-circle"></i>
+                                </button>
+                                {% elif listing.status == 'pf_draft' %}
+                                <button @click="publishListing('{{ listing.id }}')" 
+                                        class="p-1.5 text-green-600 hover:bg-green-50 rounded" title="Publish on PF">
+                                    <i class="fas fa-check-circle"></i>
+                                </button>
+                                {% else %}
+                                <button @click="unpublishListing('{{ listing.id }}')" 
+                                        class="p-1.5 text-yellow-600 hover:bg-yellow-50 rounded" title="Unpublish">
+                                    <i class="fas fa-pause-circle"></i>
+                                </button>
+                                {% endif %}
+                                <button @click="duplicateListing('{{ listing.id }}')" 
+                                        class="p-1.5 text-blue-600 hover:bg-blue-50 rounded" title="Duplicate">
+                                    <i class="fas fa-copy"></i>
+                                </button>
+                                <button @click="deleteListing('{{ listing.id }}')" 
+                                        class="p-1.5 text-red-600 hover:bg-red-50 rounded" title="Delete">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="12" class="px-6 py-12 text-center">
+                            <i class="fas fa-inbox text-gray-300 text-5xl mb-4 block"></i>
+                            <p class="text-gray-500 mb-4">No listings found</p>
+                            <a href="{{ url_for('new_listing') }}" class="text-indigo-600 hover:underline">
+                                Create your first listing
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- Pagination -->
+    {% if pagination and pagination.total > 0 %}
+    <div class="mt-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div class="text-sm text-gray-600">
+            {% set start_item = ((page - 1) * per_page) + 1 %}
+            {% set end_item = page * per_page %}
+            {% set total = pagination.total %}
+            Showing <span class="font-medium">{{ start_item }}</span> to <span class="font-medium">{{ end_item if end_item < total else total }}</span> of <span class="font-medium">{{ total }}</span> listings
+        </div>
+        
+        <div class="flex items-center space-x-1">
+            <!-- First Page -->
+            <a href="?page=1&per_page={{ per_page }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}&status={{ status }}&search={{ search }}" 
+               class="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 {% if page == 1 %}opacity-50 pointer-events-none{% endif %}"
+               title="First page">
+                <i class="fas fa-angle-double-left"></i>
+            </a>
+            
+            <!-- Previous -->
+            <a href="?page={{ page - 1 }}&per_page={{ per_page }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}&status={{ status }}&search={{ search }}" 
+               class="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 {% if page == 1 %}opacity-50 pointer-events-none{% endif %}">
+                <i class="fas fa-chevron-left"></i>
+            </a>
+            
+            <!-- Page Numbers -->
+            {% set last_page = pagination.last_page %}
+            {% for p in range(1, last_page + 1) %}
+                {% if p == 1 or p == last_page or (p >= page - 2 and p <= page + 2) %}
+                <a href="?page={{ p }}&per_page={{ per_page }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}&status={{ status }}&search={{ search }}" 
+                   class="px-4 py-2 border rounded-lg {% if p == page %}bg-indigo-600 text-white border-indigo-600{% else %}border-gray-300 hover:bg-gray-50{% endif %}">
+                    {{ p }}
+                </a>
+                {% elif p == page - 3 or p == page + 3 %}
+                <span class="px-2 py-2 text-gray-400">...</span>
+                {% endif %}
+            {% endfor %}
+            
+            <!-- Next -->
+            <a href="?page={{ page + 1 }}&per_page={{ per_page }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}&status={{ status }}&search={{ search }}" 
+               class="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 {% if page >= last_page %}opacity-50 pointer-events-none{% endif %}">
+                <i class="fas fa-chevron-right"></i>
+            </a>
+            
+            <!-- Last Page -->
+            <a href="?page={{ last_page }}&per_page={{ per_page }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}&status={{ status }}&search={{ search }}" 
+               class="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 {% if page >= last_page %}opacity-50 pointer-events-none{% endif %}"
+               title="Last page">
+                <i class="fas fa-angle-double-right"></i>
+            </a>
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Bulk Actions Bar -->
+    <div x-show="selectedIds.length > 0" 
+         x-cloak
+         x-transition
+         class="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-gray-900 text-white px-6 py-3 rounded-lg shadow-lg flex items-center space-x-4 z-50">
+        <span class="font-medium"><span x-text="selectedIds.length"></span> selected</span>
+        <div class="h-6 w-px bg-gray-600"></div>
+        <button @click="bulkPublish()" class="px-3 py-1.5 bg-green-600 rounded hover:bg-green-700 transition">
+            <i class="fas fa-check-circle mr-1"></i>Publish
+        </button>
+        <button @click="bulkUnpublish()" class="px-3 py-1.5 bg-yellow-600 rounded hover:bg-yellow-700 transition">
+            <i class="fas fa-pause-circle mr-1"></i>Unpublish
+        </button>
+        <button @click="bulkDelete()" class="px-3 py-1.5 bg-red-600 rounded hover:bg-red-700 transition">
+            <i class="fas fa-trash mr-1"></i>Delete
+        </button>
+        <button @click="selectedIds = []" class="ml-2 text-gray-400 hover:text-white transition">
+            <i class="fas fa-times text-lg"></i>
+        </button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function listingsPage() {
+    return {
+        // State from server
+        searchQuery: '{{ search|default("") }}',
+        filterStatus: '{{ status|default("") }}',
+        sortBy: '{{ sort_by|default("updated_at") }}',
+        sortOrder: '{{ sort_order|default("desc") }}',
+        perPage: '{{ per_page|default(25) }}',
+        pagination: {{ pagination | tojson | safe if pagination else '{}' }},
+        selectedIds: [],
+        
+        init() {
+            // Initialize from URL params if needed
+        },
+        
+        applyFilters() {
+            const params = new URLSearchParams();
+            params.set('page', '1'); // Reset to first page when filtering
+            params.set('per_page', this.perPage);
+            params.set('sort_by', this.sortBy);
+            params.set('sort_order', this.sortOrder);
+            if (this.filterStatus) params.set('status', this.filterStatus);
+            if (this.searchQuery) params.set('search', this.searchQuery);
+            window.location.href = '?' + params.toString();
+        },
+        
+        clearFilters() {
+            this.searchQuery = '';
+            this.filterStatus = '';
+            this.applyFilters();
+        },
+        
+        toggleSortOrder() {
+            this.sortOrder = this.sortOrder === 'desc' ? 'asc' : 'desc';
+            this.applyFilters();
+        },
+        
+        sortColumn(column) {
+            if (this.sortBy === column) {
+                this.sortOrder = this.sortOrder === 'desc' ? 'asc' : 'desc';
+            } else {
+                this.sortBy = column;
+                this.sortOrder = 'desc';
+            }
+            this.applyFilters();
+        },
+        
+        toggleSelectAll(event) {
+            if (event.target.checked) {
+                this.selectedIds = [...document.querySelectorAll('tbody input[type="checkbox"]')].map(cb => cb.value);
+            } else {
+                this.selectedIds = [];
+            }
+        },
+        
+        async publishListing(id) {
+            if (!confirm('Publish this listing?')) return;
+            try {
+                const response = await fetch(`/api/local/listings/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: 'live' })
+                });
+                if (response.ok) location.reload();
+                else alert('Failed to publish listing');
+            } catch (e) {
+                alert('Failed to publish listing');
+            }
+        },
+        
+        async unpublishListing(id) {
+            if (!confirm('Unpublish this listing?')) return;
+            try {
+                const response = await fetch(`/api/local/listings/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: 'draft' })
+                });
+                if (response.ok) location.reload();
+                else alert('Failed to unpublish listing');
+            } catch (e) {
+                alert('Failed to unpublish listing');
+            }
+        },
+        
+        async deleteListing(id) {
+            if (!confirm('Are you sure you want to delete this listing? This cannot be undone.')) return;
+            try {
+                const response = await fetch(`/api/local/listings/${id}`, { method: 'DELETE' });
+                if (response.ok) location.reload();
+                else alert('Failed to delete listing');
+            } catch (e) {
+                alert('Failed to delete listing');
+            }
+        },
+        
+        async duplicateListing(id) {
+            try {
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = `/listings/${id}/duplicate`;
+                document.body.appendChild(form);
+                form.submit();
+            } catch (e) {
+                alert('Failed to duplicate listing');
+            }
+        },
+        
+        async sendToPfDraft(id) {
+            try {
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = `/listings/${id}/send-to-pf`;
+                document.body.appendChild(form);
+                form.submit();
+            } catch (e) {
+                alert('Failed to send to PF draft');
+            }
+        },
+        
+        async bulkPublish() {
+            if (!confirm(`Publish ${this.selectedIds.length} listings?`)) return;
+            for (const id of this.selectedIds) {
+                await fetch(`/api/local/listings/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: 'live' })
+                });
+            }
+            location.reload();
+        },
+        
+        async bulkUnpublish() {
+            if (!confirm(`Unpublish ${this.selectedIds.length} listings?`)) return;
+            for (const id of this.selectedIds) {
+                await fetch(`/api/local/listings/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: 'draft' })
+                });
+            }
+            location.reload();
+        },
+        
+        async bulkDelete() {
+            if (!confirm(`Delete ${this.selectedIds.length} listings? This cannot be undone.`)) return;
+            for (const id of this.selectedIds) {
+                await fetch(`/api/local/listings/${id}`, { method: 'DELETE' });
+            }
+            location.reload();
+        }
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+
+{% block title %}API Configuration - L-Manager{% endblock %}
+{% block page_title %}PropertyFinder API Configuration{% endblock %}
+
+{% block content %}
+<div x-data="authPage()" class="max-w-4xl">
+    
+    <!-- Current Status -->
+    <div class="bg-white rounded-lg shadow mb-6">
+        <div class="p-6">
+            <h3 class="text-lg font-semibold mb-4">
+                <i class="fas fa-shield-alt text-indigo-500 mr-2"></i>
+                API Connection Status
+            </h3>
+            
+            <div x-show="checking" class="flex items-center text-gray-500">
+                <i class="fas fa-spinner fa-spin mr-2"></i>
+                Checking API connection...
+            </div>
+            
+            <div x-show="!checking && connected" class="flex items-center justify-between">
+                <div class="flex items-center text-green-600">
+                    <i class="fas fa-check-circle text-2xl mr-3"></i>
+                    <div>
+                        <p class="font-medium">Connected to PropertyFinder Enterprise API</p>
+                        <p class="text-sm text-gray-500" x-text="'Users found: ' + userCount"></p>
+                        <p class="text-sm text-gray-400" x-text="'Last checked: ' + lastChecked"></p>
+                    </div>
+                </div>
+                <button @click="testConnection()" class="px-4 py-2 bg-indigo-100 text-indigo-700 rounded-lg hover:bg-indigo-200">
+                    <i class="fas fa-sync-alt mr-2"></i>Test Again
+                </button>
+            </div>
+            
+            <div x-show="!checking && !connected" class="flex items-center text-red-600">
+                <i class="fas fa-exclamation-circle text-2xl mr-3"></i>
+                <div>
+                    <p class="font-medium">Connection Failed</p>
+                    <p class="text-sm text-gray-500" x-text="error || 'Unable to connect to API'"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- API Configuration -->
+    <div class="bg-white rounded-lg shadow mb-6">
+        <div class="p-6">
+            <h3 class="text-lg font-semibold mb-4">
+                <i class="fas fa-key text-amber-500 mr-2"></i>
+                Enterprise API Configuration
+            </h3>
+            
+            <div class="space-y-4">
+                <!-- API Endpoint -->
+                <div class="p-4 bg-gray-50 rounded-lg">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="font-medium text-gray-700">API Endpoint</p>
+                            <p class="text-sm text-gray-500 font-mono">https://atlas.propertyfinder.com/v1</p>
+                        </div>
+                        <span class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">Enterprise API</span>
+                    </div>
+                </div>
+                
+                <!-- API Key Status -->
+                <div class="p-4 bg-gray-50 rounded-lg">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="font-medium text-gray-700">API Key</p>
+                            <p class="text-sm text-gray-500 font-mono" x-text="apiKeyPreview"></p>
+                        </div>
+                        <span x-show="hasApiKey" class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">
+                            <i class="fas fa-check mr-1"></i>Configured
+                        </span>
+                        <span x-show="!hasApiKey" class="px-3 py-1 bg-red-100 text-red-700 rounded-full text-sm">
+                            <i class="fas fa-times mr-1"></i>Not Set
+                        </span>
+                    </div>
+                </div>
+                
+                <!-- API Secret Status -->
+                <div class="p-4 bg-gray-50 rounded-lg">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="font-medium text-gray-700">API Secret</p>
+                            <p class="text-sm text-gray-500 font-mono" x-text="apiSecretPreview"></p>
+                        </div>
+                        <span x-show="hasApiSecret" class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">
+                            <i class="fas fa-check mr-1"></i>Configured
+                        </span>
+                        <span x-show="!hasApiSecret" class="px-3 py-1 bg-red-100 text-red-700 rounded-full text-sm">
+                            <i class="fas fa-times mr-1"></i>Not Set
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- How to Get API Credentials -->
+    <div class="bg-white rounded-lg shadow mb-6">
+        <div class="p-6">
+            <h3 class="text-lg font-semibold mb-4">
+                <i class="fas fa-question-circle text-blue-500 mr-2"></i>
+                How to Get API Credentials
+            </h3>
+            
+            <div class="space-y-6">
+                <!-- Step 1 -->
+                <div class="flex">
+                    <div class="flex-shrink-0 w-8 h-8 bg-indigo-600 text-white rounded-full flex items-center justify-center font-bold mr-4">1</div>
+                    <div class="flex-1">
+                        <h4 class="font-medium mb-2">Contact PropertyFinder Support</h4>
+                        <p class="text-gray-600 text-sm">Request Enterprise API access from your PropertyFinder account manager.</p>
+                    </div>
+                </div>
+                
+                <!-- Step 2 -->
+                <div class="flex">
+                    <div class="flex-shrink-0 w-8 h-8 bg-indigo-600 text-white rounded-full flex items-center justify-center font-bold mr-4">2</div>
+                    <div class="flex-1">
+                        <h4 class="font-medium mb-2">Receive API Key and Secret</h4>
+                        <p class="text-gray-600 text-sm">PropertyFinder will provide your unique API Key (Client ID) and API Secret (Client Secret).</p>
+                    </div>
+                </div>
+                
+                <!-- Step 3 -->
+                <div class="flex">
+                    <div class="flex-shrink-0 w-8 h-8 bg-indigo-600 text-white rounded-full flex items-center justify-center font-bold mr-4">3</div>
+                    <div class="flex-1">
+                        <h4 class="font-medium mb-2">Configure in .env file</h4>
+                        <p class="text-gray-600 text-sm mb-3">Add your credentials to the <code class="bg-gray-100 px-2 py-1 rounded">.env</code> file in the project root:</p>
+                        <div class="bg-gray-900 text-gray-100 rounded-lg p-4 font-mono text-sm overflow-x-auto">
+                            <p class="text-gray-400"># PropertyFinder Enterprise API</p>
+                            <p>PF_API_KEY=<span class="text-green-400">your_api_key_here</span></p>
+                            <p>PF_API_SECRET=<span class="text-green-400">your_api_secret_here</span></p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Step 4 -->
+                <div class="flex">
+                    <div class="flex-shrink-0 w-8 h-8 bg-indigo-600 text-white rounded-full flex items-center justify-center font-bold mr-4">4</div>
+                    <div class="flex-1">
+                        <h4 class="font-medium mb-2">Restart the application</h4>
+                        <p class="text-gray-600 text-sm">After updating the .env file, restart the Flask server to load the new credentials.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Info Box -->
+    <div class="bg-blue-50 border border-blue-200 rounded-lg p-6">
+        <div class="flex">
+            <i class="fas fa-info-circle text-blue-500 text-xl mr-4"></i>
+            <div>
+                <h4 class="font-medium text-blue-800 mb-2">About OAuth 2.0 Authentication</h4>
+                <p class="text-blue-700 text-sm mb-3">
+                    The PropertyFinder Enterprise API uses OAuth 2.0 Client Credentials flow. 
+                    Your API Key and Secret are used to obtain a short-lived JWT access token (valid for 30 minutes).
+                    The application automatically refreshes the token when needed.
+                </p>
+                <div class="text-blue-600 text-sm space-y-1">
+                    <p><i class="fas fa-lock mr-2"></i>Your credentials are stored locally in the .env file</p>
+                    <p><i class="fas fa-sync-alt mr-2"></i>Tokens are automatically refreshed when expired</p>
+                    <p><i class="fas fa-server mr-2"></i>API endpoint: atlas.propertyfinder.com/v1</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function authPage() {
+    return {
+        checking: true,
+        connected: false,
+        error: '',
+        userCount: 0,
+        lastChecked: '',
+        hasApiKey: false,
+        hasApiSecret: false,
+        apiKeyPreview: '••••••••',
+        apiSecretPreview: '••••••••',
+        
+        async init() {
+            await this.loadConfig();
+            await this.testConnection();
+        },
+        
+        async loadConfig() {
+            try {
+                const resp = await fetch('/api/config');
+                const data = await resp.json();
+                this.hasApiKey = data.has_api_key;
+                this.hasApiSecret = data.has_api_secret;
+                this.apiKeyPreview = data.api_key_preview || '••••••••';
+                this.apiSecretPreview = data.api_secret_preview || '••••••••';
+            } catch (e) {
+                console.error('Error loading config:', e);
+            }
+        },
+        
+        async testConnection() {
+            this.checking = true;
+            this.error = '';
+            
+            try {
+                const resp = await fetch('/api/test-connection');
+                const data = await resp.json();
+                
+                this.connected = data.success;
+                this.userCount = data.users_count || 0;
+                this.lastChecked = new Date().toLocaleString();
+                
+                if (!data.success) {
+                    this.error = data.error || 'Connection failed';
+                }
+            } catch (e) {
+                this.connected = false;
+                this.error = e.message;
+            }
+            
+            this.checking = false;
+        }
+    };
+}
+</script>
+{% endblock %}

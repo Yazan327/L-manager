@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+
+{% block title %}Create Listing - PropertyFinder{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb mb-2">
+            <li class="breadcrumb-item"><a href="/listings">Listings</a></li>
+            <li class="breadcrumb-item active">Create New</li>
+        </ol>
+    </nav>
+    <h1><i class="bi bi-plus-circle me-2"></i>Create New Listing</h1>
+</div>
+
+<form method="POST" action="/listings/create">
+    <div class="row g-4">
+        <!-- Main Form -->
+        <div class="col-md-8">
+            <!-- Basic Information -->
+            <div class="card p-4 mb-4">
+                <h5 class="mb-4"><i class="bi bi-info-circle me-2"></i>Basic Information</h5>
+                
+                <div class="mb-3">
+                    <label class="form-label">Title <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" name="title" required 
+                           placeholder="e.g., Luxury 2BR Apartment with Sea View">
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-control" name="description" rows="4" 
+                              placeholder="Describe the property..."></textarea>
+                </div>
+                
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Property Type <span class="text-danger">*</span></label>
+                        <select class="form-select" name="property_type" required>
+                            {% for code, name in property_types %}
+                            <option value="{{ code }}">{{ name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Offering Type <span class="text-danger">*</span></label>
+                        <select class="form-select" name="offering_type" id="offering_type" required>
+                            <option value="sale">For Sale</option>
+                            <option value="rent">For Rent</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Price -->
+            <div class="card p-4 mb-4">
+                <h5 class="mb-4"><i class="bi bi-cash me-2"></i>Price</h5>
+                
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Price <span class="text-danger">*</span></label>
+                        <div class="input-group">
+                            <span class="input-group-text">AED</span>
+                            <input type="number" class="form-control" name="price" required 
+                                   placeholder="0" min="0" step="1">
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Currency</label>
+                        <select class="form-select" name="currency">
+                            <option value="AED" selected>AED</option>
+                            <option value="USD">USD</option>
+                            <option value="EUR">EUR</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3" id="rent_frequency_container" style="display: none;">
+                        <label class="form-label">Frequency</label>
+                        <select class="form-select" name="rent_frequency">
+                            <option value="yearly">Yearly</option>
+                            <option value="monthly">Monthly</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="daily">Daily</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Location -->
+            <div class="card p-4 mb-4">
+                <h5 class="mb-4"><i class="bi bi-geo-alt me-2"></i>Location</h5>
+                
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label">City <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" name="city" required 
+                               placeholder="e.g., Dubai" value="Dubai">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Community <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" name="community" required 
+                               placeholder="e.g., Dubai Marina">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Sub-community</label>
+                        <input type="text" class="form-control" name="sub_community" 
+                               placeholder="e.g., Marina Gate">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Building</label>
+                        <input type="text" class="form-control" name="building" 
+                               placeholder="e.g., Marina Gate 1">
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Property Details -->
+            <div class="card p-4">
+                <h5 class="mb-4"><i class="bi bi-house me-2"></i>Property Details</h5>
+                
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <label class="form-label">Bedrooms</label>
+                        <select class="form-select" name="bedrooms">
+                            <option value="">Select</option>
+                            <option value="0">Studio</option>
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                            <option value="5">5</option>
+                            <option value="6">6</option>
+                            <option value="7">7+</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Bathrooms</label>
+                        <select class="form-select" name="bathrooms">
+                            <option value="">Select</option>
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                            <option value="5">5</option>
+                            <option value="6">6+</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Size (sqft)</label>
+                        <input type="number" class="form-control" name="size" 
+                               placeholder="0" min="0">
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Sidebar -->
+        <div class="col-md-4">
+            <!-- Reference -->
+            <div class="card p-4 mb-4">
+                <h5 class="mb-4"><i class="bi bi-tag me-2"></i>Reference</h5>
+                
+                <div class="mb-3">
+                    <label class="form-label">Reference Number</label>
+                    <input type="text" class="form-control" name="reference_number" 
+                           placeholder="Your internal reference">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Permit Number</label>
+                    <input type="text" class="form-control" name="permit_number" 
+                           placeholder="RERA/DLD permit number">
+                </div>
+            </div>
+            
+            <!-- Submit -->
+            <div class="card p-4">
+                <h5 class="mb-4"><i class="bi bi-send me-2"></i>Submit</h5>
+                
+                <p class="text-muted small">
+                    The listing will be created as a draft. You can publish it later from the listing details page.
+                </p>
+                
+                <div class="d-grid gap-2">
+                    <button type="submit" class="btn btn-pf btn-lg">
+                        <i class="bi bi-plus-lg me-1"></i> Create Listing
+                    </button>
+                    <a href="/listings" class="btn btn-outline-secondary">
+                        Cancel
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.getElementById('offering_type').addEventListener('change', function() {
+    const container = document.getElementById('rent_frequency_container');
+    container.style.display = this.value === 'rent' ? 'block' : 'none';
+});
+</script>
+{% endblock %}

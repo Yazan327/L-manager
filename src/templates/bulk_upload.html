@@ -1,0 +1,255 @@
+{% extends "base.html" %}
+
+{% block title %}Bulk Upload - PropertyFinder{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1><i class="bi bi-cloud-upload me-2"></i>Bulk Upload</h1>
+    <p class="text-muted">Upload multiple listings at once using JSON or CSV files</p>
+</div>
+
+<div class="row g-4">
+    <div class="col-md-8">
+        <!-- Upload Form -->
+        <div class="card p-4">
+            <form method="POST" action="/bulk/upload" enctype="multipart/form-data" id="upload-form">
+                <div class="upload-zone mb-4" id="drop-zone">
+                    <i class="bi bi-cloud-arrow-up"></i>
+                    <h5>Drag and drop your file here</h5>
+                    <p class="text-muted mb-3">or click to browse</p>
+                    <input type="file" name="file" id="file-input" accept=".json,.csv" 
+                           class="d-none" required>
+                    <button type="button" class="btn btn-outline-pf" onclick="document.getElementById('file-input').click()">
+                        <i class="bi bi-folder2-open me-1"></i> Browse Files
+                    </button>
+                </div>
+                
+                <div id="file-info" class="alert alert-info d-none">
+                    <i class="bi bi-file-earmark me-2"></i>
+                    <span id="file-name"></span>
+                    <button type="button" class="btn-close float-end" onclick="clearFile()"></button>
+                </div>
+                
+                <div class="form-check mb-4">
+                    <input type="checkbox" class="form-check-input" id="publish" name="publish">
+                    <label class="form-check-label" for="publish">
+                        Publish listings immediately after creation
+                    </label>
+                    <div class="form-text">If unchecked, listings will be created as drafts</div>
+                </div>
+                
+                <div class="d-grid">
+                    <button type="submit" class="btn btn-pf btn-lg" id="submit-btn" disabled>
+                        <i class="bi bi-upload me-1"></i> Upload and Process
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <div class="col-md-4">
+        <!-- Help -->
+        <div class="card p-4 mb-4">
+            <h5><i class="bi bi-question-circle me-2"></i>Supported Formats</h5>
+            
+            <div class="mt-3">
+                <h6><i class="bi bi-filetype-json text-warning me-2"></i>JSON</h6>
+                <p class="small text-muted">Array of listing objects with all property fields.</p>
+                
+                <h6><i class="bi bi-filetype-csv text-success me-2"></i>CSV</h6>
+                <p class="small text-muted">Comma-separated file with header row.</p>
+            </div>
+            
+            <a href="/samples/sample_listings.json" download class="btn btn-outline-secondary btn-sm me-2">
+                <i class="bi bi-download me-1"></i> Sample JSON
+            </a>
+            <a href="/samples/sample_listings.csv" download class="btn btn-outline-secondary btn-sm">
+                <i class="bi bi-download me-1"></i> Sample CSV
+            </a>
+        </div>
+        
+        <!-- Required Fields -->
+        <div class="card p-4">
+            <h5><i class="bi bi-list-check me-2"></i>Required API Fields</h5>
+            
+            <ul class="list-unstyled mt-3 mb-0">
+                <li class="mb-2">
+                    <i class="bi bi-check-circle text-success me-2"></i>
+                    <code>title_en</code> (max 50 chars)
+                </li>
+                <li class="mb-2">
+                    <i class="bi bi-check-circle text-success me-2"></i>
+                    <code>type</code> (apartment, villa, etc.)
+                </li>
+                <li class="mb-2">
+                    <i class="bi bi-check-circle text-success me-2"></i>
+                    <code>category</code> (residential/commercial)
+                </li>
+                <li class="mb-2">
+                    <i class="bi bi-check-circle text-success me-2"></i>
+                    <code>uaeEmirate</code> (dubai, abu_dhabi, etc.)
+                </li>
+                <li class="mb-2">
+                    <i class="bi bi-check-circle text-success me-2"></i>
+                    <code>price_type</code>, <code>price_amount</code>
+                </li>
+                <li class="mb-2">
+                    <i class="bi bi-check-circle text-success me-2"></i>
+                    <code>location_id</code> (from Locations API)
+                </li>
+                <li class="mb-2">
+                    <i class="bi bi-check-circle text-success me-2"></i>
+                    <code>assigned_to_id</code> (agent ID)
+                </li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<!-- JSON Format Example (PropertyFinder API) -->
+<div class="card p-4 mt-4">
+    <h5><i class="bi bi-code me-2"></i>JSON Format Example (PropertyFinder API)</h5>
+    <pre class="bg-light p-3 rounded mt-3" style="font-size: 12px;"><code>[
+  {
+    "title": { "en": "Luxury 2BR Apartment" },
+    "description": { "en": "Beautiful apartment with sea views" },
+    "type": "apartment",
+    "category": "residential",
+    "uaeEmirate": "dubai",
+    "price": {
+      "type": "sale",
+      "amounts": { "sale": 2500000 },
+      "downpayment": 250000
+    },
+    "location": { "id": 12345 },
+    "bedrooms": "2",
+    "bathrooms": "3",
+    "size": 1450,
+    "reference": "REF-001",
+    "projectStatus": "completed",
+    "furnishingType": "furnished",
+    "compliance": {
+      "type": "rera",
+      "listingAdvertisementNumber": "7116777484"
+    },
+    "assignedTo": { "id": 123456 },
+    "amenities": ["balcony", "shared-pool", "security"],
+    "media": {
+      "images": [
+        { "original": { "url": "https://example.com/img1.jpg" } }
+      ]
+    }
+  }
+]</code></pre>
+</div>
+
+<!-- CSV Format Example -->
+<div class="card p-4 mt-4">
+    <h5><i class="bi bi-table me-2"></i>CSV Format Example</h5>
+    <div class="table-responsive mt-3">
+        <table class="table table-sm table-bordered">
+            <thead class="table-light">
+                <tr>
+                    <th>title_en</th>
+                    <th>type</th>
+                    <th>price_type</th>
+                    <th>price_amount</th>
+                    <th>location_id</th>
+                    <th>bedrooms</th>
+                    <th>assigned_to_id</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Luxury 2BR</td>
+                    <td>apartment</td>
+                    <td>sale</td>
+                    <td>2500000</td>
+                    <td>12345</td>
+                    <td>2</td>
+                    <td>123456</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    <div class="alert alert-info mt-3 small">
+        <i class="bi bi-info-circle me-2"></i>
+        <strong>Property Types:</strong> apartment, villa, townhouse, penthouse, duplex, office-space, shop, warehouse, land<br>
+        <strong>Price Types:</strong> sale, yearly, monthly, weekly, daily<br>
+        <strong>Project Status:</strong> completed, off_plan, completed_primary, off_plan_primary
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+const fileInfo = document.getElementById('file-info');
+const fileName = document.getElementById('file-name');
+const submitBtn = document.getElementById('submit-btn');
+
+// Drag and drop
+dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZone.classList.add('dragover');
+});
+
+dropZone.addEventListener('dragleave', () => {
+    dropZone.classList.remove('dragover');
+});
+
+dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+        fileInput.files = files;
+        showFile(files[0]);
+    }
+});
+
+dropZone.addEventListener('click', () => {
+    fileInput.click();
+});
+
+fileInput.addEventListener('change', () => {
+    if (fileInput.files.length > 0) {
+        showFile(fileInput.files[0]);
+    }
+});
+
+function showFile(file) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!['json', 'csv'].includes(ext)) {
+        alert('Please select a JSON or CSV file');
+        return;
+    }
+    
+    fileName.textContent = file.name + ' (' + formatBytes(file.size) + ')';
+    fileInfo.classList.remove('d-none');
+    submitBtn.disabled = false;
+}
+
+function clearFile() {
+    fileInput.value = '';
+    fileInfo.classList.add('d-none');
+    submitBtn.disabled = true;
+}
+
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+// Form submit loading state
+document.getElementById('upload-form').addEventListener('submit', function() {
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Processing...';
+});
+</script>
+{% endblock %}

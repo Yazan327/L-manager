@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}PropertyFinder Dashboard{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div x-data="{ sidebarOpen: true, userMenuOpen: false }" class="flex">
+        <!-- Sidebar -->
+        <aside :class="sidebarOpen ? 'w-64' : 'w-20'" class="bg-indigo-800 min-h-screen transition-all duration-300 fixed">
+            <div class="p-4">
+                <div class="flex items-center justify-between">
+                    <h1 x-show="sidebarOpen" class="text-white text-xl font-bold">
+                        <i class="fas fa-building mr-2"></i>L-Manager
+                    </h1>
+                    <button @click="sidebarOpen = !sidebarOpen" class="text-white hover:bg-indigo-700 p-2 rounded">
+                        <i class="fas" :class="sidebarOpen ? 'fa-chevron-left' : 'fa-chevron-right'"></i>
+                    </button>
+                </div>
+            </div>
+            
+            <nav class="mt-6">
+                <a href="{{ url_for('index') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'index' %}bg-indigo-700{% endif %}">
+                    <i class="fas fa-home w-8"></i>
+                    <span x-show="sidebarOpen">Dashboard</span>
+                </a>
+                <a href="{{ url_for('listings') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint in ['listings', 'view_listing', 'edit_listing'] %}bg-indigo-700{% endif %}">
+                    <i class="fas fa-list w-8"></i>
+                    <span x-show="sidebarOpen">Listings</span>
+                </a>
+                {% if current_user and current_user.has_permission('create') %}
+                <a href="{{ url_for('new_listing') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'new_listing' %}bg-indigo-700{% endif %}">
+                    <i class="fas fa-plus-circle w-8"></i>
+                    <span x-show="sidebarOpen">New Listing</span>
+                </a>
+                {% endif %}
+                {% if current_user and current_user.has_permission('bulk_upload') %}
+                <a href="{{ url_for('bulk_upload') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'bulk_upload' %}bg-indigo-700{% endif %}">
+                    <i class="fas fa-upload w-8"></i>
+                    <span x-show="sidebarOpen">Bulk Upload</span>
+                </a>
+                {% endif %}
+                <a href="{{ url_for('insights') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'insights' %}bg-indigo-700{% endif %}">
+                    <i class="fas fa-chart-line w-8"></i>
+                    <span x-show="sidebarOpen">Insights</span>
+                </a>
+                <a href="{{ url_for('leads_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'leads_page' %}bg-indigo-700{% endif %}">
+                    <i class="fas fa-user-plus w-8"></i>
+                    <span x-show="sidebarOpen">Leads</span>
+                </a>
+                
+                <div class="border-t border-indigo-700 my-2"></div>
+                
+                {% if current_user and current_user.has_permission('manage_users') %}
+                <a href="{{ url_for('users_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'users_page' %}bg-indigo-700{% endif %}">
+                    <i class="fas fa-users w-8"></i>
+                    <span x-show="sidebarOpen">Users</span>
+                </a>
+                {% endif %}
+                <a href="{{ url_for('auth_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'auth_page' %}bg-indigo-700{% endif %}">
+                    <i class="fas fa-plug w-8"></i>
+                    <span x-show="sidebarOpen">PF Connect</span>
+                </a>
+                {% if current_user and current_user.has_permission('settings') %}
+                <a href="{{ url_for('settings') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'settings' %}bg-indigo-700{% endif %}">
+                    <i class="fas fa-cog w-8"></i>
+                    <span x-show="sidebarOpen">Settings</span>
+                </a>
+                {% endif %}
+            </nav>
+        </aside>
+        
+        <!-- Main Content -->
+        <main :class="sidebarOpen ? 'ml-64' : 'ml-20'" class="flex-1 transition-all duration-300">
+            <!-- Top Bar -->
+            <header class="bg-white shadow-sm px-6 py-4">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-2xl font-semibold text-gray-800">{% block page_title %}Dashboard{% endblock %}</h2>
+                    <div class="flex items-center space-x-4">
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                            <i class="fas fa-circle text-green-500 mr-1 text-xs"></i> Connected
+                        </span>
+                        
+                        <!-- User Menu -->
+                        {% if current_user %}
+                        <div class="relative" x-data="{ open: false }">
+                            <button @click="open = !open" class="flex items-center space-x-2 text-gray-700 hover:text-gray-900 focus:outline-none">
+                                <div class="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center">
+                                    <span class="text-indigo-600 font-semibold text-sm">{{ current_user.name[0]|upper }}</span>
+                                </div>
+                                <span class="text-sm font-medium">{{ current_user.name }}</span>
+                                <i class="fas fa-chevron-down text-xs"></i>
+                            </button>
+                            
+                            <div x-show="open" @click.away="open = false" x-cloak
+                                 class="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg py-1 z-50">
+                                <div class="px-4 py-2 border-b border-gray-100">
+                                    <p class="text-sm font-medium text-gray-900">{{ current_user.name }}</p>
+                                    <p class="text-xs text-gray-500">{{ current_user.email }}</p>
+                                    <span class="inline-flex px-2 py-0.5 text-xs rounded-full mt-1
+                                        {% if current_user.role == 'admin' %}bg-red-100 text-red-800
+                                        {% elif current_user.role == 'manager' %}bg-purple-100 text-purple-800
+                                        {% elif current_user.role == 'agent' %}bg-blue-100 text-blue-800
+                                        {% else %}bg-gray-100 text-gray-800{% endif %}">
+                                        {{ current_user.role|title }}
+                                    </span>
+                                </div>
+                                <a href="{{ url_for('profile') }}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                                    <i class="fas fa-user mr-2"></i>My Profile
+                                </a>
+                                <a href="{{ url_for('logout') }}" class="block px-4 py-2 text-sm text-red-600 hover:bg-red-50">
+                                    <i class="fas fa-sign-out-alt mr-2"></i>Sign Out
+                                </a>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </header>
+            
+            <!-- Flash Messages -->
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    <div class="px-6 pt-4">
+                        {% for category, message in messages %}
+                            <div class="mb-2 p-4 rounded-lg {% if category == 'error' %}bg-red-100 text-red-700{% elif category == 'success' %}bg-green-100 text-green-700{% elif category == 'warning' %}bg-yellow-100 text-yellow-700{% else %}bg-blue-100 text-blue-700{% endif %}" 
+                                 x-data="{ show: true }" 
+                                 x-show="show"
+                                 x-init="setTimeout(() => show = false, 5000)">
+                                <div class="flex items-center justify-between">
+                                    <span>{{ message }}</span>
+                                    <button @click="show = false" class="hover:opacity-75">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
+            
+            <!-- Page Content -->
+            <div class="p-6">
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+    </div>
+    
+    {% block scripts %}{% endblock %}
+</body>
+</html>
