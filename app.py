@@ -30,7 +30,13 @@ STATIC_DIR = SRC_DIR / 'dashboard' / 'static'
 UPLOAD_FOLDER = ROOT_DIR / 'uploads'
 DATABASE_PATH = ROOT_DIR / 'data' / 'listings.db'
 
-# Ensure data directory exists
+# Production settings
+IS_PRODUCTION = os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('PRODUCTION', 'false').lower() == 'true'
+
+# Database Configuration - Use PostgreSQL in production if DATABASE_URL is set
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
+# Ensure data directory exists (only for SQLite)
 if not DATABASE_URL:
     DATABASE_PATH.parent.mkdir(exist_ok=True)
 
@@ -38,11 +44,6 @@ app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATI
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
-# Production settings
-IS_PRODUCTION = os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('PRODUCTION', 'false').lower() == 'true'
-
-# Database Configuration - Use PostgreSQL in production if DATABASE_URL is set
-DATABASE_URL = os.environ.get('DATABASE_URL')
 if DATABASE_URL:
     # Railway PostgreSQL fix: replace postgres:// with postgresql://
     if DATABASE_URL.startswith('postgres://'):
