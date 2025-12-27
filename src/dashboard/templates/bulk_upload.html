@@ -1101,17 +1101,8 @@ function downloadSampleJSON() {
 
 {% block head_scripts %}
 <script>
-document.addEventListener('DOMContentLoaded', () => {
-    if (typeof Alpine !== 'undefined') {
-        // Alpine already loaded, register directly
-        Alpine.data('bulkUpload', bulkUploadComponent);
-    }
-});
-document.addEventListener('alpine:init', () => {
-    Alpine.data('bulkUpload', bulkUploadComponent);
-});
-
-function bulkUploadComponent() {
+// Register Alpine component - Alpine is loaded before this script
+Alpine.data('bulkUpload', () => {
     // Defaults from settings
     const defaults = {
         agent_email: '{{ defaults.agent_email | default("", true) }}',
@@ -1899,6 +1890,6 @@ function bulkUploadComponent() {
             URL.revokeObjectURL(url);
         }
     };
-}
+});
 </script>
 {% endblock %}
