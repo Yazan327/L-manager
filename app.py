@@ -52,6 +52,11 @@ app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATI
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
+# Add a simple ping endpoint before any database setup
+@app.route('/ping')
+def ping():
+    return 'pong', 200
+
 if DATABASE_URL:
     print(f"[STARTUP] Using PostgreSQL database")
     # Railway PostgreSQL fix: replace postgres:// with postgresql://
