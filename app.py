@@ -36,15 +36,24 @@ IS_PRODUCTION = os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('PRODUCT
 # Database Configuration - Use PostgreSQL in production if DATABASE_URL is set
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
+print(f"[STARTUP] Production mode: {IS_PRODUCTION}")
+print(f"[STARTUP] DATABASE_URL set: {bool(DATABASE_URL)}")
+
 # Ensure data directory exists (only for SQLite)
 if not DATABASE_URL:
-    DATABASE_PATH.parent.mkdir(exist_ok=True)
+    print(f"[STARTUP] Using SQLite at: {DATABASE_PATH}")
+    try:
+        DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        print(f"[STARTUP] Data directory created/verified")
+    except Exception as e:
+        print(f"[STARTUP] Warning: Could not create data directory: {e}")
 
 app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATIC_DIR))
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
 if DATABASE_URL:
+    print(f"[STARTUP] Using PostgreSQL database")
     # Railway PostgreSQL fix: replace postgres:// with postgresql://
     if DATABASE_URL.startswith('postgres://'):
         DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
@@ -64,7 +73,9 @@ db.init_app(app)
 # Create tables and default admin user
 with app.app_context():
     try:
+        print("[STARTUP] Creating database tables...")
         db.create_all()
+        print("[STARTUP] Database tables created successfully")
         
         # Initialize default settings
         AppSettings.init_defaults()
@@ -88,7 +99,9 @@ with app.app_context():
             admin.set_password(admin_password)
             db.session.add(admin)
             db.session.commit()
-            print(f"✓ Created default admin user: {admin_email}")
+            print(f"[STARTUP] Created default admin user: {admin_email}")
+        
+        print("[STARTUP] Database initialization complete")
         
         # Skip auto-sync in production to avoid slow startup
         # Users can manually sync from the dashboard
