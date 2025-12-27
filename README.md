@@ -246,6 +246,116 @@ Or set in `.env`:
 PF_DEBUG=true
 ```
 
+---
+
+## 🚀 Railway Deployment Guide
+
+Deploy this application to [Railway](https://railway.app) for production use.
+
+### Prerequisites
+
+- GitHub account with this repository pushed
+- Railway account (free tier available)
+- PropertyFinder API credentials
+
+### Step 1: Create Railway Project
+
+1. Go to [railway.app](https://railway.app) and sign in
+2. Click **"New Project"** → **"Deploy from GitHub repo"**
+3. Select your `L-manager` repository
+4. Railway will auto-detect Python and use the `Procfile`
+
+### Step 2: Set Environment Variables
+
+In Railway dashboard, go to your project → **Variables** tab and add:
+
+| Variable | Value | Required |
+|----------|-------|----------|
+| `SECRET_KEY` | A random secure string (32+ chars) | ✅ Yes |
+| `PF_CLIENT_ID` | Your PropertyFinder client ID | ✅ Yes |
+| `PF_CLIENT_SECRET` | Your PropertyFinder client secret | ✅ Yes |
+| `PF_AUDIENCE` | `https://atlas.propertyfinder.com/v1` | ✅ Yes |
+
+**Generate a secure SECRET_KEY:**
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+### Step 3: Add PostgreSQL (Recommended)
+
+SQLite doesn't persist between deployments. For production:
+
+1. In Railway dashboard, click **"+ New"** → **"Database"** → **"PostgreSQL"**
+2. Railway automatically sets `DATABASE_URL` variable
+3. Your app will use PostgreSQL instead of SQLite
+
+### Step 4: Deploy
+
+1. Railway auto-deploys when you push to `main` branch
+2. Check the **Deployments** tab for build logs
+3. Once deployed, click **"Generate Domain"** to get your app URL
+
+### Step 5: Verify Deployment
+
+1. Visit your Railway URL
+2. Check health endpoint: `https://your-app.railway.app/health`
+3. Login with your credentials
+
+### Production Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `Procfile` | Gunicorn start command with workers |
+| `railway.toml` | Railway build & deploy settings |
+| `.python-version` | Python 3.11 for Railway |
+| `.railwayignore` | Files excluded from deployment |
+
+### Procfile Details
+
+```
+web: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120
+```
+
+- **2 workers**: Handles concurrent requests
+- **4 threads**: Thread-based concurrency per worker
+- **120s timeout**: Allows for long API sync operations
+
+### Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Build fails | Check `requirements.txt` has all dependencies |
+| App crashes | Check logs in Railway → Deployments |
+| Database errors | Ensure `DATABASE_URL` is set if using PostgreSQL |
+| API errors | Verify all `PF_*` environment variables are set |
+| 500 errors | Check `SECRET_KEY` is set |
+
+### Environment Variable Reference
+
+```bash
+# Required for production
+SECRET_KEY=your-super-secret-key-here
+PF_CLIENT_ID=your-client-id
+PF_CLIENT_SECRET=your-client-secret
+PF_AUDIENCE=https://atlas.propertyfinder.com/v1
+
+# Auto-set by Railway
+PORT=<set by Railway>
+RAILWAY_ENVIRONMENT=production
+DATABASE_URL=<set if PostgreSQL added>
+```
+
+### Local Development vs Production
+
+| Feature | Local | Railway |
+|---------|-------|---------|
+| Server | Flask dev server | Gunicorn WSGI |
+| Database | SQLite (`data/listings.db`) | PostgreSQL |
+| Debug | Enabled | Disabled |
+| Port | 5000 | Set by Railway |
+
+---
+
 ## License
 
 MIT License

@@ -31,7 +31,8 @@ UPLOAD_FOLDER = ROOT_DIR / 'uploads'
 DATABASE_PATH = ROOT_DIR / 'data' / 'listings.db'
 
 # Ensure data directory exists
-DATABASE_PATH.parent.mkdir(exist_ok=True)
+if not DATABASE_URL:
+    DATABASE_PATH.parent.mkdir(exist_ok=True)
 
 app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATIC_DIR))
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
@@ -61,79 +62,87 @@ db.init_app(app)
 
 # Create tables and default admin user
 with app.app_context():
-    db.create_all()
-    
-    # Initialize default settings
-    AppSettings.init_defaults()
-    
-    # Set defaults from .env if not already set in DB
-    if not AppSettings.get('default_agent_email'):
-        AppSettings.set('default_agent_email', Config.DEFAULT_AGENT_EMAIL)
-    if not AppSettings.get('default_owner_email'):
-        AppSettings.set('default_owner_email', Config.DEFAULT_OWNER_EMAIL)
-    
-    # Create default admin user if no users exist
-    if User.query.count() == 0:
-        admin_email = os.environ.get('ADMIN_EMAIL', 'admin@listings.local')
-        admin_password = os.environ.get('ADMIN_PASSWORD', 'admin123')
-        admin = User(
-            email=admin_email,
-            name='Administrator',
-            role='admin',
-            is_active=True
-        )
-        admin.set_password(admin_password)
-        db.session.add(admin)
-        db.session.commit()
-        print(f"✓ Created default admin user: {admin_email}")
-    
-    # Auto-sync on first run
-    first_run = AppSettings.get('first_run_completed') != 'true'
-    if first_run and Config.validate():
-        print("\n🔄 First run detected - syncing PropertyFinder data...")
-        try:
-            client = PropertyFinderClient()
-            
-            # Fetch listings
-            all_listings = []
-            page = 1
-            while True:
-                result = client.get_listings(page=page, per_page=50)
-                listings = result.get('results', [])
-                if not listings:
-                    break
-                all_listings.extend(listings)
-                if page >= result.get('pagination', {}).get('totalPages', 1):
-                    break
-                page += 1
-                if page > 50:  # Support up to 2500 listings
-                    break
-            PFCache.set_cache('listings', all_listings)
-            print(f"   ✓ Synced {len(all_listings)} listings")
-            
-            # Fetch users
-            try:
-                users_result = client.get_users(per_page=50)
-                users = users_result.get('data', [])
-                PFCache.set_cache('users', users)
-                print(f"   ✓ Synced {len(users)} users")
-            except:
-                pass
-            
-            # Fetch leads
-            try:
-                leads_result = client.get_leads(per_page=100)
-                leads = leads_result.get('results', [])
-                PFCache.set_cache('leads', leads)
-                print(f"   ✓ Synced {len(leads)} leads")
-            except:
-                pass
-            
-            AppSettings.set('first_run_completed', 'true')
-            AppSettings.set('last_sync_at', datetime.now().isoformat())
-            print("   ✓ First run sync complete!\n")
-        except Exception as e:
-            print(f"   ⚠ First run sync failed: {e}\n")
+    try:
+        db.create_all()
+        
+        # Initialize default settings
+        AppSettings.init_defaults()
+        
+        # Set defaults from .env if not already set in DB
+        if not AppSettings.get('default_agent_email'):
+            AppSettings.set('default_agent_email', Config.DEFAULT_AGENT_EMAIL)
+        if not AppSettings.get('default_owner_email'):
+            AppSettings.set('default_owner_email', Config.DEFAULT_OWNER_EMAIL)
+        
+        # Create default admin user if no users exist
+        if User.query.count() == 0:
+            admin_email = os.environ.get('ADMIN_EMAIL', 'admin@listings.local')
+            admin_password = os.environ.get('ADMIN_PASSWORD', 'admin123')
+            admin = User(
+                email=admin_email,
+                name='Administrator',
+                role='admin',
+                is_active=True
+            )
+            admin.set_password(admin_password)
+            db.session.add(admin)
+            db.session.commit()
+            print(f"✓ Created default admin user: {admin_email}")
+        
+        # Skip auto-sync in production to avoid slow startup
+        # Users can manually sync from the dashboard
+        if not IS_PRODUCTION:
+            first_run = AppSettings.get('first_run_completed') != 'true'
+            if first_run and Config.validate():
+                print("\n🔄 First run detected - syncing PropertyFinder data...")
+                try:
+                    client = PropertyFinderClient()
+                    
+                    # Fetch listings
+                    all_listings = []
+                    page = 1
+                    while True:
+                        result = client.get_listings(page=page, per_page=50)
+                        listings = result.get('results', [])
+                        if not listings:
+                            break
+                        all_listings.extend(listings)
+                        if page >= result.get('pagination', {}).get('totalPages', 1):
+                            break
+                        page += 1
+                        if page > 50:  # Support up to 2500 listings
+                            break
+                    PFCache.set_cache('listings', all_listings)
+                    print(f"   ✓ Synced {len(all_listings)} listings")
+                    
+                    # Fetch users
+                    try:
+                        users_result = client.get_users(per_page=50)
+                        users = users_result.get('data', [])
+                        PFCache.set_cache('users', users)
+                        print(f"   ✓ Synced {len(users)} users")
+                    except:
+                        pass
+                    
+                    # Fetch leads
+                    try:
+                        leads_result = client.get_leads(per_page=100)
+                        leads = leads_result.get('results', [])
+                        PFCache.set_cache('leads', leads)
+                        print(f"   ✓ Synced {len(leads)} leads")
+                    except:
+                        pass
+                    
+                    AppSettings.set('first_run_completed', 'true')
+                    AppSettings.set('last_sync_at', datetime.now().isoformat())
+                    print("   ✓ First run sync complete!\n")
+                except Exception as e:
+                    print(f"   ⚠ First run sync failed: {e}\n")
+        else:
+            print("✓ Production mode: Skipping auto-sync on startup")
+    except Exception as e:
+        print(f"⚠ Database initialization error: {e}")
+        # Don't crash - let the app start anyway
 
 
 # ==================== AUTHENTICATION ====================
