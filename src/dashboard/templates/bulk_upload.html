@@ -1176,8 +1176,6 @@ function bulkUpload() {
             { key: 'permit_number', label: 'Permit Number', description: 'RERA/ADREC permit number', required: false, autoMap: ['permit_number', 'permitnumber', 'rera_permit', 'noc'] }
         ],
         
-
-        
         get previewRows() {
             return this.csvData.slice(0, 3);
         },
