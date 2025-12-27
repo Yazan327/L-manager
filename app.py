@@ -2707,3 +2707,6 @@ if __name__ == '__main__':
     print("Press Ctrl+C to stop\n")
     
     app.run(debug=debug, host='0.0.0.0', port=port)
+
+# This runs when gunicorn imports the module
+print("[STARTUP] App module fully loaded and ready to serve requests")
