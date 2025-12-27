@@ -164,6 +164,17 @@ with app.app_context():
         # Don't crash - let the app start anyway
 
 
+# ==================== GLOBAL ERROR HANDLER ====================
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Log all unhandled exceptions"""
+    import traceback
+    print(f"[ERROR] Unhandled exception: {e}")
+    traceback.print_exc()
+    return jsonify({'error': str(e)}), 500
+
+
 # ==================== AUTHENTICATION ====================
 
 def get_current_user():
@@ -920,14 +931,20 @@ def profile():
 @login_required
 def index():
     """Dashboard home page"""
-    # Get local stats
-    stats = {
-        'total': LocalListing.query.count(),
-        'published': LocalListing.query.filter_by(status='published').count(),
-        'draft': LocalListing.query.filter_by(status='draft').count(),
-    }
-    recent = LocalListing.query.order_by(LocalListing.updated_at.desc()).limit(5).all()
-    return render_template('index.html', stats=stats, recent_listings=[l.to_dict() for l in recent])
+    try:
+        # Get local stats
+        stats = {
+            'total': LocalListing.query.count(),
+            'published': LocalListing.query.filter_by(status='published').count(),
+            'draft': LocalListing.query.filter_by(status='draft').count(),
+        }
+        recent = LocalListing.query.order_by(LocalListing.updated_at.desc()).limit(5).all()
+        return render_template('index.html', stats=stats, recent_listings=[l.to_dict() for l in recent])
+    except Exception as e:
+        print(f"[ERROR] Index route error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 
 @app.route('/listings')
