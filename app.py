@@ -57,6 +57,10 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 def ping():
     return 'pong', 200
 
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204  # No content
+
 if DATABASE_URL:
     print(f"[STARTUP] Using PostgreSQL database")
     # Railway PostgreSQL fix: replace postgres:// with postgresql://
