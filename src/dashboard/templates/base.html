@@ -9,7 +9,6 @@
     <style>
         [x-cloak] { display: none !important; }
     </style>
-    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
     {% block head_scripts %}{% endblock %}
 </head>
 <body class="bg-gray-100 min-h-screen">
@@ -155,5 +154,6 @@
     </div>
     
     {% block scripts %}{% endblock %}
+    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
 </body>
 </html>
