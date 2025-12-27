@@ -4,7 +4,7 @@
 {% block page_title %}Bulk Upload{% endblock %}
 
 {% block content %}
-<div x-data="bulkUpload()" class="max-w-6xl">
+<div x-data="bulkUpload" class="max-w-6xl">
     <!-- Step Indicator -->
     <div class="mb-6">
         <div class="flex items-center justify-center">
@@ -1101,8 +1101,9 @@ function downloadSampleJSON() {
 
 {% block head_scripts %}
 <script>
-function bulkUpload() {
-    // Defaults from settings
+document.addEventListener('alpine:init', () => {
+    Alpine.data('bulkUpload', () => {
+        // Defaults from settings
     const defaults = {
         agent_email: '{{ defaults.agent_email | default("", true) }}',
         agent_id: '{{ defaults.agent_id | default("", true) }}',
@@ -1888,7 +1889,8 @@ function bulkUpload() {
             a.click();
             URL.revokeObjectURL(url);
         }
-    }
-}
+    };
+    });
+});
 </script>
 {% endblock %}
