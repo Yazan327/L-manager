@@ -84,30 +84,66 @@ db.init_app(app)
 with app.app_context():
     from sqlalchemy import text, inspect
     
+    # Run migrations BEFORE create_all - add missing columns to existing tables
+    print("[MIGRATION] Checking for required migrations...")
+    
     try:
-        # Run migrations BEFORE create_all - add missing columns to existing tables
-        print("[MIGRATION] Checking for required migrations...")
         inspector = inspect(db.engine)
         existing_tables = inspector.get_table_names()
         print(f"[MIGRATION] Existing tables: {existing_tables}")
-        
-        # Migration: Add folder_id column to listings table if it doesn't exist
-        if 'listings' in existing_tables:
+    except Exception as e:
+        print(f"[MIGRATION] Error inspecting tables: {e}")
+        existing_tables = []
+    
+    # Migration: Add folder_id column to listings table if it doesn't exist
+    if 'listings' in existing_tables:
+        try:
             columns = [col['name'] for col in inspector.get_columns('listings')]
             print(f"[MIGRATION] Listings table columns: {columns}")
             
             if 'folder_id' not in columns:
                 print("[MIGRATION] Adding folder_id column to listings table...")
-                with db.engine.connect() as conn:
-                    # Use PostgreSQL-compatible syntax
-                    conn.execute(text('ALTER TABLE listings ADD COLUMN folder_id INTEGER NULL'))
-                    conn.commit()
-                print("[MIGRATION] ✓ Added folder_id column to listings table")
+                try:
+                    with db.engine.connect() as conn:
+                        # Use PostgreSQL-compatible syntax with IF NOT EXISTS workaround
+                        # PostgreSQL doesn't support IF NOT EXISTS for ADD COLUMN, so we catch the error
+                        conn.execute(text('ALTER TABLE listings ADD COLUMN folder_id INTEGER NULL'))
+                        conn.commit()
+                    print("[MIGRATION] ✓ Added folder_id column to listings table")
+                except Exception as alter_error:
+                    error_str = str(alter_error).lower()
+                    if 'already exists' in error_str or 'duplicate column' in error_str:
+                        print("[MIGRATION] folder_id column already exists (caught duplicate error)")
+                    else:
+                        print(f"[MIGRATION] ERROR adding column: {alter_error}")
+                        raise
             else:
                 print("[MIGRATION] folder_id column already exists")
-        else:
-            print("[MIGRATION] listings table does not exist yet, will be created by create_all()")
-        
+        except Exception as e:
+            print(f"[MIGRATION] Error checking/adding folder_id: {e}")
+            # Try to add it anyway with raw SQL that handles duplicates
+            try:
+                with db.engine.connect() as conn:
+                    # For PostgreSQL, use DO block to handle IF NOT EXISTS
+                    conn.execute(text("""
+                        DO $$
+                        BEGIN
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns 
+                                WHERE table_name = 'listings' AND column_name = 'folder_id'
+                            ) THEN
+                                ALTER TABLE listings ADD COLUMN folder_id INTEGER NULL;
+                            END IF;
+                        END $$;
+                    """))
+                    conn.commit()
+                print("[MIGRATION] ✓ Added folder_id column using PostgreSQL DO block")
+            except Exception as do_error:
+                print(f"[MIGRATION] DO block also failed: {do_error}")
+    else:
+        print("[MIGRATION] listings table does not exist yet, will be created by create_all()")
+    
+    try:
         print("[STARTUP] Creating database tables...")
         db.create_all()
         print("[STARTUP] Database tables created successfully")
