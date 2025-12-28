@@ -869,14 +869,21 @@ function listingForm() {
         downpayment: {{ (listing.downpayment if listing else "0")|tojson }},
         
         // Description
-        titleEn: {{ (listing.title_en if listing else "")|tojson }},
-        descEn: {{ (listing.description_en if listing else "")|tojson }},
+        titleEn: {{ (listing.title_en if listing else "")|tojson|default('""', true) }},
+        descEn: {{ (listing.description_en if listing else "")|tojson|default('""', true) }},
         
         // Media
         previewImage: '',
         
         // Amenities - initialize with existing values when editing
-        selectedAmenities: {{ (listing.amenities if listing and listing.amenities else [])|tojson }},
+        // Handle both string format (from model) and array format (from dict)
+        selectedAmenities: {% if listing and listing.amenities %}
+            {% if listing.amenities is string %}
+                {{ listing.amenities.split(',')|tojson }}
+            {% else %}
+                {{ listing.amenities|tojson }}
+            {% endif %}
+        {% else %}[]{% endif %},
         
         // Watch for amenity checkbox changes
         init() {
