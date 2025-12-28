@@ -3331,17 +3331,20 @@ def api_upload_image():
         # Save file
         file.save(str(filepath))
         
+        # Get file size after saving
+        file_size = filepath.stat().st_size
+        
         # Generate URL
         url = f'/uploads/{relative_path}'
         
-        print(f"[ImageUpload] Saved: {relative_path} ({size} bytes)")
+        print(f"[ImageUpload] Saved: {relative_path} ({file_size} bytes)")
         
         return jsonify({
             'success': True,
             'id': unique_id,
             'url': url,
             'filename': filename,
-            'size': size
+            'size': file_size
         })
         
     except Exception as e:
