@@ -442,10 +442,11 @@ function imageEditor() {
         
         // Listing Assignment
         listings: [],
+        listingResults: [],
         selectedImages: [],
         selectedListing: null,
         assignMode: 'append',
-        searchQuery: '',
+        listingSearch: '',
         showListingDropdown: false,
         assigning: false,
         assignMessage: '',
@@ -487,16 +488,34 @@ function imageEditor() {
             }
         },
         
-        // Filter listings by search query
-        get filteredListings() {
-            if (!this.searchQuery) return this.listings;
-            const query = this.searchQuery.toLowerCase();
-            return this.listings.filter(l => 
+        // Search listings by query
+        searchListings() {
+            if (!this.listingSearch) {
+                this.listingResults = this.listings.slice(0, 10);
+                return;
+            }
+            const query = this.listingSearch.toLowerCase();
+            this.listingResults = this.listings.filter(l => 
                 (l.reference && l.reference.toLowerCase().includes(query)) ||
+                (l.title && l.title.toLowerCase().includes(query)) ||
                 (l.title_en && l.title_en.toLowerCase().includes(query)) ||
                 (l.city && l.city.toLowerCase().includes(query)) ||
                 (l.property_type && l.property_type.toLowerCase().includes(query))
-            );
+            ).slice(0, 10);
+        },
+        
+        // Select a listing from dropdown
+        selectListing(listing) {
+            this.selectedListing = listing;
+            this.listingSearch = '';
+            this.listingResults = [];
+        },
+        
+        // Select all processed images
+        selectAll() {
+            this.selectedImages = this.images
+                .map((img, i) => img.processed ? i : -1)
+                .filter(i => i !== -1);
         },
         
         // Toggle image selection
@@ -509,11 +528,9 @@ function imageEditor() {
             }
         },
         
-        // Select all processed images
+        // Select all processed images (alias)
         selectAllProcessed() {
-            this.selectedImages = this.images
-                .map((img, i) => img.processed ? i : -1)
-                .filter(i => i !== -1);
+            this.selectAll();
         },
         
         // Deselect all

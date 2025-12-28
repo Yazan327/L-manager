@@ -3104,14 +3104,25 @@ def api_listings_summary():
     
     result = []
     for l in listings:
+        # Count images
+        image_count = 0
+        if l.images:
+            try:
+                imgs = json.loads(l.images) if isinstance(l.images, str) else l.images
+                image_count = len(imgs) if isinstance(imgs, list) else 0
+            except:
+                pass
+        
         result.append({
             'id': l.id,
             'reference': l.reference or f'ID-{l.id}',
+            'title': l.title_en or 'Untitled',
             'title_en': l.title_en or 'Untitled',
             'city': l.city,
             'property_type': l.property_type,
             'offering_type': l.offering_type,
-            'status': l.sync_status
+            'status': l.sync_status,
+            'image_count': image_count
         })
     
     return jsonify({'listings': result})
