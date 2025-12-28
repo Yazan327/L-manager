@@ -204,12 +204,21 @@
     
     <!-- Images Queue -->
     <div x-show="images.length > 0" class="mb-6 bg-white rounded-lg shadow">
-        <div class="p-4 border-b flex items-center justify-between">
+        <div class="p-4 border-b flex items-center justify-between flex-wrap gap-3">
             <h3 class="font-semibold text-gray-700">
                 <i class="fas fa-layer-group text-indigo-600 mr-2"></i>
                 Images (<span x-text="images.length"></span>)
+                <span x-show="selectedImages.length > 0" class="ml-2 text-indigo-600">
+                    • <span x-text="selectedImages.length"></span> selected
+                </span>
             </h3>
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-3 flex-wrap">
+                <button @click="selectAll()" class="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">
+                    <i class="fas fa-check-square mr-1"></i>Select All
+                </button>
+                <button @click="deselectAll()" x-show="selectedImages.length > 0" class="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">
+                    <i class="fas fa-square mr-1"></i>Deselect
+                </button>
                 <button @click="processAll()" 
                         :disabled="processing"
                         class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50">
@@ -223,6 +232,92 @@
                 <button @click="clearAll()" class="px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg">
                     <i class="fas fa-trash mr-2"></i>Clear
                 </button>
+            </div>
+        </div>
+        
+        <!-- Assign to Listing Section -->
+        <div x-show="getProcessedImages().length > 0" class="p-4 bg-gradient-to-r from-indigo-50 to-purple-50 border-b">
+            <div class="flex flex-wrap items-center gap-4">
+                <div class="flex items-center gap-2">
+                    <i class="fas fa-link text-indigo-600"></i>
+                    <span class="font-medium text-gray-700">Assign to Listing:</span>
+                </div>
+                
+                <!-- Listing Search/Select -->
+                <div class="relative flex-1 min-w-[250px] max-w-md" x-data="{ open: false }">
+                    <input type="text" 
+                           x-model="listingSearch"
+                           @focus="open = true; searchListings()"
+                           @input.debounce.300ms="searchListings()"
+                           placeholder="Search by reference, title, location..."
+                           class="w-full border border-gray-300 rounded-lg px-3 py-2 pr-10">
+                    <i class="fas fa-search absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
+                    
+                    <!-- Dropdown -->
+                    <div x-show="open && listingResults.length > 0" 
+                         @click.outside="open = false"
+                         class="absolute z-20 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                        <template x-for="listing in listingResults" :key="listing.id">
+                            <button @click="selectListing(listing); open = false"
+                                    class="w-full text-left px-4 py-3 hover:bg-indigo-50 border-b last:border-0 flex items-center justify-between">
+                                <div>
+                                    <div class="font-medium text-gray-800" x-text="listing.reference"></div>
+                                    <div class="text-sm text-gray-500" x-text="listing.title"></div>
+                                </div>
+                                <div class="text-right">
+                                    <span class="text-xs px-2 py-1 bg-gray-100 rounded" x-text="listing.property_type"></span>
+                                    <div class="text-xs text-gray-400 mt-1">
+                                        <i class="fas fa-images mr-1"></i><span x-text="listing.image_count"></span> images
+                                    </div>
+                                </div>
+                            </button>
+                        </template>
+                    </div>
+                </div>
+                
+                <!-- Selected Listing Display -->
+                <div x-show="selectedListing" class="flex items-center gap-2 px-3 py-2 bg-white rounded-lg border">
+                    <span class="font-medium text-indigo-600" x-text="selectedListing?.reference"></span>
+                    <button @click="selectedListing = null" class="text-gray-400 hover:text-red-500">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                
+                <!-- Mode Toggle -->
+                <div class="flex items-center gap-2 bg-white rounded-lg border px-1 py-1">
+                    <button @click="assignMode = 'append'" 
+                            :class="assignMode === 'append' ? 'bg-indigo-600 text-white' : 'text-gray-600'"
+                            class="px-3 py-1 rounded text-sm transition">
+                        <i class="fas fa-plus mr-1"></i>Append
+                    </button>
+                    <button @click="assignMode = 'replace'" 
+                            :class="assignMode === 'replace' ? 'bg-red-600 text-white' : 'text-gray-600'"
+                            class="px-3 py-1 rounded text-sm transition">
+                        <i class="fas fa-exchange-alt mr-1"></i>Replace
+                    </button>
+                </div>
+                
+                <!-- Assign Buttons -->
+                <div class="flex items-center gap-2">
+                    <button @click="assignSelectedToListing()" 
+                            :disabled="!selectedListing || selectedImages.length === 0 || assigning"
+                            class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                        <i class="fas fa-link mr-2"></i>
+                        Assign Selected (<span x-text="selectedImages.filter(i => images[i]?.processed).length"></span>)
+                    </button>
+                    <button @click="assignAllToListing()" 
+                            :disabled="!selectedListing || getProcessedImages().length === 0 || assigning"
+                            class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                        <i class="fas fa-images mr-2"></i>
+                        Assign All (<span x-text="getProcessedImages().length"></span>)
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Assignment Status -->
+            <div x-show="assignMessage" class="mt-3 p-3 rounded-lg" :class="assignSuccess ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'">
+                <i :class="assignSuccess ? 'fas fa-check-circle' : 'fas fa-exclamation-circle'" class="mr-2"></i>
+                <span x-text="assignMessage"></span>
             </div>
         </div>
         
@@ -242,7 +337,15 @@
         <!-- Image Grid -->
         <div class="p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
             <template x-for="(img, index) in images" :key="index">
-                <div class="relative group border rounded-lg overflow-hidden bg-gray-100">
+                <div class="relative group border rounded-lg overflow-hidden bg-gray-100"
+                     :class="selectedImages.includes(index) ? 'ring-2 ring-indigo-500' : ''">
+                    <!-- Selection Checkbox -->
+                    <div class="absolute top-2 right-2 z-10">
+                        <input type="checkbox" 
+                               :checked="selectedImages.includes(index)"
+                               @change="toggleSelection(index)"
+                               class="w-5 h-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer">
+                    </div>
                     <!-- Original/Processed Toggle -->
                     <div class="aspect-video relative">
                         <img :src="img.processed || img.original" 
@@ -337,6 +440,17 @@ function imageEditor() {
         previewIndex: null,
         images: [],
         
+        // Listing Assignment
+        listings: [],
+        selectedImages: [],
+        selectedListing: null,
+        assignMode: 'append',
+        searchQuery: '',
+        showListingDropdown: false,
+        assigning: false,
+        assignMessage: '',
+        assignSuccess: false,
+        
         settings: {
             ratio: '{{ settings.image_default_ratio or "" }}',
             size: '{{ settings.image_default_size or "full_hd" }}',
@@ -356,6 +470,131 @@ function imageEditor() {
         
         init() {
             console.log('Image Editor initialized');
+            this.loadListings();
+        },
+        
+        // Load listings for dropdown
+        async loadListings() {
+            try {
+                const response = await fetch('/api/listings/summary');
+                if (response.ok) {
+                    const data = await response.json();
+                    this.listings = data.listings || [];
+                    console.log(`Loaded ${this.listings.length} listings`);
+                }
+            } catch (e) {
+                console.error('Failed to load listings:', e);
+            }
+        },
+        
+        // Filter listings by search query
+        get filteredListings() {
+            if (!this.searchQuery) return this.listings;
+            const query = this.searchQuery.toLowerCase();
+            return this.listings.filter(l => 
+                (l.reference && l.reference.toLowerCase().includes(query)) ||
+                (l.title_en && l.title_en.toLowerCase().includes(query)) ||
+                (l.city && l.city.toLowerCase().includes(query)) ||
+                (l.property_type && l.property_type.toLowerCase().includes(query))
+            );
+        },
+        
+        // Toggle image selection
+        toggleSelection(index) {
+            const pos = this.selectedImages.indexOf(index);
+            if (pos === -1) {
+                this.selectedImages.push(index);
+            } else {
+                this.selectedImages.splice(pos, 1);
+            }
+        },
+        
+        // Select all processed images
+        selectAllProcessed() {
+            this.selectedImages = this.images
+                .map((img, i) => img.processed ? i : -1)
+                .filter(i => i !== -1);
+        },
+        
+        // Deselect all
+        deselectAll() {
+            this.selectedImages = [];
+        },
+        
+        // Get count of processed images
+        getProcessedImages() {
+            return this.images.filter(img => img.processed);
+        },
+        
+        // Assign selected images to listing
+        async assignSelectedToListing() {
+            if (!this.selectedListing || this.selectedImages.length === 0) return;
+            
+            const imagesToAssign = this.selectedImages
+                .filter(i => this.images[i]?.processed)
+                .map(i => this.images[i].processed);
+            
+            if (imagesToAssign.length === 0) {
+                this.assignMessage = 'No processed images selected';
+                this.assignSuccess = false;
+                return;
+            }
+            
+            await this.assignImagesToListing(imagesToAssign);
+        },
+        
+        // Assign all processed images to listing
+        async assignAllToListing() {
+            if (!this.selectedListing) return;
+            
+            const imagesToAssign = this.images
+                .filter(img => img.processed)
+                .map(img => img.processed);
+            
+            if (imagesToAssign.length === 0) {
+                this.assignMessage = 'No processed images to assign';
+                this.assignSuccess = false;
+                return;
+            }
+            
+            await this.assignImagesToListing(imagesToAssign);
+        },
+        
+        // Core assignment function
+        async assignImagesToListing(imageDataArray) {
+            this.assigning = true;
+            this.assignMessage = '';
+            
+            try {
+                const response = await fetch(`/api/listings/${this.selectedListing.id}/images`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        images: imageDataArray,
+                        mode: this.assignMode
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    this.assignMessage = `Successfully assigned ${data.count} images to listing ${this.selectedListing.reference}`;
+                    this.assignSuccess = true;
+                    // Clear selection after successful assignment
+                    this.selectedImages = [];
+                } else {
+                    this.assignMessage = data.error || 'Failed to assign images';
+                    this.assignSuccess = false;
+                }
+            } catch (e) {
+                this.assignMessage = `Error: ${e.message}`;
+                this.assignSuccess = false;
+                console.error('Assignment error:', e);
+            } finally {
+                this.assigning = false;
+                // Auto-hide message after 5 seconds
+                setTimeout(() => { this.assignMessage = ''; }, 5000);
+            }
         },
         
         handleFiles(event) {

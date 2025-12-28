@@ -28,11 +28,34 @@ from images import ImageProcessor
 # Setup paths for templates and static files
 TEMPLATE_DIR = SRC_DIR / 'dashboard' / 'templates'
 STATIC_DIR = SRC_DIR / 'dashboard' / 'static'
-UPLOAD_FOLDER = ROOT_DIR / 'uploads'
-DATABASE_PATH = ROOT_DIR / 'data' / 'listings.db'
 
 # Production settings
 IS_PRODUCTION = os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('PRODUCTION', 'false').lower() == 'true'
+
+# Storage Configuration - Use Railway Volume in production
+RAILWAY_VOLUME_PATH = Path('/data')
+if IS_PRODUCTION and RAILWAY_VOLUME_PATH.exists():
+    # Use Railway Volume for persistent storage
+    UPLOAD_FOLDER = RAILWAY_VOLUME_PATH / 'uploads'
+    LISTING_IMAGES_FOLDER = RAILWAY_VOLUME_PATH / 'uploads' / 'listings'
+    print(f"[STARTUP] Using Railway Volume at: {RAILWAY_VOLUME_PATH}")
+else:
+    # Local development storage
+    UPLOAD_FOLDER = ROOT_DIR / 'uploads'
+    LISTING_IMAGES_FOLDER = ROOT_DIR / 'uploads' / 'listings'
+    print(f"[STARTUP] Using local storage at: {UPLOAD_FOLDER}")
+
+# Ensure upload directories exist
+try:
+    UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+    LISTING_IMAGES_FOLDER.mkdir(parents=True, exist_ok=True)
+    (UPLOAD_FOLDER / 'logos').mkdir(parents=True, exist_ok=True)
+    (UPLOAD_FOLDER / 'processed').mkdir(parents=True, exist_ok=True)
+    print(f"[STARTUP] Upload directories created/verified")
+except Exception as e:
+    print(f"[STARTUP] Warning: Could not create upload directories: {e}")
+
+DATABASE_PATH = ROOT_DIR / 'data' / 'listings.db'
 
 # Database Configuration - Use PostgreSQL in production if DATABASE_URL is set
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -3069,6 +3092,237 @@ def serve_upload(filename):
     """Serve uploaded files"""
     from flask import send_from_directory
     return send_from_directory(str(UPLOAD_FOLDER), filename)
+
+
+# ==================== LISTING IMAGES ENDPOINTS ====================
+
+@app.route('/api/listings/summary', methods=['GET'])
+@login_required
+def api_listings_summary():
+    """Get summary of all listings for dropdown selection"""
+    listings = LocalListing.query.order_by(LocalListing.reference).all()
+    
+    result = []
+    for l in listings:
+        result.append({
+            'id': l.id,
+            'reference': l.reference or f'ID-{l.id}',
+            'title_en': l.title_en or 'Untitled',
+            'city': l.city,
+            'property_type': l.property_type,
+            'offering_type': l.offering_type,
+            'status': l.sync_status
+        })
+    
+    return jsonify({'listings': result})
+
+
+@app.route('/api/listings/<int:listing_id>/images', methods=['GET'])
+@login_required
+def api_get_listing_images(listing_id):
+    """Get images for a listing"""
+    listing = LocalListing.query.get_or_404(listing_id)
+    
+    images = []
+    if listing.images:
+        try:
+            images = json.loads(listing.images) if isinstance(listing.images, str) else listing.images
+        except:
+            images = []
+    
+    return jsonify({
+        'listing_id': listing_id,
+        'reference': listing.reference,
+        'images': images,
+        'count': len(images)
+    })
+
+
+@app.route('/api/listings/<int:listing_id>/images', methods=['POST'])
+@permission_required('edit')
+def api_assign_images_to_listing(listing_id):
+    """Assign processed images to a listing"""
+    import base64
+    import uuid
+    
+    listing = LocalListing.query.get_or_404(listing_id)
+    data = request.json
+    
+    if not data or 'images' not in data:
+        return jsonify({'error': 'No images provided'}), 400
+    
+    images_data = data['images']  # List of base64 data URIs
+    mode = data.get('mode', 'append')  # 'append' or 'replace'
+    
+    # Get existing images
+    existing_images = []
+    if mode == 'append' and listing.images:
+        try:
+            existing_images = json.loads(listing.images) if isinstance(listing.images, str) else listing.images
+            if not isinstance(existing_images, list):
+                existing_images = []
+        except:
+            existing_images = []
+    
+    # Create listing images directory
+    listing_dir = LISTING_IMAGES_FOLDER / str(listing_id)
+    listing_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save new images
+    new_image_paths = []
+    for i, img_data in enumerate(images_data):
+        try:
+            # Parse base64 data
+            if ',' in img_data:
+                header, encoded = img_data.split(',', 1)
+                # Determine format from header
+                if 'png' in header.lower():
+                    ext = 'png'
+                elif 'webp' in header.lower():
+                    ext = 'webp'
+                else:
+                    ext = 'jpg'
+            else:
+                encoded = img_data
+                ext = 'jpg'
+            
+            image_bytes = base64.b64decode(encoded)
+            
+            # Generate unique filename
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            unique_id = str(uuid.uuid4())[:8]
+            filename = f'img_{timestamp}_{unique_id}.{ext}'
+            filepath = listing_dir / filename
+            
+            # Save image
+            with open(filepath, 'wb') as f:
+                f.write(image_bytes)
+            
+            # Store relative path for database
+            relative_path = f'listings/{listing_id}/{filename}'
+            new_image_paths.append(relative_path)
+            
+            print(f"[ListingImages] Saved image: {relative_path} ({len(image_bytes)} bytes)")
+            
+        except Exception as e:
+            print(f"[ListingImages] Error saving image {i}: {e}")
+            continue
+    
+    # Combine with existing images
+    all_images = existing_images + new_image_paths
+    
+    # Update listing
+    listing.images = json.dumps(all_images)
+    listing.updated_at = datetime.utcnow()
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'listing_id': listing_id,
+        'images_added': len(new_image_paths),
+        'total_images': len(all_images),
+        'images': all_images,
+        'message': f'Added {len(new_image_paths)} images to listing'
+    })
+
+
+@app.route('/api/listings/<int:listing_id>/images', methods=['DELETE'])
+@permission_required('edit')
+def api_delete_listing_images(listing_id):
+    """Delete images from a listing"""
+    listing = LocalListing.query.get_or_404(listing_id)
+    data = request.json
+    
+    images_to_delete = data.get('images', [])  # List of image paths to delete
+    delete_all = data.get('delete_all', False)
+    
+    # Get existing images
+    existing_images = []
+    if listing.images:
+        try:
+            existing_images = json.loads(listing.images) if isinstance(listing.images, str) else listing.images
+        except:
+            existing_images = []
+    
+    if delete_all:
+        images_to_delete = existing_images.copy()
+    
+    # Delete files and update list
+    deleted_count = 0
+    for img_path in images_to_delete:
+        if img_path in existing_images:
+            existing_images.remove(img_path)
+            # Try to delete the actual file
+            try:
+                full_path = UPLOAD_FOLDER / img_path
+                if full_path.exists():
+                    full_path.unlink()
+                    deleted_count += 1
+            except Exception as e:
+                print(f"[ListingImages] Error deleting file {img_path}: {e}")
+    
+    # Update listing
+    listing.images = json.dumps(existing_images)
+    listing.updated_at = datetime.utcnow()
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'deleted_count': deleted_count,
+        'remaining_images': len(existing_images),
+        'images': existing_images
+    })
+
+
+@app.route('/api/listings/search', methods=['GET'])
+@login_required
+def api_search_listings():
+    """Search listings for assignment dropdown"""
+    query = request.args.get('q', '').strip()
+    limit = min(int(request.args.get('limit', 20)), 50)
+    
+    # Build query
+    listings_query = LocalListing.query
+    
+    if query:
+        search = f'%{query}%'
+        listings_query = listings_query.filter(
+            db.or_(
+                LocalListing.reference.ilike(search),
+                LocalListing.title_en.ilike(search),
+                LocalListing.location.ilike(search),
+                LocalListing.property_type.ilike(search)
+            )
+        )
+    
+    listings = listings_query.order_by(LocalListing.updated_at.desc()).limit(limit).all()
+    
+    results = []
+    for listing in listings:
+        # Count existing images
+        image_count = 0
+        if listing.images:
+            try:
+                images = json.loads(listing.images) if isinstance(listing.images, str) else listing.images
+                image_count = len(images) if isinstance(images, list) else 0
+            except:
+                pass
+        
+        results.append({
+            'id': listing.id,
+            'reference': listing.reference,
+            'title': listing.title_en or f'{listing.property_type} in {listing.location}',
+            'location': listing.location,
+            'property_type': listing.property_type,
+            'price': listing.price,
+            'image_count': image_count,
+            'status': listing.status
+        })
+    
+    return jsonify({
+        'results': results,
+        'count': len(results)
+    })
 
 
 # ==================== HEALTH CHECK ====================
