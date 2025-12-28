@@ -1075,24 +1075,17 @@ function locationSearch() {
 function imageManager() {
     // Parse existing images from the listing
     let existingImages = [];
+    
     {% if listing %}
-        // Get images - works with both model objects and dicts
-        let rawImages = null;
-        try {
-            {% if listing.get_images %}
-                rawImages = {{ listing.get_images()|tojson|default('[]', true) }};
-            {% else %}
-                rawImages = {{ listing.images|tojson|default('[]', true) }};
-            {% endif %}
-        } catch(e) {
-            rawImages = [];
-        }
+    try {
+        // Get raw images data - handle both model objects and dicts
+        let rawImages = {{ (listing.get_images() if listing.get_images else listing.images)|tojson|default('[]', true) }};
         
         // Parse images from various formats
         let serverImages = [];
         if (Array.isArray(rawImages)) {
             serverImages = rawImages;
-        } else if (typeof rawImages === 'string' && rawImages && rawImages !== 'None') {
+        } else if (typeof rawImages === 'string' && rawImages && rawImages !== 'None' && rawImages !== 'null') {
             try {
                 const parsed = JSON.parse(rawImages);
                 if (Array.isArray(parsed)) {
@@ -1104,13 +1097,21 @@ function imageManager() {
             }
         }
         
+        // Filter and map to proper format
         if (Array.isArray(serverImages)) {
-            existingImages = serverImages.filter(u => u && u !== 'None' && u !== 'null' && u.trim && u.trim()).map((url, i) => ({
-                id: 'existing-' + i,
-                url: typeof url === 'string' ? url.trim() : (url.url || url),
-                uploading: false
-            })).filter(img => img.url && img.url !== 'None' && img.url !== 'null' && img.url.length > 1);
+            existingImages = serverImages
+                .filter(u => u && u !== 'None' && u !== 'null')
+                .map((url, i) => ({
+                    id: 'existing-' + i,
+                    url: typeof url === 'string' ? url.trim() : (url.url || String(url)),
+                    uploading: false
+                }))
+                .filter(img => img.url && img.url !== 'None' && img.url !== 'null' && img.url.length > 1);
         }
+    } catch(e) {
+        console.error('Error loading images:', e);
+        existingImages = [];
+    }
     {% endif %}
     
     return {
@@ -1119,7 +1120,7 @@ function imageManager() {
         dragOverIndex: null,
         draggedIndex: null,
         newImageUrl: '',
-        listingId: {{ (listing.id if listing else 'null')|tojson }},
+        listingId: {% if listing %}{{ listing.id|tojson }}{% else %}null{% endif %},
         processing: false,
         processedCount: 0,
         processMessage: '',
