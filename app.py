@@ -22,8 +22,13 @@ from werkzeug.utils import secure_filename
 from api import PropertyFinderClient, PropertyFinderAPIError, Config
 from models import PropertyListing, PropertyType, OfferingType, Location, Price
 from utils import BulkListingManager
-from database import db, LocalListing, PFSession, User, PFCache, AppSettings, ListingFolder
+from database import db, LocalListing, PFSession, User, PFCache, AppSettings, ListingFolder, LoopConfig, LoopListing, DuplicatedListing, LoopExecutionLog
 from images import ImageProcessor
+
+# APScheduler for background loop execution
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+import atexit
 
 # Setup paths for templates and static files
 TEMPLATE_DIR = SRC_DIR / 'dashboard' / 'templates'
@@ -258,6 +263,296 @@ with app.app_context():
     except Exception as e:
         print(f"⚠ Database initialization error: {e}")
         # Don't crash - let the app start anyway
+
+
+# ==================== LOOP SCHEDULER ====================
+
+# Global scheduler instance
+loop_scheduler = BackgroundScheduler()
+
+def execute_loop_job(loop_id):
+    """Execute a single loop iteration"""
+    with app.app_context():
+        try:
+            loop = LoopConfig.query.get(loop_id)
+            if not loop or not loop.is_active or loop.is_paused:
+                print(f"[LOOP] Loop {loop_id} is inactive or paused, skipping")
+                return
+            
+            start_time = datetime.utcnow()
+            
+            # Get next listing in sequence
+            loop_listing = loop.get_next_listing()
+            if not loop_listing:
+                print(f"[LOOP] Loop {loop_id} has no listings, skipping")
+                return
+            
+            listing = loop_listing.listing
+            print(f"[LOOP] Executing loop '{loop.name}' for listing {listing.reference}")
+            
+            success = False
+            message = ""
+            pf_id = None
+            
+            try:
+                client = PropertyFinderClient()
+                
+                if loop.loop_type == 'duplicate':
+                    # Create a duplicate listing
+                    success, message, pf_id = create_duplicate_listing(loop, listing, client)
+                else:  # delete_republish
+                    # Delete from PF and republish
+                    success, message, pf_id = delete_and_republish_listing(loop, listing, client)
+                
+                if success:
+                    loop.consecutive_failures = 0
+                    loop_listing.consecutive_failures = 0
+                    loop_listing.times_processed += 1
+                    loop_listing.last_processed_at = datetime.utcnow()
+                else:
+                    loop_listing.consecutive_failures += 1
+                    loop.consecutive_failures += 1
+                    
+                    # Check if we need to stop the loop (2 consecutive listings failed 3 times each)
+                    if loop.consecutive_failures >= 6:  # 2 listings × 3 attempts
+                        loop.is_active = False
+                        loop.is_paused = True
+                        message += " [LOOP STOPPED - too many failures]"
+                        print(f"[LOOP] Loop {loop_id} stopped due to too many failures")
+            
+            except Exception as exec_err:
+                success = False
+                message = str(exec_err)
+                loop.consecutive_failures += 1
+                loop_listing.consecutive_failures += 1
+            
+            # Log execution
+            duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            log = LoopExecutionLog(
+                loop_config_id=loop_id,
+                listing_id=listing.id,
+                action=loop.loop_type,
+                success=success,
+                message=message,
+                pf_listing_id=pf_id,
+                duration_ms=duration_ms
+            )
+            db.session.add(log)
+            
+            # Advance to next listing
+            loop.advance_index()
+            loop.last_run_at = datetime.utcnow()
+            loop.next_run_at = datetime.utcnow() + timedelta(hours=loop.interval_hours)
+            db.session.commit()
+            
+            print(f"[LOOP] Completed: success={success}, message={message}")
+            
+        except Exception as e:
+            import traceback
+            print(f"[LOOP] Error executing loop {loop_id}: {e}")
+            traceback.print_exc()
+
+
+def create_duplicate_listing(loop, original_listing, client):
+    """Create a duplicate of a listing and publish it"""
+    try:
+        # Check max duplicates limit
+        if loop.max_duplicates > 0:
+            existing_count = DuplicatedListing.query.filter_by(
+                original_listing_id=original_listing.id,
+                loop_config_id=loop.id,
+                status='published'
+            ).count()
+            
+            if existing_count >= loop.max_duplicates:
+                # Delete oldest duplicate first
+                oldest = DuplicatedListing.query.filter_by(
+                    original_listing_id=original_listing.id,
+                    loop_config_id=loop.id,
+                    status='published'
+                ).order_by(DuplicatedListing.created_at).first()
+                
+                if oldest and oldest.pf_listing_id:
+                    try:
+                        client.delete_listing(oldest.pf_listing_id)
+                    except:
+                        pass
+                    oldest.status = 'deleted'
+                    oldest.deleted_at = datetime.utcnow()
+                    db.session.commit()
+        
+        # Get or create "Duplicated" folder
+        dup_folder = ListingFolder.query.filter_by(name='Duplicated').first()
+        if not dup_folder:
+            dup_folder = ListingFolder(
+                name='Duplicated',
+                color='#9333ea',  # Purple
+                icon='copy',
+                description='Listings created by loop system'
+            )
+            db.session.add(dup_folder)
+            db.session.commit()
+        
+        # Create duplicate listing in our DB
+        import uuid
+        dup_reference = f"{original_listing.reference}-DUP-{uuid.uuid4().hex[:6].upper()}"
+        
+        duplicate = LocalListing(
+            reference=dup_reference,
+            folder_id=dup_folder.id,
+            emirate=original_listing.emirate,
+            city=original_listing.city,
+            location=original_listing.location,
+            location_id=original_listing.location_id,
+            category=original_listing.category,
+            offering_type=original_listing.offering_type,
+            property_type=original_listing.property_type,
+            bedrooms=original_listing.bedrooms,
+            bathrooms=original_listing.bathrooms,
+            size=original_listing.size,
+            furnishing_type=original_listing.furnishing_type,
+            project_status=original_listing.project_status,
+            parking_slots=original_listing.parking_slots,
+            floor_number=original_listing.floor_number,
+            unit_number=original_listing.unit_number,
+            price=original_listing.price,
+            downpayment=original_listing.downpayment,
+            rent_frequency=original_listing.rent_frequency,
+            title_en=original_listing.title_en,
+            title_ar=original_listing.title_ar,
+            description_en=original_listing.description_en,
+            description_ar=original_listing.description_ar,
+            images=original_listing.images,
+            video_tour=original_listing.video_tour,
+            video_360=original_listing.video_360,
+            amenities=original_listing.amenities,
+            assigned_agent=original_listing.assigned_agent,
+            developer=original_listing.developer,
+            permit_number=original_listing.permit_number,
+            available_from=original_listing.available_from,
+            status='draft'
+        )
+        db.session.add(duplicate)
+        db.session.commit()
+        
+        # Create on PropertyFinder
+        pf_data = duplicate.to_pf_format()
+        result = client.create_listing(pf_data)
+        pf_id = result.get('id')
+        
+        if pf_id:
+            duplicate.pf_listing_id = pf_id
+            
+            # Publish it
+            client.publish_listing(pf_id)
+            duplicate.status = 'published'
+            
+            # Track the duplicate
+            dup_record = DuplicatedListing(
+                original_listing_id=original_listing.id,
+                duplicate_listing_id=duplicate.id,
+                pf_listing_id=pf_id,
+                loop_config_id=loop.id,
+                status='published',
+                published_at=datetime.utcnow()
+            )
+            db.session.add(dup_record)
+            db.session.commit()
+            
+            return True, f"Created duplicate {dup_reference}", pf_id
+        else:
+            return False, "Failed to create on PropertyFinder", None
+            
+    except Exception as e:
+        return False, str(e), None
+
+
+def delete_and_republish_listing(loop, listing, client):
+    """Delete listing from PF and republish it"""
+    try:
+        # Delete from PF if it exists there
+        if listing.pf_listing_id:
+            try:
+                client.delete_listing(listing.pf_listing_id)
+                print(f"[LOOP] Deleted PF listing {listing.pf_listing_id}")
+            except Exception as del_err:
+                print(f"[LOOP] Warning: Could not delete PF listing: {del_err}")
+        
+        # Clear PF ID
+        old_pf_id = listing.pf_listing_id
+        listing.pf_listing_id = None
+        listing.status = 'draft'
+        db.session.commit()
+        
+        # Create fresh listing on PF
+        pf_data = listing.to_pf_format()
+        result = client.create_listing(pf_data)
+        pf_id = result.get('id')
+        
+        if pf_id:
+            listing.pf_listing_id = pf_id
+            
+            # Publish it
+            client.publish_listing(pf_id)
+            listing.status = 'published'
+            db.session.commit()
+            
+            return True, f"Republished as {pf_id} (was {old_pf_id})", pf_id
+        else:
+            return False, "Failed to create on PropertyFinder", None
+            
+    except Exception as e:
+        return False, str(e), None
+
+
+def start_loop_scheduler():
+    """Initialize and start the loop scheduler"""
+    try:
+        # Add a job that checks for pending loops every minute
+        loop_scheduler.add_job(
+            func=check_and_run_loops,
+            trigger=IntervalTrigger(minutes=1),
+            id='loop_checker',
+            name='Check and run pending loops',
+            replace_existing=True
+        )
+        
+        loop_scheduler.start()
+        print("[SCHEDULER] Loop scheduler started")
+        
+        # Shutdown scheduler when app exits
+        atexit.register(lambda: loop_scheduler.shutdown())
+        
+    except Exception as e:
+        print(f"[SCHEDULER] Failed to start scheduler: {e}")
+
+
+def check_and_run_loops():
+    """Check for loops that need to run"""
+    with app.app_context():
+        try:
+            now = datetime.utcnow()
+            
+            # Find active loops that are due
+            due_loops = LoopConfig.query.filter(
+                LoopConfig.is_active == True,
+                LoopConfig.is_paused == False,
+                db.or_(
+                    LoopConfig.next_run_at == None,
+                    LoopConfig.next_run_at <= now
+                )
+            ).all()
+            
+            for loop in due_loops:
+                print(f"[SCHEDULER] Running loop: {loop.name}")
+                execute_loop_job(loop.id)
+                
+        except Exception as e:
+            print(f"[SCHEDULER] Error checking loops: {e}")
+
+
+# Start the scheduler
+start_loop_scheduler()
 
 
 # ==================== GLOBAL ERROR HANDLER ====================
@@ -3397,6 +3692,426 @@ def api_upload_image():
         print(f"[ImageUpload] Error: {e}")
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
+# ==================== FOLDER API ENDPOINTS ====================
+
+@app.route('/api/folders', methods=['GET'])
+@login_required
+def api_get_folders():
+    """API: Get all folders"""
+    folders = ListingFolder.get_all_with_counts()
+    uncategorized_count = LocalListing.query.filter(LocalListing.folder_id.is_(None)).count()
+    return jsonify({
+        'folders': folders,
+        'uncategorized_count': uncategorized_count
+    })
+
+
+@app.route('/api/folders', methods=['POST'])
+@login_required
+def api_create_folder():
+    """API: Create a new folder"""
+    data = request.json
+    
+    if not data.get('name'):
+        return jsonify({'error': 'Folder name is required'}), 400
+    
+    folder = ListingFolder(
+        name=data['name'],
+        color=data.get('color', 'indigo'),
+        icon=data.get('icon', 'fa-folder'),
+        description=data.get('description'),
+        parent_id=data.get('parent_id')
+    )
+    db.session.add(folder)
+    db.session.commit()
+    
+    return jsonify({'folder': folder.to_dict(), 'message': 'Folder created successfully'})
+
+
+@app.route('/api/folders/<int:folder_id>', methods=['GET'])
+@login_required
+def api_get_folder(folder_id):
+    """API: Get a single folder"""
+    folder = ListingFolder.query.get_or_404(folder_id)
+    return jsonify({'folder': folder.to_dict()})
+
+
+@app.route('/api/folders/<int:folder_id>', methods=['PUT', 'PATCH'])
+@login_required
+def api_update_folder(folder_id):
+    """API: Update a folder"""
+    folder = ListingFolder.query.get_or_404(folder_id)
+    data = request.json
+    
+    if 'name' in data:
+        folder.name = data['name']
+    if 'color' in data:
+        folder.color = data['color']
+    if 'icon' in data:
+        folder.icon = data['icon']
+    if 'description' in data:
+        folder.description = data['description']
+    if 'parent_id' in data:
+        folder.parent_id = data['parent_id']
+    
+    db.session.commit()
+    return jsonify({'folder': folder.to_dict(), 'message': 'Folder updated successfully'})
+
+
+@app.route('/api/folders/<int:folder_id>', methods=['DELETE'])
+@login_required
+def api_delete_folder(folder_id):
+    """API: Delete a folder (moves listings to uncategorized)"""
+    folder = ListingFolder.query.get_or_404(folder_id)
+    
+    # Move all listings in this folder to uncategorized
+    LocalListing.query.filter_by(folder_id=folder_id).update({'folder_id': None})
+    
+    db.session.delete(folder)
+    db.session.commit()
+    
+    return jsonify({'message': 'Folder deleted successfully'})
+
+
+@app.route('/api/listings/move-to-folder', methods=['POST'])
+@login_required
+def api_move_listings_to_folder():
+    """API: Move listings to a folder"""
+    data = request.json
+    listing_ids = data.get('listing_ids', [])
+    folder_id = data.get('folder_id')  # None means uncategorized
+    
+    if not listing_ids:
+        return jsonify({'error': 'No listings specified'}), 400
+    
+    # Verify folder exists if specified
+    if folder_id is not None:
+        folder = ListingFolder.query.get(folder_id)
+        if not folder:
+            return jsonify({'error': 'Folder not found'}), 404
+    
+    # Update listings
+    updated = LocalListing.query.filter(LocalListing.id.in_(listing_ids)).update(
+        {'folder_id': folder_id},
+        synchronize_session=False
+    )
+    db.session.commit()
+    
+    return jsonify({
+        'message': f'Moved {updated} listings',
+        'updated_count': updated
+    })
+
+
+# ==================== LOOP MANAGEMENT ENDPOINTS ====================
+
+@app.route('/loops')
+@login_required
+def loops_page():
+    """Loop management page"""
+    loops = LoopConfig.query.order_by(LoopConfig.created_at.desc()).all()
+    listings = LocalListing.query.filter(LocalListing.folder_id != ListingFolder.query.filter_by(name='Duplicated').first().id if ListingFolder.query.filter_by(name='Duplicated').first() else True).order_by(LocalListing.reference).all()
+    return render_template('loops.html', loops=loops, listings=listings)
+
+
+@app.route('/api/loops', methods=['GET'])
+@login_required
+def api_get_loops():
+    """Get all loop configurations"""
+    loops = LoopConfig.query.order_by(LoopConfig.created_at.desc()).all()
+    return jsonify({
+        'success': True,
+        'loops': [loop.to_dict() for loop in loops]
+    })
+
+
+@app.route('/api/loops', methods=['POST'])
+@login_required
+def api_create_loop():
+    """Create a new loop configuration"""
+    data = request.json
+    
+    if not data.get('name'):
+        return jsonify({'error': 'Name is required'}), 400
+    
+    if not data.get('listing_ids') or len(data['listing_ids']) == 0:
+        return jsonify({'error': 'At least one listing is required'}), 400
+    
+    loop = LoopConfig(
+        name=data['name'],
+        loop_type=data.get('loop_type', 'duplicate'),
+        interval_hours=float(data.get('interval_hours', 1)),
+        keep_duplicates=data.get('keep_duplicates', True),
+        max_duplicates=int(data.get('max_duplicates', 0)),
+        is_active=data.get('is_active', False)
+    )
+    db.session.add(loop)
+    db.session.flush()  # Get the ID
+    
+    # Add listings to the loop
+    for idx, listing_id in enumerate(data['listing_ids']):
+        loop_listing = LoopListing(
+            loop_config_id=loop.id,
+            listing_id=int(listing_id),
+            order_index=idx
+        )
+        db.session.add(loop_listing)
+    
+    # Calculate next run time if active
+    if loop.is_active:
+        loop.next_run_at = datetime.utcnow()
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'loop': loop.to_dict()
+    })
+
+
+@app.route('/api/loops/<int:loop_id>', methods=['GET'])
+@login_required
+def api_get_loop(loop_id):
+    """Get a single loop configuration"""
+    loop = LoopConfig.query.get_or_404(loop_id)
+    
+    # Include listings with details
+    loop_data = loop.to_dict()
+    loop_data['listings'] = [ll.to_dict() for ll in loop.listings.order_by(LoopListing.order_index).all()]
+    
+    return jsonify({
+        'success': True,
+        'loop': loop_data
+    })
+
+
+@app.route('/api/loops/<int:loop_id>', methods=['PUT'])
+@login_required
+def api_update_loop(loop_id):
+    """Update a loop configuration"""
+    loop = LoopConfig.query.get_or_404(loop_id)
+    data = request.json
+    
+    if 'name' in data:
+        loop.name = data['name']
+    if 'loop_type' in data:
+        loop.loop_type = data['loop_type']
+    if 'interval_hours' in data:
+        loop.interval_hours = float(data['interval_hours'])
+    if 'keep_duplicates' in data:
+        loop.keep_duplicates = data['keep_duplicates']
+    if 'max_duplicates' in data:
+        loop.max_duplicates = int(data['max_duplicates'])
+    
+    # Update listings if provided
+    if 'listing_ids' in data:
+        # Remove old listings
+        LoopListing.query.filter_by(loop_config_id=loop.id).delete()
+        
+        # Add new listings
+        for idx, listing_id in enumerate(data['listing_ids']):
+            loop_listing = LoopListing(
+                loop_config_id=loop.id,
+                listing_id=int(listing_id),
+                order_index=idx
+            )
+            db.session.add(loop_listing)
+        
+        # Reset index
+        loop.current_index = 0
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'loop': loop.to_dict()
+    })
+
+
+@app.route('/api/loops/<int:loop_id>', methods=['DELETE'])
+@login_required
+def api_delete_loop(loop_id):
+    """Delete a loop configuration"""
+    loop = LoopConfig.query.get_or_404(loop_id)
+    
+    # Delete associated records
+    LoopListing.query.filter_by(loop_config_id=loop.id).delete()
+    LoopExecutionLog.query.filter_by(loop_config_id=loop.id).delete()
+    
+    db.session.delete(loop)
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'message': 'Loop deleted'
+    })
+
+
+@app.route('/api/loops/<int:loop_id>/start', methods=['POST'])
+@login_required
+def api_start_loop(loop_id):
+    """Start a loop"""
+    loop = LoopConfig.query.get_or_404(loop_id)
+    
+    loop.is_active = True
+    loop.is_paused = False
+    loop.consecutive_failures = 0
+    loop.next_run_at = datetime.utcnow()  # Run immediately
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'message': f'Loop "{loop.name}" started',
+        'loop': loop.to_dict()
+    })
+
+
+@app.route('/api/loops/<int:loop_id>/stop', methods=['POST'])
+@login_required
+def api_stop_loop(loop_id):
+    """Stop a loop"""
+    loop = LoopConfig.query.get_or_404(loop_id)
+    
+    loop.is_active = False
+    loop.is_paused = False
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'message': f'Loop "{loop.name}" stopped',
+        'loop': loop.to_dict()
+    })
+
+
+@app.route('/api/loops/<int:loop_id>/pause', methods=['POST'])
+@login_required
+def api_pause_loop(loop_id):
+    """Pause a loop"""
+    loop = LoopConfig.query.get_or_404(loop_id)
+    
+    loop.is_paused = True
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'message': f'Loop "{loop.name}" paused',
+        'loop': loop.to_dict()
+    })
+
+
+@app.route('/api/loops/<int:loop_id>/resume', methods=['POST'])
+@login_required
+def api_resume_loop(loop_id):
+    """Resume a paused loop"""
+    loop = LoopConfig.query.get_or_404(loop_id)
+    
+    loop.is_paused = False
+    loop.next_run_at = datetime.utcnow()  # Resume immediately
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'message': f'Loop "{loop.name}" resumed',
+        'loop': loop.to_dict()
+    })
+
+
+@app.route('/api/loops/<int:loop_id>/run-now', methods=['POST'])
+@login_required
+def api_run_loop_now(loop_id):
+    """Manually trigger a loop execution"""
+    loop = LoopConfig.query.get_or_404(loop_id)
+    
+    if not loop.is_active:
+        loop.is_active = True
+        loop.is_paused = False
+    
+    # Execute immediately
+    execute_loop_job(loop.id)
+    
+    return jsonify({
+        'success': True,
+        'message': f'Loop "{loop.name}" executed',
+        'loop': loop.to_dict()
+    })
+
+
+@app.route('/api/loops/<int:loop_id>/logs', methods=['GET'])
+@login_required
+def api_get_loop_logs(loop_id):
+    """Get execution logs for a loop"""
+    loop = LoopConfig.query.get_or_404(loop_id)
+    
+    limit = request.args.get('limit', 50, type=int)
+    logs = LoopExecutionLog.query.filter_by(loop_config_id=loop_id).order_by(
+        LoopExecutionLog.executed_at.desc()
+    ).limit(limit).all()
+    
+    return jsonify({
+        'success': True,
+        'logs': [log.to_dict() for log in logs]
+    })
+
+
+@app.route('/api/loops/<int:loop_id>/duplicates', methods=['GET'])
+@login_required
+def api_get_loop_duplicates(loop_id):
+    """Get duplicates created by a loop"""
+    loop = LoopConfig.query.get_or_404(loop_id)
+    
+    duplicates = DuplicatedListing.query.filter_by(loop_config_id=loop_id).order_by(
+        DuplicatedListing.created_at.desc()
+    ).all()
+    
+    return jsonify({
+        'success': True,
+        'duplicates': [dup.to_dict() for dup in duplicates]
+    })
+
+
+@app.route('/api/loops/<int:loop_id>/cleanup', methods=['POST'])
+@login_required
+def api_cleanup_loop_duplicates(loop_id):
+    """Delete all duplicates created by a loop from PropertyFinder"""
+    loop = LoopConfig.query.get_or_404(loop_id)
+    
+    # Stop the loop first
+    loop.is_active = False
+    loop.is_paused = False
+    
+    client = PropertyFinderClient()
+    deleted_count = 0
+    errors = []
+    
+    duplicates = DuplicatedListing.query.filter_by(
+        loop_config_id=loop_id,
+        status='published'
+    ).all()
+    
+    for dup in duplicates:
+        try:
+            if dup.pf_listing_id:
+                client.delete_listing(dup.pf_listing_id)
+            dup.status = 'deleted'
+            dup.deleted_at = datetime.utcnow()
+            deleted_count += 1
+        except Exception as e:
+            errors.append(f"{dup.pf_listing_id}: {str(e)}")
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'message': f'Deleted {deleted_count} duplicates from PropertyFinder',
+        'deleted_count': deleted_count,
+        'errors': errors if errors else None
+    })
 
 
 # ==================== LISTING IMAGES ENDPOINTS ====================

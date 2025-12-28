@@ -1,0 +1,664 @@
+{% extends "base.html" %}
+
+{% block title %}Loops - L-Manager{% endblock %}
+{% block page_title %}Listing Loops{% endblock %}
+
+{% block head_scripts %}
+<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div x-data="loopsManager()" x-init="init()" class="space-y-6">
+    
+    <!-- Header Actions -->
+    <div class="flex justify-between items-center">
+        <p class="text-gray-600">
+            Automate listing refresh by duplicating or republishing listings on a schedule.
+        </p>
+        <button @click="showCreateModal = true" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center">
+            <i class="fas fa-plus mr-2"></i>
+            Create Loop
+        </button>
+    </div>
+    
+    <!-- Active Loops Summary -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="bg-white rounded-lg shadow p-4">
+            <div class="flex items-center">
+                <div class="p-3 bg-green-100 rounded-full">
+                    <i class="fas fa-play text-green-600"></i>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm text-gray-500">Active Loops</p>
+                    <p class="text-2xl font-bold text-gray-800" x-text="loops.filter(l => l.is_active && !l.is_paused).length">0</p>
+                </div>
+            </div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-4">
+            <div class="flex items-center">
+                <div class="p-3 bg-yellow-100 rounded-full">
+                    <i class="fas fa-pause text-yellow-600"></i>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm text-gray-500">Paused</p>
+                    <p class="text-2xl font-bold text-gray-800" x-text="loops.filter(l => l.is_paused).length">0</p>
+                </div>
+            </div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-4">
+            <div class="flex items-center">
+                <div class="p-3 bg-gray-100 rounded-full">
+                    <i class="fas fa-stop text-gray-600"></i>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm text-gray-500">Stopped</p>
+                    <p class="text-2xl font-bold text-gray-800" x-text="loops.filter(l => !l.is_active).length">0</p>
+                </div>
+            </div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-4">
+            <div class="flex items-center">
+                <div class="p-3 bg-purple-100 rounded-full">
+                    <i class="fas fa-copy text-purple-600"></i>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm text-gray-500">Total Duplicates</p>
+                    <p class="text-2xl font-bold text-gray-800" x-text="loops.reduce((sum, l) => sum + (l.duplicate_count || 0), 0)">0</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Loops Table -->
+    <div class="bg-white rounded-lg shadow overflow-hidden">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Loop Name</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Interval</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Listings</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Next Run</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="bg-white divide-y divide-gray-200">
+                <template x-if="loops.length === 0">
+                    <tr>
+                        <td colspan="7" class="px-6 py-12 text-center text-gray-500">
+                            <i class="fas fa-sync-alt text-4xl mb-4 text-gray-300"></i>
+                            <p>No loops created yet</p>
+                            <button @click="showCreateModal = true" class="mt-2 text-indigo-600 hover:text-indigo-800">
+                                Create your first loop
+                            </button>
+                        </td>
+                    </tr>
+                </template>
+                <template x-for="loop in loops" :key="loop.id">
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="flex items-center">
+                                <i class="fas fa-sync-alt mr-3" :class="loop.is_active && !loop.is_paused ? 'text-green-500 animate-spin' : 'text-gray-400'"></i>
+                                <span class="font-medium text-gray-900" x-text="loop.name"></span>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="px-2 py-1 text-xs rounded-full" 
+                                  :class="loop.loop_type === 'duplicate' ? 'bg-blue-100 text-blue-800' : 'bg-orange-100 text-orange-800'"
+                                  x-text="loop.loop_type === 'duplicate' ? 'Duplicate' : 'Delete & Republish'">
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            Every <span x-text="loop.interval_hours"></span> hour(s)
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            <span x-text="loop.listing_count"></span> listings
+                            <template x-if="loop.duplicate_count > 0">
+                                <span class="text-purple-600 ml-1">(<span x-text="loop.duplicate_count"></span> dups)</span>
+                            </template>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <template x-if="loop.is_active && !loop.is_paused">
+                                <span class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">
+                                    <i class="fas fa-circle text-xs mr-1"></i> Running
+                                </span>
+                            </template>
+                            <template x-if="loop.is_paused">
+                                <span class="px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-800">
+                                    <i class="fas fa-pause text-xs mr-1"></i> Paused
+                                </span>
+                            </template>
+                            <template x-if="!loop.is_active && !loop.is_paused">
+                                <span class="px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-800">
+                                    <i class="fas fa-stop text-xs mr-1"></i> Stopped
+                                </span>
+                            </template>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            <span x-text="loop.next_run_at ? new Date(loop.next_run_at).toLocaleString() : '-'"></span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm">
+                            <div class="flex items-center space-x-2">
+                                <!-- Play/Pause/Stop buttons -->
+                                <template x-if="!loop.is_active">
+                                    <button @click="startLoop(loop.id)" class="text-green-600 hover:text-green-800" title="Start">
+                                        <i class="fas fa-play"></i>
+                                    </button>
+                                </template>
+                                <template x-if="loop.is_active && !loop.is_paused">
+                                    <button @click="pauseLoop(loop.id)" class="text-yellow-600 hover:text-yellow-800" title="Pause">
+                                        <i class="fas fa-pause"></i>
+                                    </button>
+                                </template>
+                                <template x-if="loop.is_paused">
+                                    <button @click="resumeLoop(loop.id)" class="text-green-600 hover:text-green-800" title="Resume">
+                                        <i class="fas fa-play"></i>
+                                    </button>
+                                </template>
+                                <template x-if="loop.is_active || loop.is_paused">
+                                    <button @click="stopLoop(loop.id)" class="text-red-600 hover:text-red-800" title="Stop">
+                                        <i class="fas fa-stop"></i>
+                                    </button>
+                                </template>
+                                
+                                <!-- Run Now -->
+                                <button @click="runNow(loop.id)" class="text-indigo-600 hover:text-indigo-800" title="Run Now">
+                                    <i class="fas fa-bolt"></i>
+                                </button>
+                                
+                                <!-- View Details -->
+                                <button @click="viewLoop(loop)" class="text-gray-600 hover:text-gray-800" title="View Details">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                                
+                                <!-- Edit -->
+                                <button @click="editLoop(loop)" class="text-blue-600 hover:text-blue-800" title="Edit">
+                                    <i class="fas fa-edit"></i>
+                                </button>
+                                
+                                <!-- Delete -->
+                                <button @click="deleteLoop(loop.id)" class="text-red-600 hover:text-red-800" title="Delete">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                </template>
+            </tbody>
+        </table>
+    </div>
+    
+    <!-- Create/Edit Loop Modal -->
+    <div x-show="showCreateModal || showEditModal" 
+         x-cloak
+         class="fixed inset-0 z-50 overflow-y-auto"
+         @keydown.escape.window="showCreateModal = false; showEditModal = false">
+        <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20">
+            <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" @click="showCreateModal = false; showEditModal = false"></div>
+            
+            <div class="relative bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+                <div class="px-6 py-4 border-b flex justify-between items-center">
+                    <h3 class="text-lg font-semibold" x-text="showEditModal ? 'Edit Loop' : 'Create New Loop'"></h3>
+                    <button @click="showCreateModal = false; showEditModal = false" class="text-gray-400 hover:text-gray-600">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                
+                <form @submit.prevent="saveLoop" class="p-6 space-y-4">
+                    <!-- Loop Name -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Loop Name</label>
+                        <input type="text" x-model="formData.name" required
+                               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                               placeholder="e.g., Morning Refresh Loop">
+                    </div>
+                    
+                    <!-- Loop Type -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Loop Type</label>
+                        <div class="grid grid-cols-2 gap-4">
+                            <label class="flex items-center p-4 border rounded-lg cursor-pointer hover:bg-gray-50"
+                                   :class="formData.loop_type === 'duplicate' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-300'">
+                                <input type="radio" x-model="formData.loop_type" value="duplicate" class="sr-only">
+                                <div>
+                                    <i class="fas fa-copy text-2xl mb-2" :class="formData.loop_type === 'duplicate' ? 'text-indigo-600' : 'text-gray-400'"></i>
+                                    <p class="font-medium">Duplicate & Publish</p>
+                                    <p class="text-xs text-gray-500">Creates a copy, original stays</p>
+                                </div>
+                            </label>
+                            <label class="flex items-center p-4 border rounded-lg cursor-pointer hover:bg-gray-50"
+                                   :class="formData.loop_type === 'delete_republish' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-300'">
+                                <input type="radio" x-model="formData.loop_type" value="delete_republish" class="sr-only">
+                                <div>
+                                    <i class="fas fa-redo text-2xl mb-2" :class="formData.loop_type === 'delete_republish' ? 'text-indigo-600' : 'text-gray-400'"></i>
+                                    <p class="font-medium">Delete & Republish</p>
+                                    <p class="text-xs text-gray-500">Removes from PF, creates fresh</p>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <!-- Interval -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Run Interval</label>
+                        <div class="flex items-center space-x-2">
+                            <span class="text-gray-500">Every</span>
+                            <input type="number" x-model="formData.interval_hours" min="0.5" step="0.5" required
+                                   class="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                            <span class="text-gray-500">hour(s)</span>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-1">For multi-listing loops, this is the interval between each listing</p>
+                    </div>
+                    
+                    <!-- Duplicate Options (only for duplicate type) -->
+                    <template x-if="formData.loop_type === 'duplicate'">
+                        <div class="space-y-4 p-4 bg-gray-50 rounded-lg">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="font-medium text-gray-700">Keep Duplicates</label>
+                                    <p class="text-xs text-gray-500">Save duplicates to "Duplicated" folder</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" x-model="formData.keep_duplicates" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                                </label>
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Max Duplicates per Listing</label>
+                                <input type="number" x-model="formData.max_duplicates" min="0"
+                                       class="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                                <p class="text-xs text-gray-500 mt-1">0 = unlimited. Old duplicates are deleted when limit is reached.</p>
+                            </div>
+                        </div>
+                    </template>
+                    
+                    <!-- Select Listings -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Select Listings</label>
+                        <div class="border border-gray-300 rounded-lg max-h-60 overflow-y-auto">
+                            {% for listing in listings %}
+                            <label class="flex items-center px-4 py-2 hover:bg-gray-50 cursor-pointer border-b last:border-b-0">
+                                <input type="checkbox" 
+                                       :checked="formData.listing_ids.includes({{ listing.id }})"
+                                       @change="toggleListing({{ listing.id }})"
+                                       class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                                <span class="ml-3 text-sm">
+                                    <span class="font-medium">{{ listing.reference }}</span>
+                                    <span class="text-gray-500">- {{ listing.title_en or 'Untitled' }}</span>
+                                </span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                        <p class="text-xs text-gray-500 mt-1">
+                            Selected: <span x-text="formData.listing_ids.length"></span> listings
+                        </p>
+                    </div>
+                    
+                    <!-- Start Immediately -->
+                    <div class="flex items-center">
+                        <input type="checkbox" x-model="formData.is_active" id="start_immediately"
+                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                        <label for="start_immediately" class="ml-2 text-sm text-gray-700">Start loop immediately after creation</label>
+                    </div>
+                    
+                    <!-- Actions -->
+                    <div class="flex justify-end space-x-3 pt-4 border-t">
+                        <button type="button" @click="showCreateModal = false; showEditModal = false"
+                                class="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">
+                            Cancel
+                        </button>
+                        <button type="submit"
+                                class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
+                            <span x-text="showEditModal ? 'Save Changes' : 'Create Loop'"></span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Loop Details Modal -->
+    <div x-show="showDetailsModal" 
+         x-cloak
+         class="fixed inset-0 z-50 overflow-y-auto"
+         @keydown.escape.window="showDetailsModal = false">
+        <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20">
+            <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" @click="showDetailsModal = false"></div>
+            
+            <div class="relative bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+                <div class="px-6 py-4 border-b flex justify-between items-center">
+                    <h3 class="text-lg font-semibold">Loop Details: <span x-text="selectedLoop?.name"></span></h3>
+                    <button @click="showDetailsModal = false" class="text-gray-400 hover:text-gray-600">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                
+                <div class="p-6">
+                    <!-- Tabs -->
+                    <div class="border-b mb-4">
+                        <nav class="-mb-px flex space-x-8">
+                            <button @click="detailsTab = 'listings'" 
+                                    :class="detailsTab === 'listings' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'"
+                                    class="whitespace-nowrap py-2 px-1 border-b-2 font-medium text-sm">
+                                Listings
+                            </button>
+                            <button @click="detailsTab = 'logs'"
+                                    :class="detailsTab === 'logs' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'"
+                                    class="whitespace-nowrap py-2 px-1 border-b-2 font-medium text-sm">
+                                Execution Logs
+                            </button>
+                            <button @click="detailsTab = 'duplicates'"
+                                    :class="detailsTab === 'duplicates' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'"
+                                    class="whitespace-nowrap py-2 px-1 border-b-2 font-medium text-sm">
+                                Duplicates
+                            </button>
+                        </nav>
+                    </div>
+                    
+                    <!-- Listings Tab -->
+                    <div x-show="detailsTab === 'listings'" class="space-y-2">
+                        <template x-for="ll in loopListings" :key="ll.id">
+                            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                <div>
+                                    <span class="font-medium" x-text="ll.listing?.reference"></span>
+                                    <span class="text-gray-500" x-text="ll.listing?.title"></span>
+                                </div>
+                                <div class="text-sm text-gray-500">
+                                    Processed <span x-text="ll.times_processed"></span> times
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                    
+                    <!-- Logs Tab -->
+                    <div x-show="detailsTab === 'logs'" class="space-y-2">
+                        <template x-if="loopLogs.length === 0">
+                            <p class="text-gray-500 text-center py-4">No execution logs yet</p>
+                        </template>
+                        <template x-for="log in loopLogs" :key="log.id">
+                            <div class="flex items-center justify-between p-3 rounded-lg"
+                                 :class="log.success ? 'bg-green-50' : 'bg-red-50'">
+                                <div class="flex items-center">
+                                    <i class="fas mr-3" :class="log.success ? 'fa-check-circle text-green-500' : 'fa-times-circle text-red-500'"></i>
+                                    <div>
+                                        <span class="font-medium" x-text="log.action"></span>
+                                        <span class="text-sm text-gray-500" x-text="log.message"></span>
+                                    </div>
+                                </div>
+                                <div class="text-sm text-gray-500">
+                                    <span x-text="new Date(log.executed_at).toLocaleString()"></span>
+                                    <span class="ml-2" x-text="log.duration_ms + 'ms'"></span>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                    
+                    <!-- Duplicates Tab -->
+                    <div x-show="detailsTab === 'duplicates'" class="space-y-2">
+                        <div class="flex justify-end mb-2" x-show="loopDuplicates.length > 0">
+                            <button @click="cleanupDuplicates()" class="text-red-600 hover:text-red-800 text-sm">
+                                <i class="fas fa-trash mr-1"></i> Delete All from PF
+                            </button>
+                        </div>
+                        <template x-if="loopDuplicates.length === 0">
+                            <p class="text-gray-500 text-center py-4">No duplicates created</p>
+                        </template>
+                        <template x-for="dup in loopDuplicates" :key="dup.id">
+                            <div class="flex items-center justify-between p-3 bg-purple-50 rounded-lg">
+                                <div>
+                                    <span class="font-medium text-purple-800" x-text="dup.pf_listing_id"></span>
+                                    <span class="text-sm text-gray-500">from</span>
+                                    <span class="text-gray-600" x-text="dup.original?.reference"></span>
+                                </div>
+                                <div class="flex items-center space-x-3">
+                                    <span class="px-2 py-1 text-xs rounded-full"
+                                          :class="dup.status === 'published' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'"
+                                          x-text="dup.status">
+                                    </span>
+                                    <span class="text-sm text-gray-500" x-text="new Date(dup.created_at).toLocaleString()"></span>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Toast Notifications -->
+    <div x-show="toast.show" 
+         x-transition
+         class="fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg"
+         :class="toast.type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'">
+        <span x-text="toast.message"></span>
+    </div>
+</div>
+
+<script>
+function loopsManager() {
+    return {
+        loops: [],
+        showCreateModal: false,
+        showEditModal: false,
+        showDetailsModal: false,
+        selectedLoop: null,
+        detailsTab: 'listings',
+        loopListings: [],
+        loopLogs: [],
+        loopDuplicates: [],
+        formData: {
+            id: null,
+            name: '',
+            loop_type: 'duplicate',
+            interval_hours: 1,
+            keep_duplicates: true,
+            max_duplicates: 0,
+            listing_ids: [],
+            is_active: false
+        },
+        toast: {
+            show: false,
+            message: '',
+            type: 'success'
+        },
+        
+        init() {
+            this.loadLoops();
+            // Refresh every 30 seconds
+            setInterval(() => this.loadLoops(), 30000);
+        },
+        
+        async loadLoops() {
+            try {
+                const resp = await fetch('/api/loops');
+                const data = await resp.json();
+                if (data.success) {
+                    this.loops = data.loops;
+                }
+            } catch (e) {
+                console.error('Failed to load loops:', e);
+            }
+        },
+        
+        resetForm() {
+            this.formData = {
+                id: null,
+                name: '',
+                loop_type: 'duplicate',
+                interval_hours: 1,
+                keep_duplicates: true,
+                max_duplicates: 0,
+                listing_ids: [],
+                is_active: false
+            };
+        },
+        
+        toggleListing(id) {
+            const idx = this.formData.listing_ids.indexOf(id);
+            if (idx === -1) {
+                this.formData.listing_ids.push(id);
+            } else {
+                this.formData.listing_ids.splice(idx, 1);
+            }
+        },
+        
+        async saveLoop() {
+            try {
+                const url = this.showEditModal ? `/api/loops/${this.formData.id}` : '/api/loops';
+                const method = this.showEditModal ? 'PUT' : 'POST';
+                
+                const resp = await fetch(url, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.formData)
+                });
+                
+                const data = await resp.json();
+                
+                if (data.success) {
+                    this.showToast(this.showEditModal ? 'Loop updated' : 'Loop created', 'success');
+                    this.showCreateModal = false;
+                    this.showEditModal = false;
+                    this.resetForm();
+                    this.loadLoops();
+                } else {
+                    this.showToast(data.error || 'Failed to save loop', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error saving loop', 'error');
+            }
+        },
+        
+        editLoop(loop) {
+            this.formData = {
+                id: loop.id,
+                name: loop.name,
+                loop_type: loop.loop_type,
+                interval_hours: loop.interval_hours,
+                keep_duplicates: loop.keep_duplicates,
+                max_duplicates: loop.max_duplicates,
+                listing_ids: [], // Will be populated when we load full details
+                is_active: loop.is_active
+            };
+            
+            // Load listings for this loop
+            fetch(`/api/loops/${loop.id}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success && data.loop.listings) {
+                        this.formData.listing_ids = data.loop.listings.map(l => l.listing_id);
+                    }
+                });
+            
+            this.showEditModal = true;
+        },
+        
+        async viewLoop(loop) {
+            this.selectedLoop = loop;
+            this.detailsTab = 'listings';
+            
+            // Load details
+            try {
+                const [loopResp, logsResp, dupsResp] = await Promise.all([
+                    fetch(`/api/loops/${loop.id}`),
+                    fetch(`/api/loops/${loop.id}/logs`),
+                    fetch(`/api/loops/${loop.id}/duplicates`)
+                ]);
+                
+                const loopData = await loopResp.json();
+                const logsData = await logsResp.json();
+                const dupsData = await dupsResp.json();
+                
+                this.loopListings = loopData.loop?.listings || [];
+                this.loopLogs = logsData.logs || [];
+                this.loopDuplicates = dupsData.duplicates || [];
+            } catch (e) {
+                console.error('Failed to load loop details:', e);
+            }
+            
+            this.showDetailsModal = true;
+        },
+        
+        async deleteLoop(id) {
+            if (!confirm('Are you sure you want to delete this loop?')) return;
+            
+            try {
+                const resp = await fetch(`/api/loops/${id}`, { method: 'DELETE' });
+                const data = await resp.json();
+                
+                if (data.success) {
+                    this.showToast('Loop deleted', 'success');
+                    this.loadLoops();
+                } else {
+                    this.showToast(data.error || 'Failed to delete', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error deleting loop', 'error');
+            }
+        },
+        
+        async startLoop(id) {
+            await this.loopAction(id, 'start', 'Loop started');
+        },
+        
+        async stopLoop(id) {
+            await this.loopAction(id, 'stop', 'Loop stopped');
+        },
+        
+        async pauseLoop(id) {
+            await this.loopAction(id, 'pause', 'Loop paused');
+        },
+        
+        async resumeLoop(id) {
+            await this.loopAction(id, 'resume', 'Loop resumed');
+        },
+        
+        async runNow(id) {
+            await this.loopAction(id, 'run-now', 'Loop executed');
+        },
+        
+        async loopAction(id, action, successMessage) {
+            try {
+                const resp = await fetch(`/api/loops/${id}/${action}`, { method: 'POST' });
+                const data = await resp.json();
+                
+                if (data.success) {
+                    this.showToast(successMessage, 'success');
+                    this.loadLoops();
+                } else {
+                    this.showToast(data.error || 'Action failed', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error performing action', 'error');
+            }
+        },
+        
+        async cleanupDuplicates() {
+            if (!confirm('Delete all duplicates from PropertyFinder?')) return;
+            
+            try {
+                const resp = await fetch(`/api/loops/${this.selectedLoop.id}/cleanup`, { method: 'POST' });
+                const data = await resp.json();
+                
+                if (data.success) {
+                    this.showToast(data.message, 'success');
+                    this.viewLoop(this.selectedLoop); // Refresh
+                    this.loadLoops();
+                } else {
+                    this.showToast(data.error || 'Cleanup failed', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error during cleanup', 'error');
+            }
+        },
+        
+        showToast(message, type = 'success') {
+            this.toast = { show: true, message, type };
+            setTimeout(() => { this.toast.show = false; }, 3000);
+        }
+    };
+}
+</script>
+{% endblock %}

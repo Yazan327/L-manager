@@ -1033,3 +1033,192 @@ class AppSettings(db.Model):
         for key, default in cls.DEFAULTS.items():
             if not cls.query.filter_by(key=key).first():
                 cls.set(key, default)
+
+
+# ==================== LISTING LOOP SYSTEM ====================
+
+class LoopConfig(db.Model):
+    """Configuration for a listing loop (auto-duplicate/republish)"""
+    __tablename__ = 'loop_configs'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    
+    # Loop type: 'duplicate' = create copy & publish, 'delete_republish' = delete from PF & republish
+    loop_type = db.Column(db.String(20), default='duplicate')
+    
+    # Timing
+    interval_hours = db.Column(db.Float, default=1.0)  # Hours between each action
+    
+    # Duplicate handling
+    keep_duplicates = db.Column(db.Boolean, default=True)  # Keep in "Duplicated" folder
+    max_duplicates = db.Column(db.Integer, default=0)  # 0 = unlimited
+    
+    # Status
+    is_active = db.Column(db.Boolean, default=False)
+    is_paused = db.Column(db.Boolean, default=False)
+    
+    # Execution tracking
+    current_index = db.Column(db.Integer, default=0)  # Current position in listing sequence
+    consecutive_failures = db.Column(db.Integer, default=0)  # For auto-stop logic
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_run_at = db.Column(db.DateTime, nullable=True)
+    next_run_at = db.Column(db.DateTime, nullable=True)
+    
+    # Relationships
+    listings = db.relationship('LoopListing', backref='loop_config', lazy='dynamic', cascade='all, delete-orphan')
+    duplicates = db.relationship('DuplicatedListing', backref='loop_config', lazy='dynamic')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'loop_type': self.loop_type,
+            'interval_hours': self.interval_hours,
+            'keep_duplicates': self.keep_duplicates,
+            'max_duplicates': self.max_duplicates,
+            'is_active': self.is_active,
+            'is_paused': self.is_paused,
+            'current_index': self.current_index,
+            'consecutive_failures': self.consecutive_failures,
+            'listing_count': self.listings.count(),
+            'duplicate_count': self.duplicates.count(),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'last_run_at': self.last_run_at.isoformat() if self.last_run_at else None,
+            'next_run_at': self.next_run_at.isoformat() if self.next_run_at else None,
+        }
+    
+    def get_next_listing(self):
+        """Get the next listing in the sequence"""
+        listings = self.listings.order_by(LoopListing.order_index).all()
+        if not listings:
+            return None
+        
+        # Wrap around if at end
+        index = self.current_index % len(listings)
+        return listings[index]
+    
+    def advance_index(self):
+        """Move to next listing in sequence"""
+        count = self.listings.count()
+        if count > 0:
+            self.current_index = (self.current_index + 1) % count
+        db.session.commit()
+
+
+class LoopListing(db.Model):
+    """A listing assigned to a loop"""
+    __tablename__ = 'loop_listings'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    loop_config_id = db.Column(db.Integer, db.ForeignKey('loop_configs.id'), nullable=False)
+    listing_id = db.Column(db.Integer, db.ForeignKey('listings.id'), nullable=False)
+    
+    # Order in the sequence (for multi-listing loops)
+    order_index = db.Column(db.Integer, default=0)
+    
+    # Tracking
+    last_processed_at = db.Column(db.DateTime, nullable=True)
+    times_processed = db.Column(db.Integer, default=0)
+    consecutive_failures = db.Column(db.Integer, default=0)
+    
+    # Relationship to the actual listing
+    listing = db.relationship('LocalListing', backref='loop_assignments')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'loop_config_id': self.loop_config_id,
+            'listing_id': self.listing_id,
+            'order_index': self.order_index,
+            'last_processed_at': self.last_processed_at.isoformat() if self.last_processed_at else None,
+            'times_processed': self.times_processed,
+            'listing': {
+                'id': self.listing.id,
+                'reference': self.listing.reference,
+                'title': self.listing.title_en,
+                'status': self.listing.status,
+            } if self.listing else None
+        }
+
+
+class DuplicatedListing(db.Model):
+    """Track duplicated listings created by loops"""
+    __tablename__ = 'duplicated_listings'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    
+    # Reference to original listing
+    original_listing_id = db.Column(db.Integer, db.ForeignKey('listings.id'), nullable=False)
+    
+    # The duplicate listing created (stored in our DB)
+    duplicate_listing_id = db.Column(db.Integer, db.ForeignKey('listings.id'), nullable=True)
+    
+    # PropertyFinder listing ID for the duplicate
+    pf_listing_id = db.Column(db.String(100), nullable=True)
+    
+    # Which loop created this
+    loop_config_id = db.Column(db.Integer, db.ForeignKey('loop_configs.id'), nullable=True)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    published_at = db.Column(db.DateTime, nullable=True)
+    deleted_at = db.Column(db.DateTime, nullable=True)  # When deleted from PF
+    
+    # Status
+    status = db.Column(db.String(20), default='created')  # created, published, deleted
+    
+    # Relationships
+    original_listing = db.relationship('LocalListing', foreign_keys=[original_listing_id], backref='duplicates_created')
+    duplicate_listing = db.relationship('LocalListing', foreign_keys=[duplicate_listing_id])
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'original_listing_id': self.original_listing_id,
+            'duplicate_listing_id': self.duplicate_listing_id,
+            'pf_listing_id': self.pf_listing_id,
+            'loop_config_id': self.loop_config_id,
+            'status': self.status,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'published_at': self.published_at.isoformat() if self.published_at else None,
+            'original': {
+                'reference': self.original_listing.reference,
+                'title': self.original_listing.title_en,
+            } if self.original_listing else None
+        }
+
+
+class LoopExecutionLog(db.Model):
+    """Log of loop executions for debugging and monitoring"""
+    __tablename__ = 'loop_execution_logs'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    loop_config_id = db.Column(db.Integer, db.ForeignKey('loop_configs.id'), nullable=False)
+    listing_id = db.Column(db.Integer, db.ForeignKey('listings.id'), nullable=True)
+    
+    # Execution details
+    action = db.Column(db.String(50))  # 'duplicate', 'delete_republish', 'cleanup', 'error'
+    success = db.Column(db.Boolean, default=False)
+    message = db.Column(db.Text, nullable=True)
+    pf_listing_id = db.Column(db.String(100), nullable=True)
+    
+    # Timestamps
+    executed_at = db.Column(db.DateTime, default=datetime.utcnow)
+    duration_ms = db.Column(db.Integer, nullable=True)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'loop_config_id': self.loop_config_id,
+            'listing_id': self.listing_id,
+            'action': self.action,
+            'success': self.success,
+            'message': self.message,
+            'pf_listing_id': self.pf_listing_id,
+            'executed_at': self.executed_at.isoformat() if self.executed_at else None,
+            'duration_ms': self.duration_ms
+        }
