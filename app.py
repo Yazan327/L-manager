@@ -72,8 +72,12 @@ DATABASE_PATH = ROOT_DIR / 'data' / 'listings.db'
 # Database Configuration - Use PostgreSQL in production if DATABASE_URL is set
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
+# Redis Configuration - Use Redis for caching in production
+REDIS_URL = os.environ.get('REDIS_URL')
+
 print(f"[STARTUP] Production mode: {IS_PRODUCTION}")
 print(f"[STARTUP] DATABASE_URL set: {bool(DATABASE_URL)}")
+print(f"[STARTUP] REDIS_URL set: {bool(REDIS_URL)}")
 
 # Ensure data directory exists (only for SQLite)
 if not DATABASE_URL:
@@ -87,6 +91,21 @@ if not DATABASE_URL:
 app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATIC_DIR))
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
+
+# Configure Flask-Caching with Redis (if available) or simple cache
+from flask_caching import Cache
+
+if REDIS_URL:
+    app.config['CACHE_TYPE'] = 'RedisCache'
+    app.config['CACHE_REDIS_URL'] = REDIS_URL
+    app.config['CACHE_DEFAULT_TIMEOUT'] = 300  # 5 minutes default
+    print(f"[STARTUP] Using Redis cache")
+else:
+    app.config['CACHE_TYPE'] = 'SimpleCache'
+    app.config['CACHE_DEFAULT_TIMEOUT'] = 300
+    print(f"[STARTUP] Using SimpleCache (in-memory)")
+
+cache = Cache(app)
 
 # Add a simple ping endpoint before any database setup
 @app.route('/ping')
@@ -1776,7 +1795,7 @@ def api_storage_info():
 @app.route('/api/storage/files', methods=['GET'])
 @permission_required('settings')
 def api_storage_files():
-    """API: Get all files in storage"""
+    """API: Get all files in storage with linked listing info"""
     def get_all_files(path):
         """Get all files recursively"""
         files = []
@@ -1801,6 +1820,31 @@ def api_storage_files():
     if UPLOAD_FOLDER.exists():
         all_files = get_all_files(str(UPLOAD_FOLDER))
     
+    # Build a map of image URLs to listings for quick lookup
+    listings = LocalListing.query.all()
+    image_to_listing = {}
+    
+    for listing in listings:
+        if listing.images:
+            for img_url in listing.get_images():
+                # Extract the relative path from URL
+                if '/uploads/' in img_url:
+                    rel_path = img_url.split('/uploads/')[-1]
+                    image_to_listing[rel_path] = {
+                        'id': listing.id,
+                        'reference': listing.reference,
+                        'title': listing.title_en or listing.reference
+                    }
+    
+    # Add linked listing info to files
+    for file in all_files:
+        file['linked_listing'] = None
+        # Check if this file is linked to a listing
+        if '/uploads/' in file['path']:
+            rel_path = file['path'].split('/uploads/')[-1]
+            if rel_path in image_to_listing:
+                file['linked_listing'] = image_to_listing[rel_path]
+    
     # Sort by size descending
     all_files.sort(key=lambda x: x['size'], reverse=True)
     
@@ -1821,26 +1865,35 @@ def storage_page():
 @app.route('/api/storage/delete', methods=['POST'])
 @permission_required('settings')
 def api_storage_delete_files():
-    """API: Delete specific files from storage"""
+    """API: Delete specific files from storage and update DB references"""
     data = request.get_json() or {}
     # Accept both 'files' and 'paths' for flexibility
     files_to_delete = data.get('files', []) or data.get('paths', [])
+    update_db = data.get('update_db', True)  # Whether to remove from listing images
     
     if not files_to_delete:
         return jsonify({'error': 'No files specified'}), 400
     
     deleted_files = []
     deleted_size = 0
+    updated_listings = []
     errors = []
     
     for file_path in files_to_delete:
         try:
-            # Sanitize path - prevent directory traversal
-            # file_path should be relative to UPLOAD_FOLDER like "listings/ref123/image.jpg"
-            safe_path = Path(file_path).name if '/' not in file_path else file_path
-            
-            # Build full path
-            full_path = UPLOAD_FOLDER / safe_path
+            # Handle both absolute paths and relative paths
+            if file_path.startswith('/'):
+                # Absolute path - extract relative part
+                if '/uploads/' in file_path:
+                    relative_path = file_path.split('/uploads/')[-1]
+                    full_path = UPLOAD_FOLDER / relative_path
+                else:
+                    full_path = Path(file_path)
+                    relative_path = file_path
+            else:
+                # Relative path
+                relative_path = file_path
+                full_path = UPLOAD_FOLDER / file_path
             
             # Ensure the path is within UPLOAD_FOLDER
             try:
@@ -1851,6 +1904,34 @@ def api_storage_delete_files():
             
             if full_path.exists() and full_path.is_file():
                 size = full_path.stat().st_size
+                
+                # Update database - remove this image from any listings
+                if update_db:
+                    listings = LocalListing.query.all()
+                    for listing in listings:
+                        if listing.images:
+                            images = listing.get_images()
+                            # Check if any image URL contains this path
+                            new_images = []
+                            found = False
+                            for img_url in images:
+                                if relative_path in img_url or file_path in img_url:
+                                    found = True
+                                else:
+                                    new_images.append(img_url)
+                            
+                            if found:
+                                # Update listing with remaining images
+                                listing.images = json.dumps(new_images) if new_images else None
+                                updated_listings.append({
+                                    'id': listing.id,
+                                    'reference': listing.reference
+                                })
+                    
+                    if updated_listings:
+                        db.session.commit()
+                
+                # Delete the file
                 full_path.unlink()
                 deleted_files.append(file_path)
                 deleted_size += size
@@ -1874,6 +1955,7 @@ def api_storage_delete_files():
         'deleted_size': size_str,
         'deleted_size_bytes': deleted_size,
         'deleted_files': deleted_files,
+        'updated_listings': updated_listings if updated_listings else None,
         'errors': errors if errors else None
     })
 

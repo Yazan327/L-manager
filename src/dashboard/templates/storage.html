@@ -152,13 +152,22 @@
             <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
                 <template x-for="file in paginatedFiles" :key="file.path">
                     <div class="relative group border rounded-lg overflow-hidden hover:shadow-lg transition-shadow"
-                         :class="selectedFiles.includes(file.path) ? 'ring-2 ring-indigo-500' : ''">
+                         :class="{'ring-2 ring-indigo-500': selectedFiles.includes(file.path), 'ring-2 ring-orange-400': file.linked_listing}">
                         <!-- Checkbox -->
                         <div class="absolute top-2 left-2 z-10">
                             <input type="checkbox" 
                                    :checked="selectedFiles.includes(file.path)"
                                    @change="toggleFileSelection(file.path)"
                                    class="h-4 w-4 text-indigo-600 border-gray-300 rounded">
+                        </div>
+                        
+                        <!-- Linked Listing Badge -->
+                        <div class="absolute top-2 right-2 z-10" x-show="file.linked_listing">
+                            <span class="px-2 py-0.5 text-xs bg-orange-500 text-white rounded-full" 
+                                  :title="'Linked to: ' + (file.linked_listing?.reference || '')">
+                                <i class="fas fa-link mr-1"></i>
+                                <span x-text="file.linked_listing?.reference"></span>
+                            </span>
                         </div>
                         
                         <!-- Image Preview or Icon -->
@@ -186,7 +195,7 @@
                             <button @click="previewFile(file)" class="p-2 bg-white rounded-full hover:bg-gray-100">
                                 <i class="fas fa-eye text-gray-700"></i>
                             </button>
-                            <button @click="deleteFile(file)" class="p-2 bg-white rounded-full hover:bg-gray-100">
+                            <button @click="confirmDeleteFile(file)" class="p-2 bg-white rounded-full hover:bg-gray-100">
                                 <i class="fas fa-trash text-red-600"></i>
                             </button>
                             <a :href="getFileUrl(file)" download class="p-2 bg-white rounded-full hover:bg-gray-100">
@@ -254,14 +263,104 @@
                     <span x-text="previewingFile?.size_mb + ' MB'"></span> • 
                     <span x-text="previewingFile?.path"></span>
                 </p>
+                <!-- Linked listing info -->
+                <div x-show="previewingFile?.linked_listing" class="mt-2 text-sm">
+                    <span class="text-orange-600">
+                        <i class="fas fa-link mr-1"></i>
+                        Linked to: <strong x-text="previewingFile?.linked_listing?.reference"></strong>
+                    </span>
+                </div>
                 <div class="mt-2 flex space-x-2">
                     <a :href="getFileUrl(previewingFile)" download class="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">
                         <i class="fas fa-download mr-1"></i> Download
                     </a>
-                    <button @click="deleteFile(previewingFile); showPreview = false;" class="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700">
+                    <button @click="showPreview = false; confirmDeleteFile(previewingFile);" class="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700">
                         <i class="fas fa-trash mr-1"></i> Delete
                     </button>
                 </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Delete Confirmation Modal -->
+    <div x-show="showDeleteModal" 
+         x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50"
+         @click.self="showDeleteModal = false"
+         @keydown.escape.window="showDeleteModal = false">
+        <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 overflow-hidden">
+            <div class="p-6">
+                <div class="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full mb-4">
+                    <i class="fas fa-exclamation-triangle text-red-600 text-xl"></i>
+                </div>
+                <h3 class="text-lg font-semibold text-center text-gray-900 mb-2">Delete File</h3>
+                <p class="text-sm text-gray-600 text-center mb-2" x-text="'Are you sure you want to delete: ' + (deleteTarget?.name || '')"></p>
+                
+                <!-- Warning for linked files -->
+                <div x-show="deleteTarget?.linked_listing" class="mt-4 p-3 bg-orange-50 border border-orange-200 rounded-lg">
+                    <div class="flex items-start">
+                        <i class="fas fa-link text-orange-500 mt-0.5 mr-2"></i>
+                        <div>
+                            <p class="text-sm font-medium text-orange-800">This file is linked to a listing!</p>
+                            <p class="text-sm text-orange-700">
+                                Listing: <strong x-text="deleteTarget?.linked_listing?.reference"></strong>
+                            </p>
+                            <p class="text-xs text-orange-600 mt-1">Deleting will also remove this image from the listing in the database.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="px-6 py-4 bg-gray-50 flex justify-end space-x-3">
+                <button @click="showDeleteModal = false" 
+                        class="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg">
+                    Cancel
+                </button>
+                <button @click="executeDelete()" 
+                        class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg">
+                    <i class="fas fa-trash mr-2"></i>Delete
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Bulk Delete Confirmation Modal -->
+    <div x-show="showBulkDeleteModal" 
+         x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50"
+         @click.self="showBulkDeleteModal = false"
+         @keydown.escape.window="showBulkDeleteModal = false">
+        <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 overflow-hidden">
+            <div class="p-6">
+                <div class="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full mb-4">
+                    <i class="fas fa-exclamation-triangle text-red-600 text-xl"></i>
+                </div>
+                <h3 class="text-lg font-semibold text-center text-gray-900 mb-2">Delete Multiple Files</h3>
+                <p class="text-sm text-gray-600 text-center mb-2">
+                    Are you sure you want to delete <strong x-text="selectedFiles.length"></strong> files?
+                </p>
+                
+                <!-- Warning for linked files -->
+                <div x-show="linkedFilesInSelection > 0" class="mt-4 p-3 bg-orange-50 border border-orange-200 rounded-lg">
+                    <div class="flex items-start">
+                        <i class="fas fa-link text-orange-500 mt-0.5 mr-2"></i>
+                        <div>
+                            <p class="text-sm font-medium text-orange-800">
+                                <span x-text="linkedFilesInSelection"></span> file(s) are linked to listings!
+                            </p>
+                            <p class="text-xs text-orange-600 mt-1">Deleting will also remove these images from their listings in the database.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="px-6 py-4 bg-gray-50 flex justify-end space-x-3">
+                <button @click="showBulkDeleteModal = false" 
+                        class="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg">
+                    Cancel
+                </button>
+                <button @click="executeBulkDelete()" 
+                        class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg">
+                    <i class="fas fa-trash mr-2"></i>Delete All
+                </button>
             </div>
         </div>
     </div>
@@ -290,10 +389,19 @@ function storageManager() {
         perPage: 24,
         showPreview: false,
         previewingFile: null,
+        showDeleteModal: false,
+        showBulkDeleteModal: false,
+        deleteTarget: null,
         toast: { show: false, message: '', type: 'success' },
         
         init() {
             this.loadStorage();
+        },
+        
+        get linkedFilesInSelection() {
+            return this.allFiles.filter(f => 
+                this.selectedFiles.includes(f.path) && f.linked_listing
+            ).length;
         },
         
         async loadStorage() {
@@ -402,20 +510,32 @@ function storageManager() {
             this.showPreview = true;
         },
         
-        async deleteFile(file) {
-            if (!confirm(`Delete ${file.name}?`)) return;
+        confirmDeleteFile(file) {
+            this.deleteTarget = file;
+            this.showDeleteModal = true;
+        },
+        
+        async executeDelete() {
+            const file = this.deleteTarget;
+            if (!file) return;
+            
+            this.showDeleteModal = false;
             
             try {
                 const resp = await fetch('/api/storage/delete', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ paths: [file.path] })
+                    body: JSON.stringify({ paths: [file.path], update_db: true })
                 });
                 const data = await resp.json();
                 
                 if (data.success) {
                     this.allFiles = this.allFiles.filter(f => f.path !== file.path);
-                    this.showToast(`Deleted ${file.name}`, 'success');
+                    let msg = `Deleted ${file.name}`;
+                    if (data.updated_listings && data.updated_listings.length > 0) {
+                        msg += ` (removed from ${data.updated_listings.length} listing(s))`;
+                    }
+                    this.showToast(msg, 'success');
                     this.loadStorage(); // Refresh stats
                 } else {
                     this.showToast(data.error || 'Failed to delete', 'error');
@@ -423,21 +543,37 @@ function storageManager() {
             } catch (e) {
                 this.showToast('Error deleting file', 'error');
             }
+            
+            this.deleteTarget = null;
         },
         
-        async deleteSelected() {
-            if (!confirm(`Delete ${this.selectedFiles.length} files?`)) return;
+        async deleteFile(file) {
+            // Legacy method - still used in preview modal
+            this.confirmDeleteFile(file);
+        },
+        
+        deleteSelected() {
+            if (this.selectedFiles.length === 0) return;
+            this.showBulkDeleteModal = true;
+        },
+        
+        async executeBulkDelete() {
+            this.showBulkDeleteModal = false;
             
             try {
                 const resp = await fetch('/api/storage/delete', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ paths: this.selectedFiles })
+                    body: JSON.stringify({ paths: this.selectedFiles, update_db: true })
                 });
                 const data = await resp.json();
                 
                 if (data.success) {
-                    this.showToast(`Deleted ${data.deleted_count} files`, 'success');
+                    let msg = `Deleted ${data.deleted_count} files (${data.deleted_size})`;
+                    if (data.updated_listings && data.updated_listings.length > 0) {
+                        msg += ` - Updated ${data.updated_listings.length} listing(s)`;
+                    }
+                    this.showToast(msg, 'success');
                     this.selectedFiles = [];
                     this.loadStorage();
                 } else {
