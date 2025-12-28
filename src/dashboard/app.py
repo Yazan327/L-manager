@@ -53,21 +53,32 @@ with app.app_context():
     try:
         inspector = inspect(db.engine)
         existing_tables = inspector.get_table_names()
+        print(f"[Migration] Existing tables: {existing_tables}")
         
         # Migration: Add folder_id column to listings table if it doesn't exist
         if 'listings' in existing_tables:
             columns = [col['name'] for col in inspector.get_columns('listings')]
+            print(f"[Migration] Listings columns: {columns}")
             
             if 'folder_id' not in columns:
+                print("[Migration] Adding folder_id column to listings table...")
                 with db.engine.connect() as conn:
-                    conn.execute(text('ALTER TABLE listings ADD COLUMN folder_id INTEGER'))
+                    # Use PostgreSQL-compatible syntax
+                    conn.execute(text('ALTER TABLE listings ADD COLUMN folder_id INTEGER NULL'))
                     conn.commit()
                 print("✓ Migration: Added folder_id column to listings table")
+            else:
+                print("[Migration] folder_id column already exists")
+        else:
+            print("[Migration] listings table does not exist yet, will be created")
     except Exception as e:
-        print(f"Migration note: {e}")
+        print(f"[Migration] Error during migration: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
     
     # Now create any new tables (including listing_folders)
     db.create_all()
+    print("[Migration] db.create_all() completed")
     
     # Create default admin user if no users exist
     if User.query.count() == 0:
