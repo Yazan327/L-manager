@@ -3094,6 +3094,130 @@ def serve_upload(filename):
     return send_from_directory(str(UPLOAD_FOLDER), filename)
 
 
+# ==================== IMAGE PROCESSING WITH SAVED SETTINGS ====================
+
+@app.route('/api/images/process-with-settings', methods=['POST'])
+@login_required
+def api_process_image_with_settings():
+    """Process an image using saved settings and save to disk"""
+    import base64
+    import uuid
+    
+    temp_logo_path = None
+    
+    try:
+        data = request.json
+        if not data or 'image' not in data:
+            return jsonify({'error': 'No image provided'}), 400
+        
+        listing_id = data.get('listing_id')
+        
+        # Parse base64 image
+        image_data_url = data['image']
+        if ',' in image_data_url:
+            header, encoded = image_data_url.split(',', 1)
+        else:
+            encoded = image_data_url
+        
+        try:
+            image_bytes = base64.b64decode(encoded)
+        except Exception as decode_err:
+            return jsonify({'error': f'Invalid image data: {decode_err}'}), 400
+        
+        # Load saved settings
+        settings = {
+            'ratio': AppSettings.get('image_default_ratio') or None,
+            'size': AppSettings.get('image_default_size') or 'full_hd',
+            'quality': int(AppSettings.get('image_quality') or 90),
+            'format': AppSettings.get('image_format') or 'JPEG',
+            'qr_enabled': AppSettings.get('image_qr_enabled') == 'true',
+            'qr_data': AppSettings.get('image_default_qr_data') or '',
+            'qr_position': AppSettings.get('image_qr_position') or 'bottom_right',
+            'qr_size': int(AppSettings.get('image_qr_size_percent') or 12),
+            'qr_color': AppSettings.get('image_qr_color') or '#000000',
+            'logo_enabled': AppSettings.get('image_logo_enabled') == 'true',
+            'logo_path': AppSettings.get('image_default_logo'),
+            'logo_position': AppSettings.get('image_logo_position') or 'bottom_left',
+            'logo_size': int(AppSettings.get('image_logo_size') or 10),
+            'logo_opacity': float(AppSettings.get('image_logo_opacity') or 0.9),
+        }
+        
+        print(f"[ProcessWithSettings] Using settings: ratio={settings['ratio']}, qr={settings['qr_enabled']}, logo={settings['logo_enabled']}")
+        
+        # Prepare QR data
+        qr_data = settings['qr_data'] if settings['qr_enabled'] else None
+        
+        # Prepare logo
+        logo_source = None
+        if settings['logo_enabled'] and settings['logo_path']:
+            potential_path = str(ROOT_DIR / settings['logo_path'])
+            if Path(potential_path).exists():
+                logo_source = potential_path
+        
+        # Create processor and process image
+        processor = ImageProcessor()
+        
+        processed_bytes, metadata = processor.process_image(
+            image_source=image_bytes,
+            ratio=settings['ratio'],
+            size=settings['size'],
+            qr_data=qr_data,
+            qr_position=settings['qr_position'].replace('-', '_'),
+            qr_size_percent=settings['qr_size'],
+            qr_color=settings['qr_color'],
+            logo_source=logo_source,
+            logo_position=settings['logo_position'].replace('-', '_'),
+            logo_size_percent=settings['logo_size'],
+            logo_opacity=settings['logo_opacity'],
+            output_format=settings['format'],
+            quality=settings['quality']
+        )
+        
+        # Determine file extension
+        ext = settings['format'].lower()
+        if ext == 'jpeg':
+            ext = 'jpg'
+        
+        # Save processed image to disk
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        unique_id = str(uuid.uuid4())[:8]
+        filename = f'processed_{timestamp}_{unique_id}.{ext}'
+        
+        if listing_id:
+            save_dir = LISTING_IMAGES_FOLDER / str(listing_id)
+            relative_path = f'listings/{listing_id}/{filename}'
+        else:
+            save_dir = UPLOAD_FOLDER / 'processed'
+            relative_path = f'processed/{filename}'
+        
+        save_dir.mkdir(parents=True, exist_ok=True)
+        filepath = save_dir / filename
+        
+        with open(filepath, 'wb') as f:
+            f.write(processed_bytes)
+        
+        url = f'/uploads/{relative_path}'
+        
+        print(f"[ProcessWithSettings] Saved: {relative_path} ({len(processed_bytes)} bytes)")
+        
+        return jsonify({
+            'success': True,
+            'url': url,
+            'metadata': {
+                'original_size': list(metadata['original_size']),
+                'final_size': list(metadata['final_size']),
+                'file_size': len(processed_bytes),
+                'format': settings['format']
+            }
+        })
+        
+    except Exception as e:
+        import traceback
+        print(f"[ProcessWithSettings] ERROR: {e}")
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 # ==================== IMAGE UPLOAD ENDPOINT ====================
 
 @app.route('/api/images/upload', methods=['POST'])

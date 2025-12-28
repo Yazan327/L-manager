@@ -495,6 +495,42 @@
                     <p class="text-xs text-gray-500">
                         <i class="fas fa-info-circle mr-1"></i>Drag images to reorder. The first image (marked MAIN) will be the primary photo on PropertyFinder.
                     </p>
+                    
+                    <!-- Process Images with Saved Settings -->
+                    <div class="mt-4 p-4 bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg border border-purple-200">
+                        <div class="flex items-center justify-between flex-wrap gap-3">
+                            <div>
+                                <h4 class="font-medium text-gray-800 flex items-center">
+                                    <i class="fas fa-magic text-purple-600 mr-2"></i>Apply Image Settings
+                                </h4>
+                                <p class="text-xs text-gray-500 mt-1">
+                                    Process images with your saved settings (ratio, QR code, logo)
+                                </p>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button type="button" 
+                                        @click="processAllImages()"
+                                        :disabled="processing || images.length === 0"
+                                        class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
+                                    <i class="fas fa-wand-magic-sparkles" x-show="!processing"></i>
+                                    <i class="fas fa-spinner fa-spin" x-show="processing"></i>
+                                    <span x-text="processing ? 'Processing ' + processedCount + '/' + images.length + '...' : 'Process All Images'"></span>
+                                </button>
+                                <a href="/settings#images" target="_blank" 
+                                   class="px-3 py-2 text-gray-600 hover:text-purple-600 hover:bg-white rounded-lg text-sm"
+                                   title="Edit image settings">
+                                    <i class="fas fa-cog"></i>
+                                </a>
+                            </div>
+                        </div>
+                        
+                        <!-- Processing Status -->
+                        <div x-show="processMessage" class="mt-3 p-3 rounded-lg text-sm"
+                             :class="processSuccess ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'">
+                            <i :class="processSuccess ? 'fas fa-check-circle' : 'fas fa-exclamation-circle'" class="mr-2"></i>
+                            <span x-text="processMessage"></span>
+                        </div>
+                    </div>
                 </div>
                 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1041,17 +1077,30 @@ function imageManager() {
     let existingImages = [];
     {% if listing and listing.images %}
         {% if listing.images is string %}
-            existingImages = {{ listing.images|tojson }}.split('|').filter(u => u.trim()).map((url, i) => ({
-                id: 'existing-' + i,
-                url: url.trim(),
-                uploading: false
-            }));
+            try {
+                // Try JSON parse first
+                let parsed = JSON.parse({{ listing.images|tojson }});
+                if (Array.isArray(parsed)) {
+                    existingImages = parsed.filter(u => u && u !== 'None' && u.trim && u.trim()).map((url, i) => ({
+                        id: 'existing-' + i,
+                        url: typeof url === 'string' ? url.trim() : (url.url || ''),
+                        uploading: false
+                    })).filter(img => img.url && img.url !== 'None');
+                }
+            } catch(e) {
+                // Fall back to pipe-separated
+                existingImages = {{ listing.images|tojson }}.split('|').filter(u => u && u.trim() && u.trim() !== 'None').map((url, i) => ({
+                    id: 'existing-' + i,
+                    url: url.trim(),
+                    uploading: false
+                }));
+            }
         {% else %}
-            existingImages = {{ listing.images|tojson }}.map((url, i) => ({
+            existingImages = {{ listing.images|tojson }}.filter(u => u && u !== 'None').map((url, i) => ({
                 id: 'existing-' + i,
                 url: typeof url === 'string' ? url : (url.url || url.original?.url || ''),
                 uploading: false
-            })).filter(img => img.url);
+            })).filter(img => img.url && img.url !== 'None');
         {% endif %}
     {% endif %}
     
@@ -1062,6 +1111,10 @@ function imageManager() {
         draggedIndex: null,
         newImageUrl: '',
         listingId: {{ (listing.id if listing else 'null')|tojson }},
+        processing: false,
+        processedCount: 0,
+        processMessage: '',
+        processSuccess: false,
         
         get imagesJson() {
             // Return URLs as JSON array for form submission
@@ -1195,6 +1248,90 @@ function imageManager() {
             this.images.splice(this.draggedIndex, 1);
             this.images.splice(targetIndex, 0, draggedItem);
             this.draggedIndex = null;
+        },
+        
+        // Process all images with saved settings
+        async processAllImages() {
+            if (this.images.length === 0) return;
+            
+            this.processing = true;
+            this.processedCount = 0;
+            this.processMessage = '';
+            
+            let successCount = 0;
+            let errorCount = 0;
+            
+            for (let i = 0; i < this.images.length; i++) {
+                const img = this.images[i];
+                
+                try {
+                    // Fetch image as base64
+                    let imageData;
+                    
+                    if (img.url.startsWith('data:')) {
+                        // Already base64
+                        imageData = img.url;
+                    } else {
+                        // Fetch and convert to base64
+                        const response = await fetch(img.url);
+                        const blob = await response.blob();
+                        imageData = await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => resolve(reader.result);
+                            reader.onerror = reject;
+                            reader.readAsDataURL(blob);
+                        });
+                    }
+                    
+                    // Process with saved settings (settings are loaded server-side)
+                    const processResponse = await fetch('/api/images/process-with-settings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            image: imageData,
+                            listing_id: this.listingId
+                        })
+                    });
+                    
+                    if (processResponse.ok) {
+                        const result = await processResponse.json();
+                        if (result.success && result.url) {
+                            // Update image with processed version
+                            this.images[i] = {
+                                ...img,
+                                url: result.url,
+                                processed: true
+                            };
+                            successCount++;
+                        } else {
+                            throw new Error(result.error || 'Processing failed');
+                        }
+                    } else {
+                        throw new Error('Server error');
+                    }
+                } catch (error) {
+                    console.error(`Failed to process image ${i}:`, error);
+                    errorCount++;
+                }
+                
+                this.processedCount = i + 1;
+            }
+            
+            this.processing = false;
+            
+            if (errorCount === 0) {
+                this.processMessage = `Successfully processed ${successCount} images with your saved settings`;
+                this.processSuccess = true;
+            } else if (successCount > 0) {
+                this.processMessage = `Processed ${successCount} images, ${errorCount} failed`;
+                this.processSuccess = false;
+            } else {
+                this.processMessage = `Failed to process images. Check console for details.`;
+                this.processSuccess = false;
+            }
+            
+            // Auto-hide message
+            setTimeout(() => { this.processMessage = ''; }, 8000);
         }
     }
 }

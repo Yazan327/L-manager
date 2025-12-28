@@ -308,29 +308,44 @@ class LocalListing(db.Model):
             # Fall back to pipe-separated format (legacy)
             images = self.images.split('|') if self.images else []
         
-        # Convert relative paths to URLs
+        # Convert relative paths to URLs and filter out invalid entries
         result = []
         for img in images:
+            if not img:  # Skip None, empty strings, etc.
+                continue
+                
+            url = None
+            
             if isinstance(img, str):
+                img = img.strip()
+                if not img or img.lower() == 'none':  # Skip empty or "None" strings
+                    continue
+                    
                 # If it's a relative path (e.g., "listings/123/img.jpg"), prefix with /uploads/
                 if img.startswith('listings/') or img.startswith('uploads/'):
                     if not img.startswith('/'):
-                        img = '/uploads/' + img.lstrip('uploads/')
-                    result.append(img)
+                        url = '/uploads/' + img.lstrip('uploads/')
+                    else:
+                        url = img
                 elif img.startswith('http'):
                     # Already a full URL
-                    result.append(img)
+                    url = img
                 elif img.startswith('/'):
                     # Already an absolute path
-                    result.append(img)
+                    url = img
+                elif img.startswith('temp/'):
+                    url = '/uploads/' + img
                 else:
                     # Assume it's a relative path, prefix with /uploads/
-                    result.append('/uploads/' + img)
+                    url = '/uploads/' + img
+                    
             elif isinstance(img, dict):
                 # Handle PropertyFinder format: {original: {url: "..."}}
                 url = img.get('url') or (img.get('original', {}).get('url') if img.get('original') else None)
-                if url:
-                    result.append(url)
+            
+            # Only add valid URLs
+            if url and url.lower() != 'none' and len(url) > 1:
+                result.append(url)
         
         return result
     
