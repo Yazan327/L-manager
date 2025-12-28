@@ -1260,37 +1260,54 @@ function imageManager() {
             
             let successCount = 0;
             let errorCount = 0;
+            let skippedCount = 0;
             
             for (let i = 0; i < this.images.length; i++) {
                 const img = this.images[i];
                 
+                // Skip already processed images (local URLs)
+                if (img.processed || (img.url.startsWith('/uploads/') && img.url.includes('processed'))) {
+                    skippedCount++;
+                    this.processedCount = i + 1;
+                    continue;
+                }
+                
                 try {
-                    // Fetch image as base64
-                    let imageData;
+                    let requestBody;
                     
                     if (img.url.startsWith('data:')) {
-                        // Already base64
-                        imageData = img.url;
-                    } else {
-                        // Fetch and convert to base64
+                        // Base64 image - send directly
+                        requestBody = {
+                            image: img.url,
+                            listing_id: this.listingId
+                        };
+                    } else if (img.url.startsWith('/uploads/')) {
+                        // Local upload - need to fetch as base64 first
                         const response = await fetch(img.url);
                         const blob = await response.blob();
-                        imageData = await new Promise((resolve, reject) => {
+                        const base64 = await new Promise((resolve, reject) => {
                             const reader = new FileReader();
                             reader.onloadend = () => resolve(reader.result);
                             reader.onerror = reject;
                             reader.readAsDataURL(blob);
                         });
+                        requestBody = {
+                            image: base64,
+                            listing_id: this.listingId
+                        };
+                    } else {
+                        // External URL - let server download it (bypasses CORS)
+                        requestBody = {
+                            url: img.url,
+                            listing_id: this.listingId
+                        };
                     }
                     
-                    // Process with saved settings (settings are loaded server-side)
+                    // Process with saved settings
                     const processResponse = await fetch('/api/images/process-with-settings', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            image: imageData,
-                            listing_id: this.listingId
-                        })
+                        body: JSON.stringify(requestBody)
                     });
                     
                     if (processResponse.ok) {
@@ -1302,12 +1319,17 @@ function imageManager() {
                                 url: result.url,
                                 processed: true
                             };
-                            successCount++;
+                            if (result.skipped) {
+                                skippedCount++;
+                            } else {
+                                successCount++;
+                            }
                         } else {
                             throw new Error(result.error || 'Processing failed');
                         }
                     } else {
-                        throw new Error('Server error');
+                        const errData = await processResponse.json().catch(() => ({}));
+                        throw new Error(errData.error || 'Server error');
                     }
                 } catch (error) {
                     console.error(`Failed to process image ${i}:`, error);
@@ -1320,7 +1342,9 @@ function imageManager() {
             this.processing = false;
             
             if (errorCount === 0) {
-                this.processMessage = `Successfully processed ${successCount} images with your saved settings`;
+                let msg = `Successfully processed ${successCount} images`;
+                if (skippedCount > 0) msg += ` (${skippedCount} already processed)`;
+                this.processMessage = msg;
                 this.processSuccess = true;
             } else if (successCount > 0) {
                 this.processMessage = `Processed ${successCount} images, ${errorCount} failed`;

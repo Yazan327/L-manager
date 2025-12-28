@@ -732,29 +732,53 @@ def convert_google_drive_url(url):
     return url
 
 
-def process_image_urls(images_text):
+def process_image_urls(images_input):
     """
-    Process image URLs from text input.
-    - Splits by newlines or pipes
-    - Converts Google Drive links to direct URLs
-    - Filters empty lines and invalid URLs
+    Process image URLs from form input.
+    Handles:
+    - JSON array (new format from image manager)
+    - Newline-separated text (legacy)
+    - Pipe-separated text (legacy)
     
-    Returns pipe-separated string of URLs
+    Converts Google Drive links to direct URLs.
+    Returns JSON string of URLs (new format).
     """
-    if not images_text:
-        return ''
+    if not images_input:
+        return '[]'
     
-    # Split by newlines or pipes
     urls = []
-    for line in images_text.replace('|', '\n').split('\n'):
+    
+    # Try JSON first (new format)
+    try:
+        parsed = json.loads(images_input)
+        if isinstance(parsed, list):
+            for item in parsed:
+                if isinstance(item, str):
+                    url = item.strip()
+                elif isinstance(item, dict):
+                    url = item.get('url', '')
+                else:
+                    continue
+                
+                if url and url.lower() != 'none':
+                    # Convert Google Drive links
+                    if 'drive.google.com' in url:
+                        url = convert_google_drive_url(url)
+                    urls.append(url)
+            return json.dumps(urls)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    
+    # Fall back to text format (legacy)
+    for line in images_input.replace('|', '\n').split('\n'):
         url = line.strip()
-        if url and (url.startswith('http://') or url.startswith('https://')):
+        if url and url.lower() != 'none' and (url.startswith('http://') or url.startswith('https://') or url.startswith('/')):
             # Convert Google Drive links
             if 'drive.google.com' in url:
                 url = convert_google_drive_url(url)
             urls.append(url)
     
-    return '|'.join(urls)
+    return json.dumps(urls)
 
 
 def allowed_file(filename):
@@ -3099,7 +3123,12 @@ def serve_upload(filename):
 @app.route('/api/images/process-with-settings', methods=['POST'])
 @login_required
 def api_process_image_with_settings():
-    """Process an image using saved settings and save to disk"""
+    """Process an image using saved settings and save to disk
+    
+    Accepts either:
+    - 'image': base64 data URL
+    - 'url': URL to download (server downloads to bypass CORS)
+    """
     import base64
     import uuid
     
@@ -3107,22 +3136,53 @@ def api_process_image_with_settings():
     
     try:
         data = request.json
-        if not data or 'image' not in data:
-            return jsonify({'error': 'No image provided'}), 400
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
         
         listing_id = data.get('listing_id')
+        image_bytes = None
         
-        # Parse base64 image
-        image_data_url = data['image']
-        if ',' in image_data_url:
-            header, encoded = image_data_url.split(',', 1)
+        # Option 1: URL - server downloads it (bypasses CORS)
+        if 'url' in data and data['url']:
+            url = data['url']
+            print(f"[ProcessWithSettings] Downloading from URL: {url[:100]}...")
+            
+            # Skip if it's already a local processed image
+            if url.startswith('/uploads/'):
+                return jsonify({
+                    'success': True,
+                    'url': url,
+                    'skipped': True,
+                    'message': 'Already a local processed image'
+                })
+            
+            try:
+                import requests as http_requests
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+                resp = http_requests.get(url, headers=headers, timeout=30, stream=True)
+                resp.raise_for_status()
+                image_bytes = resp.content
+                print(f"[ProcessWithSettings] Downloaded {len(image_bytes)} bytes")
+            except Exception as dl_err:
+                print(f"[ProcessWithSettings] Download failed: {dl_err}")
+                return jsonify({'error': f'Failed to download image: {dl_err}'}), 400
+        
+        # Option 2: Base64 image data
+        elif 'image' in data and data['image']:
+            image_data_url = data['image']
+            if ',' in image_data_url:
+                header, encoded = image_data_url.split(',', 1)
+            else:
+                encoded = image_data_url
+            
+            try:
+                image_bytes = base64.b64decode(encoded)
+            except Exception as decode_err:
+                return jsonify({'error': f'Invalid image data: {decode_err}'}), 400
         else:
-            encoded = image_data_url
-        
-        try:
-            image_bytes = base64.b64decode(encoded)
-        except Exception as decode_err:
-            return jsonify({'error': f'Invalid image data: {decode_err}'}), 400
+            return jsonify({'error': 'No image or url provided'}), 400
         
         # Load saved settings
         settings = {
