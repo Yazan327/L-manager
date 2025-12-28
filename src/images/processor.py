@@ -5,13 +5,20 @@ Handles image resizing, ratio enforcement, QR code overlay, and logo watermarkin
 
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 import qrcode
-from qrcode.image.styledpil import StyledPilImage
-from qrcode.image.styles.moduledrawers import RoundedModuleDrawer
 import io
 import base64
 from typing import Tuple, Optional, List, Union
 import requests
 import os
+
+# Try to import styled QR code components (optional)
+try:
+    from qrcode.image.styledpil import StyledPilImage
+    from qrcode.image.styles.moduledrawers import RoundedModuleDrawer
+    HAS_STYLED_QR = True
+except ImportError:
+    HAS_STYLED_QR = False
+    print("[ImageProcessor] Styled QR code not available, using basic QR codes")
 
 
 class ImageProcessor:
@@ -199,7 +206,7 @@ class ImageProcessor:
         qr.add_data(data)
         qr.make(fit=True)
         
-        if rounded:
+        if rounded and HAS_STYLED_QR:
             qr_img = qr.make_image(
                 image_factory=StyledPilImage,
                 module_drawer=RoundedModuleDrawer(),
