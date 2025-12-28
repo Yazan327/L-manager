@@ -133,6 +133,18 @@
                 <option value="50">50 / page</option>
                 <option value="100">100 / page</option>
             </select>
+            
+            <!-- Show Duplicates Toggle -->
+            {% if duplicates_count is defined and duplicates_count > 0 %}
+            <label class="flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50"
+                   :class="showDuplicates ? 'bg-purple-50 border-purple-300' : ''">
+                <input type="checkbox" x-model="showDuplicates" @change="applyFilters()" class="rounded text-purple-600">
+                <span class="text-sm">
+                    <i class="fas fa-copy text-purple-500 mr-1"></i>
+                    Duplicates <span class="text-xs text-gray-500">({{ duplicates_count }})</span>
+                </span>
+            </label>
+            {% endif %}
         </div>
         
         <a href="{{ url_for('new_listing') }}" class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition inline-flex items-center">
@@ -553,6 +565,7 @@ function listingsPage() {
         sortBy: '{{ sort_by|default("updated_at") }}',
         sortOrder: '{{ sort_order|default("desc") }}',
         perPage: '{{ per_page|default(25) }}',
+        showDuplicates: {{ 'true' if show_duplicates else 'false' }},
         pagination: {{ pagination | tojson | safe if pagination else '{}' }},
         selectedIds: [],
         
@@ -677,6 +690,7 @@ function listingsPage() {
             params.set('sort_order', this.sortOrder);
             if (this.filterStatus) params.set('status', this.filterStatus);
             if (this.searchQuery) params.set('search', this.searchQuery);
+            if (this.showDuplicates) params.set('show_duplicates', '1');
             // Preserve folder_id if set
             const currentFolderId = new URLSearchParams(window.location.search).get('folder_id');
             if (currentFolderId !== null) params.set('folder_id', currentFolderId);

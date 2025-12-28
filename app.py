@@ -1408,13 +1408,79 @@ def listings():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 25, type=int)
     status = request.args.get('status')
+    sort_by = request.args.get('sort_by', 'updated_at')
+    sort_order = request.args.get('sort_order', 'desc')
+    search = request.args.get('search', '').strip()
+    folder_id = request.args.get('folder_id', type=int)  # Folder filter
+    show_duplicates = request.args.get('show_duplicates', '0') == '1'  # Hide duplicates by default
     
     query = LocalListing.query
+    
+    # Get the Duplicated folder ID
+    duplicated_folder = ListingFolder.query.filter_by(name='Duplicated').first()
+    
+    # Filter by folder
+    if folder_id is not None:
+        if folder_id == 0:
+            # Show uncategorized listings (no folder)
+            query = query.filter(LocalListing.folder_id.is_(None))
+        else:
+            query = query.filter_by(folder_id=folder_id)
+    else:
+        # When viewing all listings, hide duplicated folder unless show_duplicates is on
+        if not show_duplicates and duplicated_folder:
+            query = query.filter(
+                db.or_(
+                    LocalListing.folder_id != duplicated_folder.id,
+                    LocalListing.folder_id.is_(None)
+                )
+            )
+    
+    # Filter by status
     if status:
         query = query.filter_by(status=status)
     
-    query = query.order_by(LocalListing.updated_at.desc())
+    # Search filter
+    if search:
+        search_term = f'%{search}%'
+        query = query.filter(
+            db.or_(
+                LocalListing.reference.ilike(search_term),
+                LocalListing.title_en.ilike(search_term),
+                LocalListing.location.ilike(search_term),
+                LocalListing.city.ilike(search_term)
+            )
+        )
+    
+    # Sorting
+    valid_sort_columns = {
+        'updated_at': LocalListing.updated_at,
+        'created_at': LocalListing.created_at,
+        'price': LocalListing.price,
+        'reference': LocalListing.reference,
+        'title': LocalListing.title_en,
+        'views': LocalListing.views,
+        'leads': LocalListing.leads,
+        'status': LocalListing.status,
+        'bedrooms': LocalListing.bedrooms,
+        'size': LocalListing.size
+    }
+    
+    sort_column = valid_sort_columns.get(sort_by, LocalListing.updated_at)
+    if sort_order == 'asc':
+        query = query.order_by(sort_column.asc())
+    else:
+        query = query.order_by(sort_column.desc())
+    
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    
+    # Get all folders for sidebar
+    folders = ListingFolder.get_all_with_counts()
+    current_folder = ListingFolder.query.get(folder_id) if folder_id else None
+    uncategorized_count = LocalListing.query.filter(LocalListing.folder_id.is_(None)).count()
+    
+    # Count duplicates (for showing toggle info)
+    duplicates_count = duplicated_folder.listings.count() if duplicated_folder else 0
     
     return render_template('listings.html', 
                          listings=[l.to_dict() for l in pagination.items],
@@ -1422,10 +1488,22 @@ def listings():
                              'current_page': pagination.page,
                              'last_page': pagination.pages,
                              'per_page': per_page,
-                             'total': pagination.total
+                             'total': pagination.total,
+                             'has_prev': pagination.has_prev,
+                             'has_next': pagination.has_next
                          },
+                         folders=folders,
+                         current_folder=current_folder.to_dict() if current_folder else None,
+                         folder_id=folder_id,
+                         uncategorized_count=uncategorized_count,
+                         duplicates_count=duplicates_count,
+                         show_duplicates=show_duplicates,
                          page=page,
-                         per_page=per_page)
+                         per_page=per_page,
+                         sort_by=sort_by,
+                         sort_order=sort_order,
+                         search=search,
+                         status=status or '')
 
 @app.route('/listings/new')
 @permission_required('create')
@@ -4089,22 +4167,31 @@ def api_get_folders():
 @login_required
 def api_create_folder():
     """API: Create a new folder"""
-    data = request.json
+    data = request.get_json(silent=True) or request.json or {}
     
     if not data.get('name'):
         return jsonify({'error': 'Folder name is required'}), 400
     
-    folder = ListingFolder(
-        name=data['name'],
-        color=data.get('color', 'indigo'),
-        icon=data.get('icon', 'fa-folder'),
-        description=data.get('description'),
-        parent_id=data.get('parent_id')
-    )
-    db.session.add(folder)
-    db.session.commit()
+    # Check if folder with same name exists
+    existing = ListingFolder.query.filter_by(name=data['name']).first()
+    if existing:
+        return jsonify({'error': 'A folder with this name already exists'}), 400
     
-    return jsonify({'folder': folder.to_dict(), 'message': 'Folder created successfully'})
+    try:
+        folder = ListingFolder(
+            name=data['name'],
+            color=data.get('color', 'indigo'),
+            icon=data.get('icon', 'fa-folder'),
+            description=data.get('description'),
+            parent_id=data.get('parent_id')
+        )
+        db.session.add(folder)
+        db.session.commit()
+        
+        return jsonify({'folder': folder.to_dict(), 'message': 'Folder created successfully'})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Failed to create folder: {str(e)}'}), 500
 
 
 @app.route('/api/folders/<int:folder_id>', methods=['GET'])

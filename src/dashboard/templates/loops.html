@@ -390,15 +390,32 @@
                     <!-- Listings Tab -->
                     <div x-show="detailsTab === 'listings'" class="space-y-2">
                         <template x-for="ll in loopListings" :key="ll.id">
-                            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                                <div>
-                                    <span class="font-medium" x-text="ll.listing?.reference"></span>
-                                    <span class="text-gray-500" x-text="ll.listing?.title"></span>
+                            <a :href="'/listings/' + ll.listing_id" target="_blank"
+                               class="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition cursor-pointer group">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-10 h-10 bg-gray-200 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden">
+                                        <template x-if="ll.listing?.images?.length > 0">
+                                            <img :src="ll.listing.images[0]" class="w-full h-full object-cover">
+                                        </template>
+                                        <template x-if="!ll.listing?.images?.length">
+                                            <i class="fas fa-building text-gray-400"></i>
+                                        </template>
+                                    </div>
+                                    <div>
+                                        <span class="font-medium text-gray-900 group-hover:text-indigo-600" x-text="ll.listing?.reference"></span>
+                                        <p class="text-sm text-gray-500 truncate max-w-xs" x-text="ll.listing?.title"></p>
+                                    </div>
                                 </div>
-                                <div class="text-sm text-gray-500">
-                                    Processed <span x-text="ll.times_processed"></span> times
+                                <div class="flex items-center gap-4">
+                                    <div class="text-sm text-gray-500">
+                                        Processed <span class="font-medium" x-text="ll.times_processed"></span> times
+                                    </div>
+                                    <i class="fas fa-external-link-alt text-gray-400 group-hover:text-indigo-500"></i>
                                 </div>
-                            </div>
+                            </a>
+                        </template>
+                        <template x-if="loopListings.length === 0">
+                            <p class="text-gray-500 text-center py-4">No listings in this loop</p>
                         </template>
                     </div>
                     
@@ -436,11 +453,17 @@
                             <p class="text-gray-500 text-center py-4">No duplicates created</p>
                         </template>
                         <template x-for="dup in loopDuplicates" :key="dup.id">
-                            <div class="flex items-center justify-between p-3 bg-purple-50 rounded-lg">
-                                <div>
-                                    <span class="font-medium text-purple-800" x-text="dup.pf_listing_id"></span>
-                                    <span class="text-sm text-gray-500">from</span>
-                                    <span class="text-gray-600" x-text="dup.original?.reference"></span>
+                            <div class="flex items-center justify-between p-3 bg-purple-50 rounded-lg hover:bg-purple-100 transition group">
+                                <div class="flex items-center gap-2">
+                                    <i class="fas fa-copy text-purple-500"></i>
+                                    <div>
+                                        <span class="font-medium text-purple-800" x-text="dup.pf_listing_id"></span>
+                                        <span class="text-sm text-gray-500 mx-1">from</span>
+                                        <a :href="'/listings/' + dup.original_listing_id" target="_blank"
+                                           class="text-indigo-600 hover:text-indigo-800 hover:underline" 
+                                           x-text="dup.original?.reference"
+                                           @click.stop></a>
+                                    </div>
                                 </div>
                                 <div class="flex items-center space-x-3">
                                     <span class="px-2 py-1 text-xs rounded-full"
