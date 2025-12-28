@@ -248,31 +248,47 @@
                 </div>
                 
                 <!-- Listing Search/Select -->
-                <div class="relative flex-1 min-w-[250px] max-w-md">
+                <div class="relative flex-1 min-w-[250px] max-w-md" 
+                     @click.outside="showListingDropdown = false"
+                     @keydown.escape="showListingDropdown = false">
                     <input type="text" 
                            x-model="listingSearch"
                            @focus="showListingDropdown = true; searchListings()"
-                           @input.debounce.300ms="searchListings()"
+                           @input="searchListings()"
+                           @keydown.arrow-down.prevent="showListingDropdown = true"
                            placeholder="Search by reference, title, location..."
                            class="w-full border border-gray-300 rounded-lg px-3 py-2 pr-10">
                     <i class="fas fa-search absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
                     
                     <!-- Dropdown -->
-                    <div x-show="showListingDropdown && listingResults.length > 0" 
+                    <div x-show="showListingDropdown" 
                          x-cloak
-                         @click.outside="showListingDropdown = false"
-                         class="absolute z-20 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                         x-transition:enter="transition ease-out duration-100"
+                         x-transition:enter-start="opacity-0 scale-95"
+                         x-transition:enter-end="opacity-100 scale-100"
+                         x-transition:leave="transition ease-in duration-75"
+                         x-transition:leave-start="opacity-100 scale-100"
+                         x-transition:leave-end="opacity-0 scale-95"
+                         class="absolute z-50 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                        <template x-if="listingResults.length === 0">
+                            <div class="px-4 py-3 text-gray-500 text-sm">
+                                <span x-show="listings.length === 0">Loading listings...</span>
+                                <span x-show="listings.length > 0 && listingSearch">No matches found</span>
+                                <span x-show="listings.length > 0 && !listingSearch">Type to search listings</span>
+                            </div>
+                        </template>
                         <template x-for="listing in listingResults" :key="listing.id">
-                            <button @click="selectListing(listing); showListingDropdown = false"
+                            <button @click.stop="selectListing(listing); showListingDropdown = false"
+                                    type="button"
                                     class="w-full text-left px-4 py-3 hover:bg-indigo-50 border-b last:border-0 flex items-center justify-between">
                                 <div>
                                     <div class="font-medium text-gray-800" x-text="listing.reference"></div>
                                     <div class="text-sm text-gray-500" x-text="listing.title"></div>
                                 </div>
                                 <div class="text-right">
-                                    <span class="text-xs px-2 py-1 bg-gray-100 rounded" x-text="listing.property_type"></span>
+                                    <span class="text-xs px-2 py-1 bg-gray-100 rounded" x-text="listing.property_type || 'N/A'"></span>
                                     <div class="text-xs text-gray-400 mt-1">
-                                        <i class="fas fa-images mr-1"></i><span x-text="listing.image_count"></span> images
+                                        <i class="fas fa-images mr-1"></i><span x-text="listing.image_count || 0"></span> images
                                     </div>
                                 </div>
                             </button>
