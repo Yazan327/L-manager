@@ -393,18 +393,17 @@
             
             <div class="grid grid-cols-1 gap-6">
                 <!-- Image Upload Zone -->
-                <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center"
+                <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer"
                      :class="{'border-indigo-500 bg-indigo-50': dragOver}"
                      @dragover.prevent="dragOver = true"
                      @dragleave="dragOver = false"
-                     @drop.prevent="handleDrop($event)">
-                    <input type="file" id="imageUpload" multiple accept="image/*" class="hidden"
-                           @change="handleFiles($event)">
-                    <label for="imageUpload" class="cursor-pointer">
-                        <i class="fas fa-cloud-upload-alt text-4xl text-gray-400 mb-2"></i>
-                        <p class="text-gray-600">Drop images here or <span class="text-indigo-600 font-medium">click to upload</span></p>
-                        <p class="text-xs text-gray-400 mt-1">JPG, PNG, WebP</p>
-                    </label>
+                     @drop.prevent="handleDrop($event)"
+                     @click="$refs.imageInput.click()">
+                    <input type="file" x-ref="imageInput" multiple accept="image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif" class="hidden"
+                           @change="handleFiles($event)" @click.stop>
+                    <i class="fas fa-cloud-upload-alt text-4xl text-gray-400 mb-2"></i>
+                    <p class="text-gray-600">Drop images here or <span class="text-indigo-600 font-medium">click to upload</span></p>
+                    <p class="text-xs text-gray-400 mt-1">JPG, PNG, WebP, GIF</p>
                 </div>
                 
                 <!-- Or add URL -->
