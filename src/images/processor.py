@@ -353,6 +353,23 @@ class ImageProcessor:
         img = self.load_image(image_source)
         original_size = img.size
         
+        # Ensure image is in a workable mode (RGB or RGBA)
+        if img.mode == 'P':
+            # Palette mode - convert to RGBA to preserve transparency
+            img = img.convert('RGBA')
+        elif img.mode == 'L':
+            # Grayscale - convert to RGB
+            img = img.convert('RGB')
+        elif img.mode == 'LA':
+            # Grayscale with alpha - convert to RGBA
+            img = img.convert('RGBA')
+        elif img.mode == '1':
+            # Binary - convert to RGB
+            img = img.convert('RGB')
+        elif img.mode == 'CMYK':
+            # CMYK - convert to RGB
+            img = img.convert('RGB')
+        
         # Apply ratio
         if ratio:
             img = self.apply_ratio(img, ratio)
@@ -378,15 +395,26 @@ class ImageProcessor:
                 print(f"Warning: Could not load logo: {e}")
         
         # Convert to RGB for JPEG
-        if output_format.upper() == 'JPEG' and img.mode == 'RGBA':
-            background = Image.new('RGB', img.size, (255, 255, 255))
-            background.paste(img, mask=img.split()[3])
-            img = background
+        if output_format.upper() == 'JPEG':
+            if img.mode == 'RGBA':
+                background = Image.new('RGB', img.size, (255, 255, 255))
+                background.paste(img, mask=img.split()[3])
+                img = background
+            elif img.mode != 'RGB':
+                img = img.convert('RGB')
         
         # Save to bytes
         output = io.BytesIO()
-        save_kwargs = {'quality': quality} if output_format.upper() in ('JPEG', 'WEBP') else {}
-        img.save(output, format=output_format.upper(), **save_kwargs)
+        try:
+            save_kwargs = {'quality': quality} if output_format.upper() in ('JPEG', 'WEBP') else {}
+            img.save(output, format=output_format.upper(), **save_kwargs)
+        except Exception as save_err:
+            # Fallback: try saving as JPEG
+            print(f"Warning: Could not save as {output_format}: {save_err}, falling back to JPEG")
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            img.save(output, format='JPEG', quality=quality)
+            output_format = 'JPEG'
         output.seek(0)
         
         metadata = {

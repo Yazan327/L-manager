@@ -2863,6 +2863,8 @@ def api_process_single_image():
     import base64
     from io import BytesIO
     
+    temp_logo_path = None
+    
     try:
         data = request.json
         if not data or 'image' not in data:
@@ -2875,94 +2877,108 @@ def api_process_single_image():
         else:
             encoded = image_data_url
         
-        image_bytes = base64.b64decode(encoded)
+        try:
+            image_bytes = base64.b64decode(encoded)
+        except Exception as decode_err:
+            print(f"[ImageProcessor] Base64 decode error: {decode_err}")
+            return jsonify({'error': f'Invalid image data: {decode_err}'}), 400
         
-        # Get processing options
-        target_ratio = data.get('ratio', '')
-        qr_data = data.get('qr_data')
-        qr_position = data.get('qr_position', 'bottom_right').replace('-', '_')
-        qr_size = int(data.get('qr_size_percent', 12))
-        qr_color = data.get('qr_color', '#000000')
+        print(f"[ImageProcessor] Processing image, size: {len(image_bytes)} bytes")
+        
+        # Get processing options with safe defaults
+        target_ratio = data.get('ratio', '') or None
+        qr_data = data.get('qr_data') or None
+        qr_position = (data.get('qr_position', 'bottom_right') or 'bottom_right').replace('-', '_')
+        qr_size = int(data.get('qr_size_percent', 12) or 12)
+        qr_color = data.get('qr_color', '#000000') or '#000000'
         logo_data = data.get('logo_data')
-        logo_position = data.get('logo_position', 'bottom_left').replace('-', '_')
-        logo_size = int(data.get('logo_size_percent', 10))
-        logo_opacity = float(data.get('logo_opacity', 0.9))
-        output_format = data.get('format', 'JPEG')
-        quality = int(data.get('quality', 90))
-        size_preset = data.get('size', 'original')
+        logo_position = (data.get('logo_position', 'bottom_left') or 'bottom_left').replace('-', '_')
+        logo_size = int(data.get('logo_size_percent', 10) or 10)
+        logo_opacity = float(data.get('logo_opacity', 0.9) or 0.9)
+        output_format = data.get('format', 'JPEG') or 'JPEG'
+        quality = int(data.get('quality', 90) or 90)
+        size_preset = data.get('size', 'original') or 'original'
+        
+        print(f"[ImageProcessor] Options: ratio={target_ratio}, qr={bool(qr_data)}, format={output_format}")
         
         # Handle logo from base64 if provided
         logo_source = None
-        temp_logo_path = None
-        if logo_data:
-            if ',' in logo_data:
-                _, logo_encoded = logo_data.split(',', 1)
-            else:
-                logo_encoded = logo_data
-            logo_bytes = base64.b64decode(logo_encoded)
-            # Save to temp file
-            import tempfile
-            fd, temp_logo_path = tempfile.mkstemp(suffix='.png')
-            with os.fdopen(fd, 'wb') as f:
-                f.write(logo_bytes)
-            logo_source = temp_logo_path
-        else:
+        if logo_data and logo_data.startswith('data:'):
+            try:
+                if ',' in logo_data:
+                    _, logo_encoded = logo_data.split(',', 1)
+                else:
+                    logo_encoded = logo_data
+                logo_bytes = base64.b64decode(logo_encoded)
+                # Save to temp file
+                import tempfile
+                fd, temp_logo_path = tempfile.mkstemp(suffix='.png')
+                with os.fdopen(fd, 'wb') as f:
+                    f.write(logo_bytes)
+                logo_source = temp_logo_path
+                print(f"[ImageProcessor] Logo saved to temp file: {temp_logo_path}")
+            except Exception as logo_err:
+                print(f"[ImageProcessor] Logo decode error: {logo_err}")
+        elif not logo_data:
             # Check for default logo
             logo_setting = AppSettings.get('image_default_logo')
             if logo_setting:
                 potential_path = str(ROOT_DIR / logo_setting)
                 if Path(potential_path).exists():
                     logo_source = potential_path
+                    print(f"[ImageProcessor] Using default logo: {logo_source}")
         
-        try:
-            # Create processor and process image
-            processor = ImageProcessor()
-            
-            # Use the actual ratio string that matches the processor's RATIOS dict
-            actual_ratio = target_ratio if target_ratio else None
-            
-            processed_bytes, metadata = processor.process_image(
-                image_source=image_bytes,
-                ratio=actual_ratio,
-                size=size_preset,
-                qr_data=qr_data,
-                qr_position=qr_position,
-                qr_size_percent=qr_size,
-                qr_color=qr_color,
-                logo_source=logo_source,
-                logo_position=logo_position,
-                logo_size_percent=logo_size,
-                logo_opacity=logo_opacity,
-                output_format=output_format,
-                quality=quality
-            )
-            
-            # Convert to data URI
-            mime_types = {'JPEG': 'image/jpeg', 'PNG': 'image/png', 'WEBP': 'image/webp'}
-            mime_type = mime_types.get(output_format.upper(), 'image/jpeg')
-            output_base64 = base64.b64encode(processed_bytes).decode('utf-8')
-            data_uri = f"data:{mime_type};base64,{output_base64}"
-            
-            return jsonify({
-                'success': True,
-                'image': data_uri,
-                'metadata': {
-                    'original_size': list(metadata['original_size']),
-                    'final_size': list(metadata['final_size']),
-                    'file_size': metadata['file_size'],
-                    'format': output_format
-                }
-            })
-            
-        finally:
-            # Clean up temp logo file
-            if temp_logo_path and os.path.exists(temp_logo_path):
-                os.unlink(temp_logo_path)
+        # Create processor and process image
+        processor = ImageProcessor()
+        
+        processed_bytes, metadata = processor.process_image(
+            image_source=image_bytes,
+            ratio=target_ratio,
+            size=size_preset,
+            qr_data=qr_data,
+            qr_position=qr_position,
+            qr_size_percent=qr_size,
+            qr_color=qr_color,
+            logo_source=logo_source,
+            logo_position=logo_position,
+            logo_size_percent=logo_size,
+            logo_opacity=logo_opacity,
+            output_format=output_format,
+            quality=quality
+        )
+        
+        print(f"[ImageProcessor] Processed successfully: {metadata.get('final_size')}")
+        
+        # Convert to data URI
+        mime_types = {'JPEG': 'image/jpeg', 'PNG': 'image/png', 'WEBP': 'image/webp'}
+        mime_type = mime_types.get(output_format.upper(), 'image/jpeg')
+        output_base64 = base64.b64encode(processed_bytes).decode('utf-8')
+        data_uri = f"data:{mime_type};base64,{output_base64}"
+        
+        return jsonify({
+            'success': True,
+            'image': data_uri,
+            'metadata': {
+                'original_size': list(metadata['original_size']),
+                'final_size': list(metadata['final_size']),
+                'file_size': metadata['file_size'],
+                'format': output_format
+            }
+        })
                 
     except Exception as e:
         import traceback
+        print(f"[ImageProcessor] ERROR: {type(e).__name__}: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': f'{type(e).__name__}: {str(e)}'}), 500
+    
+    finally:
+        # Clean up temp logo file
+        if temp_logo_path and os.path.exists(temp_logo_path):
+            try:
+                os.unlink(temp_logo_path)
+            except:
+                pass
 
 
 @app.route('/api/settings/images', methods=['GET'])
