@@ -22,7 +22,7 @@ from werkzeug.utils import secure_filename
 from api import PropertyFinderClient, PropertyFinderAPIError, Config
 from models import PropertyListing, PropertyType, OfferingType, Location, Price
 from utils import BulkListingManager
-from database import db, LocalListing, PFSession, User
+from database import db, LocalListing, PFSession, User, ListingFolder
 
 # Setup paths for templates and static files
 TEMPLATE_DIR = Path(__file__).parent / 'templates'
@@ -496,8 +496,16 @@ def listings():
     sort_by = request.args.get('sort_by', 'updated_at')
     sort_order = request.args.get('sort_order', 'desc')
     search = request.args.get('search', '').strip()
+    folder_id = request.args.get('folder_id', type=int)  # Folder filter
     
     query = LocalListing.query
+    
+    # Filter by folder
+    if folder_id:
+        query = query.filter_by(folder_id=folder_id)
+    elif folder_id == 0 or request.args.get('folder_id') == '0':
+        # Show uncategorized listings (no folder)
+        query = query.filter(LocalListing.folder_id.is_(None))
     
     # Filter by status
     if status:
@@ -537,6 +545,11 @@ def listings():
     
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     
+    # Get all folders for sidebar
+    folders = ListingFolder.get_all_with_counts()
+    current_folder = ListingFolder.query.get(folder_id) if folder_id else None
+    uncategorized_count = LocalListing.query.filter(LocalListing.folder_id.is_(None)).count()
+    
     return render_template('listings.html', 
                          listings=[l.to_dict() for l in pagination.items],
                          pagination={
@@ -547,6 +560,10 @@ def listings():
                              'has_prev': pagination.has_prev,
                              'has_next': pagination.has_next
                          },
+                         folders=folders,
+                         current_folder=current_folder.to_dict() if current_folder else None,
+                         folder_id=folder_id,
+                         uncategorized_count=uncategorized_count,
                          page=page,
                          per_page=per_page,
                          sort_by=sort_by,
@@ -739,6 +756,117 @@ def settings():
         'bulk_delay': Config.BULK_DELAY_SECONDS,
         'default_agent_email': Config.DEFAULT_AGENT_EMAIL,
         'default_owner_email': Config.DEFAULT_OWNER_EMAIL
+    })
+
+
+# ==================== FOLDER API ENDPOINTS ====================
+
+@app.route('/api/folders', methods=['GET'])
+@login_required
+def api_get_folders():
+    """API: Get all folders"""
+    folders = ListingFolder.get_all_with_counts()
+    uncategorized_count = LocalListing.query.filter(LocalListing.folder_id.is_(None)).count()
+    return jsonify({
+        'folders': folders,
+        'uncategorized_count': uncategorized_count
+    })
+
+
+@app.route('/api/folders', methods=['POST'])
+@permission_required('create')
+def api_create_folder():
+    """API: Create a new folder"""
+    data = request.json
+    
+    if not data.get('name'):
+        return jsonify({'error': 'Folder name is required'}), 400
+    
+    folder = ListingFolder(
+        name=data['name'],
+        color=data.get('color', 'indigo'),
+        icon=data.get('icon', 'fa-folder'),
+        description=data.get('description'),
+        parent_id=data.get('parent_id')
+    )
+    db.session.add(folder)
+    db.session.commit()
+    
+    return jsonify({'folder': folder.to_dict(), 'message': 'Folder created successfully'})
+
+
+@app.route('/api/folders/<int:folder_id>', methods=['GET'])
+@login_required
+def api_get_folder(folder_id):
+    """API: Get a single folder"""
+    folder = ListingFolder.query.get_or_404(folder_id)
+    return jsonify({'folder': folder.to_dict()})
+
+
+@app.route('/api/folders/<int:folder_id>', methods=['PUT', 'PATCH'])
+@permission_required('edit')
+def api_update_folder(folder_id):
+    """API: Update a folder"""
+    folder = ListingFolder.query.get_or_404(folder_id)
+    data = request.json
+    
+    if 'name' in data:
+        folder.name = data['name']
+    if 'color' in data:
+        folder.color = data['color']
+    if 'icon' in data:
+        folder.icon = data['icon']
+    if 'description' in data:
+        folder.description = data['description']
+    if 'parent_id' in data:
+        folder.parent_id = data['parent_id']
+    
+    db.session.commit()
+    return jsonify({'folder': folder.to_dict(), 'message': 'Folder updated successfully'})
+
+
+@app.route('/api/folders/<int:folder_id>', methods=['DELETE'])
+@permission_required('delete')
+def api_delete_folder(folder_id):
+    """API: Delete a folder (moves listings to uncategorized)"""
+    folder = ListingFolder.query.get_or_404(folder_id)
+    
+    # Move all listings in this folder to uncategorized
+    LocalListing.query.filter_by(folder_id=folder_id).update({'folder_id': None})
+    
+    db.session.delete(folder)
+    db.session.commit()
+    
+    return jsonify({'message': 'Folder deleted successfully'})
+
+
+@app.route('/api/listings/move-to-folder', methods=['POST'])
+@permission_required('edit')
+def api_move_listings_to_folder():
+    """API: Move listings to a folder"""
+    data = request.json
+    listing_ids = data.get('listing_ids', [])
+    folder_id = data.get('folder_id')  # None means uncategorized
+    
+    if not listing_ids:
+        return jsonify({'error': 'No listings specified'}), 400
+    
+    # Verify folder exists if specified
+    if folder_id is not None:
+        folder = ListingFolder.query.get(folder_id)
+        if not folder:
+            return jsonify({'error': 'Folder not found'}), 404
+    
+    # Update listings
+    updated = LocalListing.query.filter(LocalListing.id.in_(listing_ids)).update(
+        {'folder_id': folder_id},
+        synchronize_session=False
+    )
+    db.session.commit()
+    
+    return jsonify({
+        'message': f'Moved {updated} listings',
+        'moved_count': updated
     })
 
 

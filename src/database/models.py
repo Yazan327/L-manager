@@ -169,6 +169,56 @@ class User(db.Model):
         }
 
 
+# ==================== LISTING FOLDERS ====================
+
+class ListingFolder(db.Model):
+    """Folders/Groups for organizing listings"""
+    __tablename__ = 'listing_folders'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    color = db.Column(db.String(20), default='indigo')  # CSS color class
+    icon = db.Column(db.String(50), default='fa-folder')  # FontAwesome icon
+    description = db.Column(db.Text, nullable=True)
+    parent_id = db.Column(db.Integer, db.ForeignKey('listing_folders.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    parent = db.relationship('ListingFolder', remote_side=[id], backref='subfolders')
+    listings = db.relationship('LocalListing', backref='folder', lazy='dynamic')
+    
+    # Available colors for folder styling
+    COLORS = ['indigo', 'blue', 'green', 'yellow', 'red', 'purple', 'pink', 'gray', 'orange', 'teal']
+    
+    # Available icons
+    ICONS = [
+        'fa-folder', 'fa-building', 'fa-home', 'fa-city', 'fa-star', 
+        'fa-heart', 'fa-fire', 'fa-bolt', 'fa-gem', 'fa-crown',
+        'fa-tag', 'fa-bookmark', 'fa-flag', 'fa-bell', 'fa-clock'
+    ]
+    
+    def to_dict(self):
+        """Convert to dictionary"""
+        return {
+            'id': self.id,
+            'name': self.name,
+            'color': self.color,
+            'icon': self.icon,
+            'description': self.description,
+            'parent_id': self.parent_id,
+            'listing_count': self.listings.count(),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+    
+    @classmethod
+    def get_all_with_counts(cls):
+        """Get all folders with listing counts"""
+        folders = cls.query.order_by(cls.name).all()
+        return [f.to_dict() for f in folders]
+
+
 # ==================== LISTINGS ====================
 
 class LocalListing(db.Model):
@@ -177,6 +227,9 @@ class LocalListing(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     reference = db.Column(db.String(50), unique=True, nullable=False)
+    
+    # Folder/Group assignment
+    folder_id = db.Column(db.Integer, db.ForeignKey('listing_folders.id'), nullable=True)
     
     # Core Details
     emirate = db.Column(db.String(50))
@@ -278,6 +331,8 @@ class LocalListing(db.Model):
             'leads': self.leads or 0,
             'status': self.status,
             'pf_listing_id': self.pf_listing_id,
+            'folder_id': self.folder_id,
+            'folder': self.folder.to_dict() if self.folder else None,
             'synced_at': self.synced_at.isoformat() if self.synced_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,

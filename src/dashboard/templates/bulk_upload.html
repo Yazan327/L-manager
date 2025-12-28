@@ -599,7 +599,7 @@
                             <tr><td class="px-4 py-2 font-medium">type <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">Property type (full name)</td><td class="px-4 py-2 text-gray-500">apartment, villa, townhouse, office-space</td></tr>
                             <tr><td class="px-4 py-2 font-medium">location_id <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">Location ID from Locations API</td><td class="px-4 py-2 text-gray-500">12345 (integer)</td></tr>
                             <tr><td class="px-4 py-2 font-medium">assigned_to_id <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">Public Profile ID of agent</td><td class="px-4 py-2 text-gray-500">123456 (integer)</td></tr>
-                            <tr><td class="px-4 py-2 font-medium">reference <span class="text-red-500">*</span></td><td class="px-4 py-2 text-gray-600">Your unique reference</td><td class="px-4 py-2 text-gray-500">REF-12345</td></tr>
+                            <tr><td class="px-4 py-2 font-medium">reference</td><td class="px-4 py-2 text-gray-600">Your unique reference (auto-generated if empty)</td><td class="px-4 py-2 text-gray-500">REF-12345</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -991,7 +991,7 @@
                         <li><strong>Same agent for all:</strong> Select "Custom Value" for assigned_agent and enter the email once</li>
                         <li><strong>Images:</strong> Separate multiple image URLs with commas or pipes (|)</li>
                         <li><strong>Amenities:</strong> Use exact values like "balcony, central-ac" - no spaces in names</li>
-                        <li><strong>Reference:</strong> Use unique references for each listing to avoid duplicates</li>
+                        <li><strong>Reference:</strong> Optional - leave empty to auto-generate unique references (LM-YYYYMMDD-XXXXX)</li>
                         <li><strong>Preview:</strong> Check the preview table before submitting to catch errors early</li>
                     </ul>
                 </div>
@@ -1034,7 +1034,7 @@ function downloadSampleJSON() {
                 bedrooms: "2",
                 bathrooms: "3",
                 size: 1450,
-                reference: "REF-001",
+                reference: "REF-001",  // Optional - auto-generated if empty
                 compliance: {
                     type: "rera",
                     listingAdvertisementNumber: "7116777484"
@@ -1137,7 +1137,7 @@ document.addEventListener('alpine:init', () => {
             { key: 'location_text', label: 'Location (Text)', description: 'Building, Area, City - will auto-search for Location ID', required: false, autoMap: ['location', 'adrees', 'address', 'area', 'community', 'tower', 'building'] },
             { key: 'location_id', label: 'Location ID (Optional)', description: 'If you have the ID, otherwise use Location Text', required: false, autoMap: ['location_id', 'locationid'] },
             { key: 'assigned_to_id', label: 'Assigned Agent ID', description: 'Uses default from Settings if not mapped', required: false, autoMap: ['assigned_to_id', 'agent_id', 'agent'] },
-            { key: 'reference', label: 'Reference', description: 'Your unique reference (max 50 chars)', required: true, autoMap: ['reference', 'ref', 'listing_id', 'external_reference', 'unit number'] },
+            { key: 'reference', label: 'Reference', description: 'Your unique reference (max 50 chars) - auto-generated if empty', required: false, autoMap: ['reference', 'ref', 'listing_id', 'external_reference', 'unit number', 'id'] },
             { key: 'availableFrom', label: 'Available From', description: 'Date (YYYY-MM-DD) or leave empty', required: false, autoMap: ['availablefrom', 'available_from', 'availability'] }
         ],
         specFields: [
@@ -1647,7 +1647,16 @@ document.addEventListener('alpine:init', () => {
                 pfListing.category = residentialTypes.includes(pfListing.type) ? 'residential' : 'commercial';
             }
             
-            if (listing.reference) pfListing.reference = String(listing.reference).substring(0, 50);
+            // Reference - auto-generate if not provided
+            if (listing.reference && String(listing.reference).trim()) {
+                pfListing.reference = String(listing.reference).trim().substring(0, 50);
+            } else {
+                // Auto-generate unique reference: LM-YYYYMMDD-XXXXX
+                const now = new Date();
+                const dateStr = now.toISOString().slice(0,10).replace(/-/g, '');
+                const randomStr = Math.random().toString(36).substring(2, 7).toUpperCase();
+                pfListing.reference = `LM-${dateStr}-${randomStr}`;
+            }
             if (listing.availableFrom) pfListing.availableFrom = listing.availableFrom;
             
             // Location - try ID first, then search by text

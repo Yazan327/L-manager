@@ -5,9 +5,90 @@
 
 {% block content %}
 <div x-data="listingsPage()" x-init="init()">
+    <div class="flex gap-6">
+        <!-- Folder Sidebar -->
+        <div class="w-64 flex-shrink-0" x-show="showFolderSidebar" x-transition>
+            <div class="bg-white rounded-lg shadow p-4">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="font-semibold text-gray-800">
+                        <i class="fas fa-folder-tree mr-2 text-indigo-600"></i>Folders
+                    </h3>
+                    <button @click="showCreateFolderModal = true" 
+                            class="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="New Folder">
+                        <i class="fas fa-plus"></i>
+                    </button>
+                </div>
+                
+                <!-- All Listings -->
+                <a href="{{ url_for('listings') }}" 
+                   class="flex items-center justify-between px-3 py-2 rounded-lg mb-1 transition
+                          {% if not folder_id and request.args.get('folder_id') != '0' %}bg-indigo-50 text-indigo-700{% else %}hover:bg-gray-50 text-gray-700{% endif %}">
+                    <span><i class="fas fa-list mr-2"></i>All Listings</span>
+                    <span class="text-xs bg-gray-100 px-2 py-0.5 rounded-full">{{ pagination.total if pagination else 0 }}</span>
+                </a>
+                
+                <!-- Uncategorized -->
+                <a href="{{ url_for('listings', folder_id=0) }}" 
+                   class="flex items-center justify-between px-3 py-2 rounded-lg mb-1 transition
+                          {% if request.args.get('folder_id') == '0' %}bg-indigo-50 text-indigo-700{% else %}hover:bg-gray-50 text-gray-700{% endif %}">
+                    <span><i class="fas fa-inbox mr-2 text-gray-400"></i>Uncategorized</span>
+                    <span class="text-xs bg-gray-100 px-2 py-0.5 rounded-full">{{ uncategorized_count }}</span>
+                </a>
+                
+                <hr class="my-3">
+                
+                <!-- Folder List -->
+                <div class="space-y-1">
+                    {% for folder in folders %}
+                    <div class="group relative">
+                        <a href="{{ url_for('listings', folder_id=folder.id) }}" 
+                           class="flex items-center justify-between px-3 py-2 rounded-lg transition
+                                  {% if folder_id == folder.id %}bg-{{ folder.color }}-50 text-{{ folder.color }}-700{% else %}hover:bg-gray-50 text-gray-700{% endif %}">
+                            <span>
+                                <i class="fas {{ folder.icon }} mr-2 text-{{ folder.color }}-500"></i>
+                                {{ folder.name }}
+                            </span>
+                            <span class="text-xs bg-gray-100 px-2 py-0.5 rounded-full">{{ folder.listing_count }}</span>
+                        </a>
+                        <!-- Folder actions (show on hover) -->
+                        <div class="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1">
+                            <button @click.prevent="editFolder({{ folder | tojson | e }})" 
+                                    class="p-1 text-gray-400 hover:text-indigo-600 hover:bg-white rounded">
+                                <i class="fas fa-edit text-xs"></i>
+                            </button>
+                            <button @click.prevent="deleteFolder({{ folder.id }})" 
+                                    class="p-1 text-gray-400 hover:text-red-600 hover:bg-white rounded">
+                                <i class="fas fa-trash text-xs"></i>
+                            </button>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                
+                {% if not folders %}
+                <p class="text-sm text-gray-500 text-center py-4">
+                    No folders yet.<br>
+                    <button @click="showCreateFolderModal = true" class="text-indigo-600 hover:underline mt-1">
+                        Create your first folder
+                    </button>
+                </p>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- Main Content -->
+        <div class="flex-1 min-w-0">
     <!-- Header Actions -->
     <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
         <div class="flex flex-wrap items-center gap-3">
+            <!-- Toggle Folders Sidebar -->
+            <button @click="showFolderSidebar = !showFolderSidebar" 
+                    class="p-2 border border-gray-300 rounded-lg hover:bg-gray-50" 
+                    :class="showFolderSidebar ? 'bg-indigo-50 border-indigo-300' : ''"
+                    title="Toggle Folders">
+                <i class="fas fa-folder-tree"></i>
+            </button>
+            
             <!-- Search -->
             <div class="relative">
                 <input type="text" placeholder="Search listings..." 
@@ -58,6 +139,33 @@
             <i class="fas fa-plus mr-2"></i>New Listing
         </a>
     </div>
+    
+    <!-- Current Folder Header -->
+    {% if current_folder %}
+    <div class="mb-4 flex items-center gap-3 px-4 py-3 bg-{{ current_folder.color }}-50 rounded-lg border border-{{ current_folder.color }}-200">
+        <i class="fas {{ current_folder.icon }} text-{{ current_folder.color }}-600 text-xl"></i>
+        <div>
+            <h2 class="font-semibold text-{{ current_folder.color }}-800">{{ current_folder.name }}</h2>
+            {% if current_folder.description %}
+            <p class="text-sm text-{{ current_folder.color }}-600">{{ current_folder.description }}</p>
+            {% endif %}
+        </div>
+        <a href="{{ url_for('listings') }}" class="ml-auto text-sm text-{{ current_folder.color }}-600 hover:text-{{ current_folder.color }}-800">
+            <i class="fas fa-times mr-1"></i>Clear folder filter
+        </a>
+    </div>
+    {% elif request.args.get('folder_id') == '0' %}
+    <div class="mb-4 flex items-center gap-3 px-4 py-3 bg-gray-50 rounded-lg border border-gray-200">
+        <i class="fas fa-inbox text-gray-500 text-xl"></i>
+        <div>
+            <h2 class="font-semibold text-gray-800">Uncategorized</h2>
+            <p class="text-sm text-gray-600">Listings not assigned to any folder</p>
+        </div>
+        <a href="{{ url_for('listings') }}" class="ml-auto text-sm text-gray-600 hover:text-gray-800">
+            <i class="fas fa-times mr-1"></i>Clear folder filter
+        </a>
+    </div>
+    {% endif %}
     
     <!-- Results Summary -->
     <div class="mb-4 flex items-center justify-between">
@@ -130,7 +238,14 @@
                                     {% set title = listing.title_en or listing.title or 'Untitled' %}
                                     <a href="{{ url_for('view_listing', listing_id=listing.id) }}" 
                                        class="text-sm font-medium text-gray-900 hover:text-indigo-600 truncate block max-w-[180px]">{{ title }}</a>
-                                    <div class="text-xs text-gray-500 font-mono">{{ listing.reference or 'No ref' }}</div>
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-xs text-gray-500 font-mono">{{ listing.reference or 'No ref' }}</span>
+                                        {% if listing.folder %}
+                                        <span class="inline-flex items-center text-xs px-1.5 py-0.5 rounded bg-{{ listing.folder.color }}-100 text-{{ listing.folder.color }}-700">
+                                            <i class="fas {{ listing.folder.icon }} mr-1 text-[10px]"></i>{{ listing.folder.name }}
+                                        </span>
+                                        {% endif %}
+                                    </div>
                                 </div>
                             </div>
                         </td>
@@ -258,6 +373,7 @@
     
     <!-- Pagination -->
     {% if pagination and pagination.total > 0 %}
+    {% set folder_param = '&folder_id=' ~ folder_id if folder_id is not none else ('&folder_id=0' if request.args.get('folder_id') == '0' else '') %}
     <div class="mt-6 flex flex-col sm:flex-row items-center justify-between gap-4">
         <div class="text-sm text-gray-600">
             {% set start_item = ((page - 1) * per_page) + 1 %}
@@ -268,14 +384,14 @@
         
         <div class="flex items-center space-x-1">
             <!-- First Page -->
-            <a href="?page=1&per_page={{ per_page }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}&status={{ status }}&search={{ search }}" 
+            <a href="?page=1&per_page={{ per_page }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}&status={{ status }}&search={{ search }}{{ folder_param }}" 
                class="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 {% if page == 1 %}opacity-50 pointer-events-none{% endif %}"
                title="First page">
                 <i class="fas fa-angle-double-left"></i>
             </a>
             
             <!-- Previous -->
-            <a href="?page={{ page - 1 }}&per_page={{ per_page }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}&status={{ status }}&search={{ search }}" 
+            <a href="?page={{ page - 1 }}&per_page={{ per_page }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}&status={{ status }}&search={{ search }}{{ folder_param }}" 
                class="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 {% if page == 1 %}opacity-50 pointer-events-none{% endif %}">
                 <i class="fas fa-chevron-left"></i>
             </a>
@@ -284,7 +400,7 @@
             {% set last_page = pagination.last_page %}
             {% for p in range(1, last_page + 1) %}
                 {% if p == 1 or p == last_page or (p >= page - 2 and p <= page + 2) %}
-                <a href="?page={{ p }}&per_page={{ per_page }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}&status={{ status }}&search={{ search }}" 
+                <a href="?page={{ p }}&per_page={{ per_page }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}&status={{ status }}&search={{ search }}{{ folder_param }}" 
                    class="px-4 py-2 border rounded-lg {% if p == page %}bg-indigo-600 text-white border-indigo-600{% else %}border-gray-300 hover:bg-gray-50{% endif %}">
                     {{ p }}
                 </a>
@@ -294,13 +410,13 @@
             {% endfor %}
             
             <!-- Next -->
-            <a href="?page={{ page + 1 }}&per_page={{ per_page }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}&status={{ status }}&search={{ search }}" 
+            <a href="?page={{ page + 1 }}&per_page={{ per_page }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}&status={{ status }}&search={{ search }}{{ folder_param }}" 
                class="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 {% if page >= last_page %}opacity-50 pointer-events-none{% endif %}">
                 <i class="fas fa-chevron-right"></i>
             </a>
             
             <!-- Last Page -->
-            <a href="?page={{ last_page }}&per_page={{ per_page }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}&status={{ status }}&search={{ search }}" 
+            <a href="?page={{ last_page }}&per_page={{ per_page }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}&status={{ status }}&search={{ search }}{{ folder_param }}" 
                class="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 {% if page >= last_page %}opacity-50 pointer-events-none{% endif %}"
                title="Last page">
                 <i class="fas fa-angle-double-right"></i>
@@ -316,6 +432,27 @@
          class="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-gray-900 text-white px-6 py-3 rounded-lg shadow-lg flex items-center space-x-4 z-50">
         <span class="font-medium"><span x-text="selectedIds.length"></span> selected</span>
         <div class="h-6 w-px bg-gray-600"></div>
+        <!-- Move to Folder Button -->
+        <div class="relative" x-data="{ showFolderDropdown: false }">
+            <button @click="showFolderDropdown = !showFolderDropdown" 
+                    class="px-3 py-1.5 bg-indigo-600 rounded hover:bg-indigo-700 transition">
+                <i class="fas fa-folder mr-1"></i>Move to Folder
+            </button>
+            <div x-show="showFolderDropdown" @click.away="showFolderDropdown = false"
+                 class="absolute bottom-full left-0 mb-2 w-48 bg-white rounded-lg shadow-lg py-2 text-gray-700">
+                <button @click="moveToFolder(null); showFolderDropdown = false" 
+                        class="w-full text-left px-4 py-2 hover:bg-gray-100">
+                    <i class="fas fa-inbox mr-2 text-gray-400"></i>Uncategorized
+                </button>
+                {% for folder in folders %}
+                <button @click="moveToFolder({{ folder.id }}); showFolderDropdown = false" 
+                        class="w-full text-left px-4 py-2 hover:bg-gray-100">
+                    <i class="fas {{ folder.icon }} mr-2 text-{{ folder.color }}-500"></i>{{ folder.name }}
+                </button>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="h-6 w-px bg-gray-600"></div>
         <button @click="bulkPublish()" class="px-3 py-1.5 bg-green-600 rounded hover:bg-green-700 transition">
             <i class="fas fa-check-circle mr-1"></i>Publish
         </button>
@@ -328,6 +465,80 @@
         <button @click="selectedIds = []" class="ml-2 text-gray-400 hover:text-white transition">
             <i class="fas fa-times text-lg"></i>
         </button>
+    </div>
+    
+        </div><!-- End Main Content -->
+    </div><!-- End Flex Container -->
+    
+    <!-- Create/Edit Folder Modal -->
+    <div x-show="showCreateFolderModal || showEditFolderModal" 
+         x-cloak
+         class="fixed inset-0 z-50 overflow-y-auto"
+         @keydown.escape.window="showCreateFolderModal = false; showEditFolderModal = false">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center">
+            <div class="fixed inset-0 transition-opacity bg-gray-500 bg-opacity-75" @click="showCreateFolderModal = false; showEditFolderModal = false"></div>
+            
+            <div class="relative inline-block w-full max-w-md p-6 my-8 text-left align-middle transition-all transform bg-white shadow-xl rounded-2xl">
+                <h3 class="text-lg font-semibold text-gray-900 mb-4" x-text="showEditFolderModal ? 'Edit Folder' : 'Create New Folder'"></h3>
+                
+                <form @submit.prevent="saveFolder()">
+                    <!-- Folder Name -->
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Folder Name</label>
+                        <input type="text" x-model="folderForm.name" required
+                               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                               placeholder="e.g., Hot Properties">
+                    </div>
+                    
+                    <!-- Color -->
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Color</label>
+                        <div class="flex flex-wrap gap-2">
+                            <template x-for="color in folderColors">
+                                <button type="button" @click="folderForm.color = color"
+                                        class="w-8 h-8 rounded-full border-2 transition"
+                                        :class="folderForm.color === color ? 'border-gray-800 scale-110' : 'border-transparent'"
+                                        :style="'background-color: var(--color-' + color + '-500, ' + getColorHex(color) + ')'">
+                                </button>
+                            </template>
+                        </div>
+                    </div>
+                    
+                    <!-- Icon -->
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Icon</label>
+                        <div class="flex flex-wrap gap-2">
+                            <template x-for="icon in folderIcons">
+                                <button type="button" @click="folderForm.icon = icon"
+                                        class="w-10 h-10 rounded-lg border-2 flex items-center justify-center transition"
+                                        :class="folderForm.icon === icon ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'">
+                                    <i :class="'fas ' + icon" class="text-gray-600"></i>
+                                </button>
+                            </template>
+                        </div>
+                    </div>
+                    
+                    <!-- Description -->
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Description (optional)</label>
+                        <textarea x-model="folderForm.description" rows="2"
+                                  class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                                  placeholder="Brief description..."></textarea>
+                    </div>
+                    
+                    <!-- Actions -->
+                    <div class="flex justify-end gap-3 mt-6">
+                        <button type="button" @click="showCreateFolderModal = false; showEditFolderModal = false"
+                                class="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200">
+                            Cancel
+                        </button>
+                        <button type="submit" class="px-4 py-2 text-white bg-indigo-600 rounded-lg hover:bg-indigo-700">
+                            <span x-text="showEditFolderModal ? 'Save Changes' : 'Create Folder'"></span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
     </div>
 </div>
 {% endblock %}
@@ -345,8 +556,117 @@ function listingsPage() {
         pagination: {{ pagination | tojson | safe if pagination else '{}' }},
         selectedIds: [],
         
+        // Folder state
+        showFolderSidebar: localStorage.getItem('showFolderSidebar') !== 'false',
+        showCreateFolderModal: false,
+        showEditFolderModal: false,
+        editingFolderId: null,
+        folderForm: {
+            name: '',
+            color: 'indigo',
+            icon: 'fa-folder',
+            description: ''
+        },
+        folderColors: ['indigo', 'blue', 'green', 'yellow', 'red', 'purple', 'pink', 'gray', 'orange', 'teal'],
+        folderIcons: ['fa-folder', 'fa-building', 'fa-home', 'fa-city', 'fa-star', 'fa-heart', 'fa-fire', 'fa-bolt', 'fa-gem', 'fa-crown', 'fa-tag', 'fa-bookmark', 'fa-flag', 'fa-bell', 'fa-clock'],
+        
         init() {
-            // Initialize from URL params if needed
+            // Watch folder sidebar toggle
+            this.$watch('showFolderSidebar', (val) => {
+                localStorage.setItem('showFolderSidebar', val);
+            });
+        },
+        
+        getColorHex(color) {
+            const colors = {
+                indigo: '#6366f1', blue: '#3b82f6', green: '#22c55e', 
+                yellow: '#eab308', red: '#ef4444', purple: '#a855f7',
+                pink: '#ec4899', gray: '#6b7280', orange: '#f97316', teal: '#14b8a6'
+            };
+            return colors[color] || '#6366f1';
+        },
+        
+        resetFolderForm() {
+            this.folderForm = { name: '', color: 'indigo', icon: 'fa-folder', description: '' };
+            this.editingFolderId = null;
+        },
+        
+        editFolder(folder) {
+            this.folderForm = {
+                name: folder.name,
+                color: folder.color,
+                icon: folder.icon,
+                description: folder.description || ''
+            };
+            this.editingFolderId = folder.id;
+            this.showEditFolderModal = true;
+        },
+        
+        async saveFolder() {
+            const url = this.editingFolderId 
+                ? `/api/folders/${this.editingFolderId}` 
+                : '/api/folders';
+            const method = this.editingFolderId ? 'PUT' : 'POST';
+            
+            try {
+                const response = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.folderForm)
+                });
+                
+                if (response.ok) {
+                    this.showCreateFolderModal = false;
+                    this.showEditFolderModal = false;
+                    this.resetFolderForm();
+                    location.reload();
+                } else {
+                    const data = await response.json();
+                    alert(data.error || 'Failed to save folder');
+                }
+            } catch (e) {
+                alert('Failed to save folder');
+            }
+        },
+        
+        async deleteFolder(folderId) {
+            if (!confirm('Delete this folder? Listings will be moved to Uncategorized.')) return;
+            
+            try {
+                const response = await fetch(`/api/folders/${folderId}`, { method: 'DELETE' });
+                if (response.ok) {
+                    location.reload();
+                } else {
+                    alert('Failed to delete folder');
+                }
+            } catch (e) {
+                alert('Failed to delete folder');
+            }
+        },
+        
+        async moveToFolder(folderId) {
+            if (this.selectedIds.length === 0) return;
+            
+            try {
+                const response = await fetch('/api/listings/move-to-folder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        listing_ids: this.selectedIds.map(id => parseInt(id)),
+                        folder_id: folderId
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    this.selectedIds = [];
+                    location.reload();
+                } else {
+                    alert('Failed to move listings');
+                }
+            } catch (e) {
+                alert('Failed to move listings');
+            }
         },
         
         applyFilters() {
@@ -357,6 +677,9 @@ function listingsPage() {
             params.set('sort_order', this.sortOrder);
             if (this.filterStatus) params.set('status', this.filterStatus);
             if (this.searchQuery) params.set('search', this.searchQuery);
+            // Preserve folder_id if set
+            const currentFolderId = new URLSearchParams(window.location.search).get('folder_id');
+            if (currentFolderId !== null) params.set('folder_id', currentFolderId);
             window.location.href = '?' + params.toString();
         },
         
