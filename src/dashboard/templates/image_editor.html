@@ -629,10 +629,15 @@ function imageEditor() {
                 const data = await response.json();
                 
                 if (response.ok && data.success) {
-                    this.assignMessage = `Successfully assigned ${data.count} images to listing ${this.selectedListing.reference}`;
+                    this.assignMessage = `Successfully assigned ${data.images_added} images to listing ${this.selectedListing.reference}. Total: ${data.total_images}`;
                     this.assignSuccess = true;
                     // Clear selection after successful assignment
                     this.selectedImages = [];
+                    // Update the listing's image count in our local list
+                    const listingIndex = this.listings.findIndex(l => l.id === this.selectedListing.id);
+                    if (listingIndex !== -1) {
+                        this.listings[listingIndex].image_count = data.total_images;
+                    }
                 } else {
                     this.assignMessage = data.error || 'Failed to assign images';
                     this.assignSuccess = false;
