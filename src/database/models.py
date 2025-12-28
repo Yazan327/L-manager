@@ -290,6 +290,50 @@ class LocalListing(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
+    def _parse_images(self):
+        """Parse images from various storage formats and return URLs"""
+        import json
+        
+        if not self.images:
+            return []
+        
+        images = []
+        
+        # Try JSON format first (new format from image editor)
+        try:
+            parsed = json.loads(self.images)
+            if isinstance(parsed, list):
+                images = parsed
+        except (json.JSONDecodeError, TypeError):
+            # Fall back to pipe-separated format (legacy)
+            images = self.images.split('|') if self.images else []
+        
+        # Convert relative paths to URLs
+        result = []
+        for img in images:
+            if isinstance(img, str):
+                # If it's a relative path (e.g., "listings/123/img.jpg"), prefix with /uploads/
+                if img.startswith('listings/') or img.startswith('uploads/'):
+                    if not img.startswith('/'):
+                        img = '/uploads/' + img.lstrip('uploads/')
+                    result.append(img)
+                elif img.startswith('http'):
+                    # Already a full URL
+                    result.append(img)
+                elif img.startswith('/'):
+                    # Already an absolute path
+                    result.append(img)
+                else:
+                    # Assume it's a relative path, prefix with /uploads/
+                    result.append('/uploads/' + img)
+            elif isinstance(img, dict):
+                # Handle PropertyFinder format: {original: {url: "..."}}
+                url = img.get('url') or (img.get('original', {}).get('url') if img.get('original') else None)
+                if url:
+                    result.append(url)
+        
+        return result
+    
     def to_dict(self):
         """Convert to dictionary"""
         return {
@@ -317,7 +361,7 @@ class LocalListing(db.Model):
             'title_ar': self.title_ar,
             'description_en': self.description_en,
             'description_ar': self.description_ar,
-            'images': self.images.split('|') if self.images else [],
+            'images': self._parse_images(),
             'video_tour': self.video_tour,
             'video_360': self.video_360,
             'amenities': self.amenities.split(',') if self.amenities else [],
