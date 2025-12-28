@@ -1,0 +1,506 @@
+{% extends "base.html" %}
+
+{% block title %}Storage - L-Manager{% endblock %}
+{% block page_title %}Storage Management{% endblock %}
+
+{% block content %}
+<div x-data="storageManager()" x-init="init()" class="space-y-6">
+    
+    <!-- Storage Overview -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="bg-white rounded-lg shadow p-4">
+            <div class="flex items-center">
+                <div class="p-3 bg-blue-100 rounded-full">
+                    <i class="fas fa-hdd text-blue-600"></i>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm text-gray-500">Total Used</p>
+                    <p class="text-2xl font-bold text-gray-800" x-text="storageInfo.total?.size || '-'">-</p>
+                </div>
+            </div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-4">
+            <div class="flex items-center">
+                <div class="p-3 bg-green-100 rounded-full">
+                    <i class="fas fa-check-circle text-green-600"></i>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm text-gray-500">Volume Free</p>
+                    <p class="text-2xl font-bold text-gray-800" x-text="storageInfo.volume?.free || 'N/A'">-</p>
+                </div>
+            </div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-4">
+            <div class="flex items-center">
+                <div class="p-3 bg-purple-100 rounded-full">
+                    <i class="fas fa-images text-purple-600"></i>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm text-gray-500">Total Files</p>
+                    <p class="text-2xl font-bold text-gray-800" x-text="storageInfo.total?.file_count || 0">0</p>
+                </div>
+            </div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-4">
+            <div class="flex items-center">
+                <div class="p-3 bg-orange-100 rounded-full">
+                    <i class="fas fa-percentage text-orange-600"></i>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm text-gray-500">Volume Used</p>
+                    <p class="text-2xl font-bold text-gray-800" x-text="storageInfo.volume?.used_percent ? storageInfo.volume.used_percent + '%' : 'N/A'">-</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Volume Progress Bar -->
+    <div class="bg-white rounded-lg shadow p-4" x-show="storageInfo.volume">
+        <div class="flex justify-between text-sm text-gray-600 mb-2">
+            <span>Storage Usage</span>
+            <span x-text="storageInfo.volume?.used + ' / ' + storageInfo.volume?.total"></span>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-4">
+            <div class="h-4 rounded-full transition-all duration-500"
+                 :class="storageInfo.volume?.used_percent > 90 ? 'bg-red-500' : storageInfo.volume?.used_percent > 70 ? 'bg-yellow-500' : 'bg-green-500'"
+                 :style="'width: ' + (storageInfo.volume?.used_percent || 0) + '%'">
+            </div>
+        </div>
+    </div>
+    
+    <!-- Actions Bar -->
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center space-x-4">
+                <button @click="loadStorage()" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-700">
+                    <i class="fas fa-sync-alt mr-2" :class="loading && 'animate-spin'"></i>
+                    Refresh
+                </button>
+                <select x-model="viewMode" class="px-3 py-2 border border-gray-300 rounded-lg">
+                    <option value="all">All Files</option>
+                    <option value="listings">Listing Images</option>
+                    <option value="processed">Processed Images</option>
+                    <option value="temp">Temp Files</option>
+                    <option value="logos">Logos</option>
+                </select>
+            </div>
+            <div class="flex items-center space-x-4">
+                <button @click="cleanupTemp()" 
+                        class="px-4 py-2 bg-yellow-100 hover:bg-yellow-200 text-yellow-800 rounded-lg"
+                        :disabled="cleaning">
+                    <i class="fas fa-broom mr-2"></i>
+                    Clean Temp Files
+                </button>
+                <button @click="cleanupOrphaned()" 
+                        class="px-4 py-2 bg-orange-100 hover:bg-orange-200 text-orange-800 rounded-lg"
+                        :disabled="cleaning">
+                    <i class="fas fa-trash-alt mr-2"></i>
+                    Clean Orphaned
+                </button>
+                <button @click="deleteSelected()" 
+                        x-show="selectedFiles.length > 0"
+                        class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg">
+                    <i class="fas fa-trash mr-2"></i>
+                    Delete Selected (<span x-text="selectedFiles.length"></span>)
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Directory Breakdown -->
+    <div class="bg-white rounded-lg shadow overflow-hidden">
+        <div class="px-6 py-4 border-b bg-gray-50">
+            <h3 class="text-lg font-semibold">Directory Breakdown</h3>
+        </div>
+        <div class="divide-y">
+            <template x-for="(info, name) in storageInfo.directories" :key="name">
+                <div class="px-6 py-3 flex items-center justify-between hover:bg-gray-50">
+                    <div class="flex items-center">
+                        <i class="fas fa-folder text-yellow-500 mr-3"></i>
+                        <span class="font-medium" x-text="name"></span>
+                    </div>
+                    <div class="flex items-center space-x-6 text-sm">
+                        <span class="text-gray-500" x-text="info.file_count + ' files'"></span>
+                        <span class="font-medium" x-text="info.size"></span>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+    
+    <!-- Files List -->
+    <div class="bg-white rounded-lg shadow overflow-hidden">
+        <div class="px-6 py-4 border-b bg-gray-50 flex justify-between items-center">
+            <h3 class="text-lg font-semibold">
+                Files
+                <span class="text-sm font-normal text-gray-500" x-text="'(' + filteredFiles.length + ' files)'"></span>
+            </h3>
+            <div class="flex items-center space-x-4">
+                <input type="text" 
+                       x-model="searchQuery"
+                       placeholder="Search files..."
+                       class="px-3 py-2 border border-gray-300 rounded-lg text-sm w-64">
+                <label class="flex items-center text-sm text-gray-600">
+                    <input type="checkbox" x-model="selectAll" @change="toggleSelectAll()" class="mr-2">
+                    Select All
+                </label>
+            </div>
+        </div>
+        
+        <!-- File Grid -->
+        <div class="p-4">
+            <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                <template x-for="file in paginatedFiles" :key="file.path">
+                    <div class="relative group border rounded-lg overflow-hidden hover:shadow-lg transition-shadow"
+                         :class="selectedFiles.includes(file.path) ? 'ring-2 ring-indigo-500' : ''">
+                        <!-- Checkbox -->
+                        <div class="absolute top-2 left-2 z-10">
+                            <input type="checkbox" 
+                                   :checked="selectedFiles.includes(file.path)"
+                                   @change="toggleFileSelection(file.path)"
+                                   class="h-4 w-4 text-indigo-600 border-gray-300 rounded">
+                        </div>
+                        
+                        <!-- Image Preview or Icon -->
+                        <div class="aspect-square bg-gray-100 flex items-center justify-center cursor-pointer"
+                             @click="previewFile(file)">
+                            <template x-if="isImage(file.name)">
+                                <img :src="getFileUrl(file)" 
+                                     class="w-full h-full object-cover"
+                                     loading="lazy"
+                                     @error="$event.target.style.display='none'">
+                            </template>
+                            <template x-if="!isImage(file.name)">
+                                <i class="fas fa-file text-4xl text-gray-400"></i>
+                            </template>
+                        </div>
+                        
+                        <!-- File Info -->
+                        <div class="p-2 bg-white">
+                            <p class="text-xs font-medium truncate" x-text="file.name" :title="file.name"></p>
+                            <p class="text-xs text-gray-500" x-text="file.size_mb + ' MB'"></p>
+                        </div>
+                        
+                        <!-- Hover Actions -->
+                        <div class="absolute inset-0 bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center space-x-2">
+                            <button @click="previewFile(file)" class="p-2 bg-white rounded-full hover:bg-gray-100">
+                                <i class="fas fa-eye text-gray-700"></i>
+                            </button>
+                            <button @click="deleteFile(file)" class="p-2 bg-white rounded-full hover:bg-gray-100">
+                                <i class="fas fa-trash text-red-600"></i>
+                            </button>
+                            <a :href="getFileUrl(file)" download class="p-2 bg-white rounded-full hover:bg-gray-100">
+                                <i class="fas fa-download text-blue-600"></i>
+                            </a>
+                        </div>
+                    </div>
+                </template>
+            </div>
+            
+            <!-- Empty State -->
+            <template x-if="filteredFiles.length === 0 && !loading">
+                <div class="text-center py-12 text-gray-500">
+                    <i class="fas fa-folder-open text-4xl mb-4"></i>
+                    <p>No files found</p>
+                </div>
+            </template>
+            
+            <!-- Loading -->
+            <template x-if="loading">
+                <div class="text-center py-12">
+                    <i class="fas fa-spinner fa-spin text-4xl text-indigo-600"></i>
+                    <p class="mt-2 text-gray-500">Loading files...</p>
+                </div>
+            </template>
+        </div>
+        
+        <!-- Pagination -->
+        <div class="px-6 py-4 border-t bg-gray-50 flex justify-between items-center" x-show="totalPages > 1">
+            <span class="text-sm text-gray-600">
+                Showing <span x-text="(currentPage - 1) * perPage + 1"></span> - <span x-text="Math.min(currentPage * perPage, filteredFiles.length)"></span> of <span x-text="filteredFiles.length"></span>
+            </span>
+            <div class="flex items-center space-x-2">
+                <button @click="currentPage = Math.max(1, currentPage - 1)" 
+                        :disabled="currentPage === 1"
+                        class="px-3 py-1 border rounded hover:bg-gray-100 disabled:opacity-50">
+                    <i class="fas fa-chevron-left"></i>
+                </button>
+                <span class="px-3 py-1" x-text="currentPage + ' / ' + totalPages"></span>
+                <button @click="currentPage = Math.min(totalPages, currentPage + 1)" 
+                        :disabled="currentPage === totalPages"
+                        class="px-3 py-1 border rounded hover:bg-gray-100 disabled:opacity-50">
+                    <i class="fas fa-chevron-right"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- File Preview Modal -->
+    <div x-show="showPreview" 
+         x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-75"
+         @click.self="showPreview = false"
+         @keydown.escape.window="showPreview = false">
+        <div class="relative max-w-4xl max-h-[90vh] bg-white rounded-lg overflow-hidden">
+            <button @click="showPreview = false" class="absolute top-4 right-4 text-white bg-black bg-opacity-50 rounded-full w-8 h-8 flex items-center justify-center hover:bg-opacity-75 z-10">
+                <i class="fas fa-times"></i>
+            </button>
+            <template x-if="previewingFile && isImage(previewingFile.name)">
+                <img :src="getFileUrl(previewingFile)" class="max-w-full max-h-[85vh] object-contain">
+            </template>
+            <div class="p-4 bg-white border-t">
+                <p class="font-medium" x-text="previewingFile?.name"></p>
+                <p class="text-sm text-gray-500">
+                    <span x-text="previewingFile?.size_mb + ' MB'"></span> • 
+                    <span x-text="previewingFile?.path"></span>
+                </p>
+                <div class="mt-2 flex space-x-2">
+                    <a :href="getFileUrl(previewingFile)" download class="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">
+                        <i class="fas fa-download mr-1"></i> Download
+                    </a>
+                    <button @click="deleteFile(previewingFile); showPreview = false;" class="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700">
+                        <i class="fas fa-trash mr-1"></i> Delete
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Toast -->
+    <div x-show="toast.show" 
+         x-transition
+         class="fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg"
+         :class="toast.type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'">
+        <span x-text="toast.message"></span>
+    </div>
+</div>
+
+<script>
+function storageManager() {
+    return {
+        storageInfo: {},
+        allFiles: [],
+        selectedFiles: [],
+        loading: true,
+        cleaning: false,
+        searchQuery: '',
+        viewMode: 'all',
+        selectAll: false,
+        currentPage: 1,
+        perPage: 24,
+        showPreview: false,
+        previewingFile: null,
+        toast: { show: false, message: '', type: 'success' },
+        
+        init() {
+            this.loadStorage();
+        },
+        
+        async loadStorage() {
+            this.loading = true;
+            try {
+                const resp = await fetch('/api/storage');
+                const data = await resp.json();
+                this.storageInfo = data;
+                this.allFiles = data.largest_files || [];
+                
+                // Load all files if we need more
+                if (this.allFiles.length < 100) {
+                    await this.loadAllFiles();
+                }
+            } catch (e) {
+                console.error('Failed to load storage:', e);
+                this.showToast('Failed to load storage info', 'error');
+            }
+            this.loading = false;
+        },
+        
+        async loadAllFiles() {
+            try {
+                const resp = await fetch('/api/storage/files');
+                const data = await resp.json();
+                if (data.success) {
+                    this.allFiles = data.files;
+                }
+            } catch (e) {
+                console.error('Failed to load files:', e);
+            }
+        },
+        
+        get filteredFiles() {
+            let files = this.allFiles;
+            
+            // Filter by view mode
+            if (this.viewMode !== 'all') {
+                const modeFilters = {
+                    'listings': '/listings/',
+                    'processed': '/processed/',
+                    'temp': '/temp/',
+                    'logos': '/logos/'
+                };
+                const filter = modeFilters[this.viewMode];
+                if (filter) {
+                    files = files.filter(f => f.path.includes(filter));
+                }
+            }
+            
+            // Filter by search
+            if (this.searchQuery.trim()) {
+                const query = this.searchQuery.toLowerCase();
+                files = files.filter(f => 
+                    f.name.toLowerCase().includes(query) || 
+                    f.path.toLowerCase().includes(query)
+                );
+            }
+            
+            return files;
+        },
+        
+        get totalPages() {
+            return Math.ceil(this.filteredFiles.length / this.perPage);
+        },
+        
+        get paginatedFiles() {
+            const start = (this.currentPage - 1) * this.perPage;
+            return this.filteredFiles.slice(start, start + this.perPage);
+        },
+        
+        isImage(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext);
+        },
+        
+        getFileUrl(file) {
+            // Convert absolute path to URL
+            const path = file.path;
+            if (path.includes('/uploads/')) {
+                const relativePath = path.split('/uploads/').pop();
+                return '/uploads/' + relativePath;
+            }
+            return path;
+        },
+        
+        toggleFileSelection(path) {
+            const idx = this.selectedFiles.indexOf(path);
+            if (idx === -1) {
+                this.selectedFiles.push(path);
+            } else {
+                this.selectedFiles.splice(idx, 1);
+            }
+        },
+        
+        toggleSelectAll() {
+            if (this.selectAll) {
+                this.selectedFiles = this.filteredFiles.map(f => f.path);
+            } else {
+                this.selectedFiles = [];
+            }
+        },
+        
+        previewFile(file) {
+            this.previewingFile = file;
+            this.showPreview = true;
+        },
+        
+        async deleteFile(file) {
+            if (!confirm(`Delete ${file.name}?`)) return;
+            
+            try {
+                const resp = await fetch('/api/storage/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ paths: [file.path] })
+                });
+                const data = await resp.json();
+                
+                if (data.success) {
+                    this.allFiles = this.allFiles.filter(f => f.path !== file.path);
+                    this.showToast(`Deleted ${file.name}`, 'success');
+                    this.loadStorage(); // Refresh stats
+                } else {
+                    this.showToast(data.error || 'Failed to delete', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error deleting file', 'error');
+            }
+        },
+        
+        async deleteSelected() {
+            if (!confirm(`Delete ${this.selectedFiles.length} files?`)) return;
+            
+            try {
+                const resp = await fetch('/api/storage/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ paths: this.selectedFiles })
+                });
+                const data = await resp.json();
+                
+                if (data.success) {
+                    this.showToast(`Deleted ${data.deleted_count} files`, 'success');
+                    this.selectedFiles = [];
+                    this.loadStorage();
+                } else {
+                    this.showToast(data.error || 'Failed to delete', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error deleting files', 'error');
+            }
+        },
+        
+        async cleanupTemp() {
+            if (!confirm('Delete all temporary files?')) return;
+            this.cleaning = true;
+            
+            try {
+                const resp = await fetch('/api/storage/cleanup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type: 'temp' })
+                });
+                const data = await resp.json();
+                
+                if (data.success) {
+                    this.showToast(`Cleaned ${data.deleted_count} temp files (${data.deleted_size})`, 'success');
+                    this.loadStorage();
+                } else {
+                    this.showToast(data.error || 'Cleanup failed', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error during cleanup', 'error');
+            }
+            this.cleaning = false;
+        },
+        
+        async cleanupOrphaned() {
+            if (!confirm('Delete orphaned files not linked to any listing?')) return;
+            this.cleaning = true;
+            
+            try {
+                const resp = await fetch('/api/storage/cleanup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type: 'orphaned' })
+                });
+                const data = await resp.json();
+                
+                if (data.success) {
+                    this.showToast(`Cleaned ${data.deleted_count} orphaned files (${data.deleted_size})`, 'success');
+                    this.loadStorage();
+                } else {
+                    this.showToast(data.error || 'Cleanup failed', 'error');
+                }
+            } catch (e) {
+                this.showToast('Error during cleanup', 'error');
+            }
+            this.cleaning = false;
+        },
+        
+        showToast(message, type = 'success') {
+            this.toast = { show: true, message, type };
+            setTimeout(() => { this.toast.show = false; }, 3000);
+        }
+    };
+}
+</script>
+{% endblock %}

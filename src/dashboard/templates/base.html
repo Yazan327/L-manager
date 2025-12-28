@@ -77,6 +77,10 @@
                     <span x-show="sidebarOpen">PF Connect</span>
                 </a>
                 {% if current_user and current_user.has_permission('settings') %}
+                <a href="{{ url_for('storage_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'storage_page' %}bg-indigo-700{% endif %}">
+                    <i class="fas fa-hdd w-8"></i>
+                    <span x-show="sidebarOpen">Storage</span>
+                </a>
                 <a href="{{ url_for('settings') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'settings' %}bg-indigo-700{% endif %}">
                     <i class="fas fa-cog w-8"></i>
                     <span x-show="sidebarOpen">Settings</span>

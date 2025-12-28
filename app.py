@@ -1773,6 +1773,111 @@ def api_storage_info():
     return jsonify(storage_info)
 
 
+@app.route('/api/storage/files', methods=['GET'])
+@permission_required('settings')
+def api_storage_files():
+    """API: Get all files in storage"""
+    def get_all_files(path):
+        """Get all files recursively"""
+        files = []
+        try:
+            for entry in os.scandir(path):
+                if entry.is_file():
+                    stat = entry.stat()
+                    files.append({
+                        'name': entry.name,
+                        'path': str(entry.path),
+                        'size': stat.st_size,
+                        'size_mb': round(stat.st_size / (1024 * 1024), 2),
+                        'modified': stat.st_mtime
+                    })
+                elif entry.is_dir():
+                    files.extend(get_all_files(entry.path))
+        except PermissionError:
+            pass
+        return files
+    
+    all_files = []
+    if UPLOAD_FOLDER.exists():
+        all_files = get_all_files(str(UPLOAD_FOLDER))
+    
+    # Sort by size descending
+    all_files.sort(key=lambda x: x['size'], reverse=True)
+    
+    return jsonify({
+        'success': True,
+        'files': all_files,
+        'count': len(all_files)
+    })
+
+
+@app.route('/storage')
+@permission_required('settings')
+def storage_page():
+    """Storage management page"""
+    return render_template('storage.html')
+
+
+@app.route('/api/storage/delete', methods=['POST'])
+@permission_required('settings')
+def api_storage_delete_files():
+    """API: Delete specific files from storage"""
+    data = request.get_json() or {}
+    # Accept both 'files' and 'paths' for flexibility
+    files_to_delete = data.get('files', []) or data.get('paths', [])
+    
+    if not files_to_delete:
+        return jsonify({'error': 'No files specified'}), 400
+    
+    deleted_files = []
+    deleted_size = 0
+    errors = []
+    
+    for file_path in files_to_delete:
+        try:
+            # Sanitize path - prevent directory traversal
+            # file_path should be relative to UPLOAD_FOLDER like "listings/ref123/image.jpg"
+            safe_path = Path(file_path).name if '/' not in file_path else file_path
+            
+            # Build full path
+            full_path = UPLOAD_FOLDER / safe_path
+            
+            # Ensure the path is within UPLOAD_FOLDER
+            try:
+                full_path.resolve().relative_to(UPLOAD_FOLDER.resolve())
+            except ValueError:
+                errors.append(f"{file_path}: Path outside upload folder")
+                continue
+            
+            if full_path.exists() and full_path.is_file():
+                size = full_path.stat().st_size
+                full_path.unlink()
+                deleted_files.append(file_path)
+                deleted_size += size
+            else:
+                errors.append(f"{file_path}: File not found")
+                
+        except Exception as e:
+            errors.append(f"{file_path}: {str(e)}")
+    
+    # Format size
+    if deleted_size < 1024:
+        size_str = f"{deleted_size} B"
+    elif deleted_size < 1024 * 1024:
+        size_str = f"{deleted_size / 1024:.2f} KB"
+    else:
+        size_str = f"{deleted_size / (1024 * 1024):.2f} MB"
+    
+    return jsonify({
+        'success': True,
+        'deleted_count': len(deleted_files),
+        'deleted_size': size_str,
+        'deleted_size_bytes': deleted_size,
+        'deleted_files': deleted_files,
+        'errors': errors if errors else None
+    })
+
+
 @app.route('/api/storage/cleanup', methods=['POST'])
 @permission_required('settings')
 def api_storage_cleanup():
