@@ -403,7 +403,7 @@
                     <label for="imageUpload" class="cursor-pointer">
                         <i class="fas fa-cloud-upload-alt text-4xl text-gray-400 mb-2"></i>
                         <p class="text-gray-600">Drop images here or <span class="text-indigo-600 font-medium">click to upload</span></p>
-                        <p class="text-xs text-gray-400 mt-1">JPG, PNG, WebP up to 10MB each</p>
+                        <p class="text-xs text-gray-400 mt-1">JPG, PNG, WebP</p>
                     </label>
                 </div>
                 
@@ -1137,10 +1137,7 @@ function imageManager() {
         
         async uploadFiles(files) {
             for (const file of files) {
-                if (file.size > 10 * 1024 * 1024) {
-                    alert(`File ${file.name} is too large (max 10MB)`);
-                    continue;
-                }
+                // No file size limit - server handles large files
                 
                 // Add placeholder
                 const tempId = 'upload-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);

@@ -3299,12 +3299,7 @@ def api_upload_image():
     if ext not in allowed_extensions:
         return jsonify({'error': f'Invalid file type. Allowed: {", ".join(allowed_extensions)}'}), 400
     
-    # Check file size (10MB max)
-    file.seek(0, 2)  # Seek to end
-    size = file.tell()
-    file.seek(0)  # Seek back to start
-    if size > 10 * 1024 * 1024:
-        return jsonify({'error': 'File too large. Maximum size is 10MB'}), 400
+    # No file size limit - Flask MAX_CONTENT_LENGTH handles overall request size (50MB)
     
     try:
         # Get listing_id if provided (for organizing files)
