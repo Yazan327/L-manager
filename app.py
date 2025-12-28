@@ -3100,32 +3100,38 @@ def serve_upload(filename):
 @login_required
 def api_listings_summary():
     """Get summary of all listings for dropdown selection"""
-    listings = LocalListing.query.order_by(LocalListing.reference).all()
-    
-    result = []
-    for l in listings:
-        # Count images
-        image_count = 0
-        if l.images:
-            try:
-                imgs = json.loads(l.images) if isinstance(l.images, str) else l.images
-                image_count = len(imgs) if isinstance(imgs, list) else 0
-            except:
-                pass
+    try:
+        listings = LocalListing.query.order_by(LocalListing.reference).all()
         
-        result.append({
-            'id': l.id,
-            'reference': l.reference or f'ID-{l.id}',
-            'title': l.title_en or 'Untitled',
-            'title_en': l.title_en or 'Untitled',
-            'city': l.city,
-            'property_type': l.property_type,
-            'offering_type': l.offering_type,
-            'status': l.sync_status,
-            'image_count': image_count
-        })
-    
-    return jsonify({'listings': result})
+        result = []
+        for l in listings:
+            # Count images
+            image_count = 0
+            if l.images:
+                try:
+                    imgs = json.loads(l.images) if isinstance(l.images, str) else l.images
+                    image_count = len(imgs) if isinstance(imgs, list) else 0
+                except:
+                    pass
+            
+            result.append({
+                'id': l.id,
+                'reference': l.reference or f'ID-{l.id}',
+                'title': l.title_en or 'Untitled',
+                'title_en': l.title_en or 'Untitled',
+                'city': l.city,
+                'property_type': l.property_type,
+                'offering_type': l.offering_type,
+                'status': l.status or 'draft',
+                'image_count': image_count
+            })
+        
+        return jsonify({'listings': result})
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] api_listings_summary: {e}")
+        traceback.print_exc()
+        return jsonify({'error': str(e), 'success': False}), 500
 
 
 @app.route('/api/listings/<int:listing_id>/images', methods=['GET'])
