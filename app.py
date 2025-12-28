@@ -1660,6 +1660,195 @@ def api_get_settings():
     })
 
 
+@app.route('/api/storage', methods=['GET'])
+@login_required
+def api_storage_info():
+    """API: Get storage usage information"""
+    import shutil
+    
+    def get_dir_size(path):
+        """Get directory size recursively"""
+        total = 0
+        file_count = 0
+        files = []
+        try:
+            for entry in os.scandir(path):
+                if entry.is_file():
+                    size = entry.stat().st_size
+                    total += size
+                    file_count += 1
+                    files.append({
+                        'name': entry.name,
+                        'path': str(entry.path),
+                        'size': size,
+                        'size_mb': round(size / (1024 * 1024), 2)
+                    })
+                elif entry.is_dir():
+                    sub_size, sub_count, sub_files = get_dir_size(entry.path)
+                    total += sub_size
+                    file_count += sub_count
+                    files.extend(sub_files)
+        except PermissionError:
+            pass
+        return total, file_count, files
+    
+    def format_size(bytes):
+        if bytes < 1024:
+            return f"{bytes} B"
+        elif bytes < 1024 * 1024:
+            return f"{bytes / 1024:.2f} KB"
+        elif bytes < 1024 * 1024 * 1024:
+            return f"{bytes / (1024 * 1024):.2f} MB"
+        else:
+            return f"{bytes / (1024 * 1024 * 1024):.2f} GB"
+    
+    storage_info = {
+        'is_production': IS_PRODUCTION,
+        'volume_path': str(RAILWAY_VOLUME_PATH) if IS_PRODUCTION else 'N/A (local)',
+        'upload_folder': str(UPLOAD_FOLDER),
+        'directories': {}
+    }
+    
+    # Check volume disk usage (if on Railway)
+    if IS_PRODUCTION and RAILWAY_VOLUME_PATH.exists():
+        try:
+            disk = shutil.disk_usage(str(RAILWAY_VOLUME_PATH))
+            storage_info['volume'] = {
+                'total': format_size(disk.total),
+                'used': format_size(disk.used),
+                'free': format_size(disk.free),
+                'used_percent': round(disk.used / disk.total * 100, 1),
+                'total_bytes': disk.total,
+                'used_bytes': disk.used,
+                'free_bytes': disk.free
+            }
+        except Exception as e:
+            storage_info['volume_error'] = str(e)
+    
+    # Analyze upload directories
+    directories_to_check = [
+        ('uploads', UPLOAD_FOLDER),
+        ('listings', LISTING_IMAGES_FOLDER),
+        ('logos', UPLOAD_FOLDER / 'logos'),
+        ('processed', UPLOAD_FOLDER / 'processed'),
+        ('temp', UPLOAD_FOLDER / 'temp'),
+    ]
+    
+    total_size = 0
+    total_files = 0
+    all_files = []
+    
+    for name, path in directories_to_check:
+        if path.exists():
+            size, count, files = get_dir_size(str(path))
+            total_size += size
+            total_files += count
+            all_files.extend(files)
+            storage_info['directories'][name] = {
+                'path': str(path),
+                'size': format_size(size),
+                'size_bytes': size,
+                'file_count': count
+            }
+    
+    storage_info['total'] = {
+        'size': format_size(total_size),
+        'size_bytes': total_size,
+        'file_count': total_files
+    }
+    
+    # Get largest files
+    all_files.sort(key=lambda x: x['size'], reverse=True)
+    storage_info['largest_files'] = all_files[:20]  # Top 20 largest
+    
+    # Database size (if SQLite)
+    if not DATABASE_URL and DATABASE_PATH.exists():
+        db_size = DATABASE_PATH.stat().st_size
+        storage_info['database'] = {
+            'path': str(DATABASE_PATH),
+            'size': format_size(db_size),
+            'size_bytes': db_size
+        }
+    
+    return jsonify(storage_info)
+
+
+@app.route('/api/storage/cleanup', methods=['POST'])
+@permission_required('settings')
+def api_storage_cleanup():
+    """API: Clean up unused storage"""
+    data = request.get_json() or {}
+    cleanup_type = data.get('type', 'temp')  # temp, orphaned, all
+    
+    deleted_files = []
+    deleted_size = 0
+    errors = []
+    
+    try:
+        # Clean temp files
+        if cleanup_type in ['temp', 'all']:
+            temp_dir = UPLOAD_FOLDER / 'temp'
+            if temp_dir.exists():
+                for f in temp_dir.iterdir():
+                    if f.is_file():
+                        try:
+                            size = f.stat().st_size
+                            f.unlink()
+                            deleted_files.append(str(f.name))
+                            deleted_size += size
+                        except Exception as e:
+                            errors.append(f"{f.name}: {e}")
+        
+        # Clean orphaned listing images (images not referenced by any listing)
+        if cleanup_type in ['orphaned', 'all']:
+            # Get all image URLs from listings
+            all_listings = LocalListing.query.all()
+            referenced_images = set()
+            
+            for listing in all_listings:
+                if listing.images:
+                    for img_url in listing.get_images():
+                        # Extract filename from URL
+                        if '/uploads/' in img_url:
+                            referenced_images.add(img_url.split('/uploads/')[-1])
+            
+            # Check listing images folder
+            if LISTING_IMAGES_FOLDER.exists():
+                for listing_dir in LISTING_IMAGES_FOLDER.iterdir():
+                    if listing_dir.is_dir():
+                        for f in listing_dir.iterdir():
+                            if f.is_file():
+                                relative_path = f"listings/{listing_dir.name}/{f.name}"
+                                if relative_path not in referenced_images:
+                                    try:
+                                        size = f.stat().st_size
+                                        f.unlink()
+                                        deleted_files.append(relative_path)
+                                        deleted_size += size
+                                    except Exception as e:
+                                        errors.append(f"{relative_path}: {e}")
+        
+        # Format deleted size
+        if deleted_size < 1024:
+            size_str = f"{deleted_size} B"
+        elif deleted_size < 1024 * 1024:
+            size_str = f"{deleted_size / 1024:.2f} KB"
+        else:
+            size_str = f"{deleted_size / (1024 * 1024):.2f} MB"
+        
+        return jsonify({
+            'success': True,
+            'deleted_count': len(deleted_files),
+            'deleted_size': size_str,
+            'deleted_size_bytes': deleted_size,
+            'deleted_files': deleted_files[:50],  # Limit response size
+            'errors': errors if errors else None
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/settings', methods=['POST'])
 @permission_required('settings')
 def api_update_settings():
