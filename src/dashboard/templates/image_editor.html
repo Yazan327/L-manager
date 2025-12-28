@@ -29,6 +29,8 @@
                         <label class="block text-sm font-medium text-gray-700 mb-1">Aspect Ratio</label>
                         <select x-model="settings.ratio" class="w-full border border-gray-300 rounded-lg px-3 py-2">
                             <option value="">Keep Original</option>
+                            <option value="pf_standard">📸 PropertyFinder 3:2 (Recommended)</option>
+                            <option value="pf_wide">📸 PropertyFinder 16:10 (Wide)</option>
                             <option value="landscape_16_9">16:9 Landscape</option>
                             <option value="landscape_4_3">4:3 Standard</option>
                             <option value="square">1:1 Square</option>
@@ -36,17 +38,19 @@
                             <option value="portrait_9_16">9:16 Stories</option>
                             <option value="wide_21_9">21:9 Wide</option>
                         </select>
+                        <p class="text-xs text-gray-500 mt-1">PropertyFinder requires ratio between 1.3 and 1.8</p>
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Output Size</label>
                         <select x-model="settings.size" class="w-full border border-gray-300 rounded-lg px-3 py-2">
                             <option value="original">Original</option>
-                            <option value="full_hd">Full HD (1920x1080)</option>
+                            <option value="full_hd">Full HD (1920x1080) - Recommended</option>
                             <option value="hd">HD (1280x720)</option>
-                            <option value="medium">Medium (800x600)</option>
-                            <option value="small">Small (640x480)</option>
+                            <option value="pf_min">PF Minimum (800x600)</option>
+                            <option value="medium">Medium (1024x768)</option>
                         </select>
+                        <p class="text-xs text-gray-500 mt-1">Min resolution: 800x600 pixels</p>
                     </div>
                     
                     <div>
@@ -477,11 +481,22 @@ function imageEditor() {
         // Load listings for dropdown
         async loadListings() {
             try {
-                const response = await fetch('/api/listings/summary');
+                const response = await fetch('/api/listings/summary', {
+                    credentials: 'same-origin',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                });
+                console.log('Listings API response status:', response.status);
                 if (response.ok) {
                     const data = await response.json();
                     this.listings = data.listings || [];
+                    this.listingResults = this.listings.slice(0, 15);
                     console.log(`Loaded ${this.listings.length} listings`);
+                } else {
+                    console.error('Failed to load listings, status:', response.status);
+                    const text = await response.text();
+                    console.error('Response:', text.substring(0, 200));
                 }
             } catch (e) {
                 console.error('Failed to load listings:', e);
@@ -490,8 +505,9 @@ function imageEditor() {
         
         // Search listings by query
         searchListings() {
+            console.log('searchListings called, listings count:', this.listings.length);
             if (!this.listingSearch) {
-                this.listingResults = this.listings.slice(0, 10);
+                this.listingResults = this.listings.slice(0, 15);
                 return;
             }
             const query = this.listingSearch.toLowerCase();
@@ -501,7 +517,8 @@ function imageEditor() {
                 (l.title_en && l.title_en.toLowerCase().includes(query)) ||
                 (l.city && l.city.toLowerCase().includes(query)) ||
                 (l.property_type && l.property_type.toLowerCase().includes(query))
-            ).slice(0, 10);
+            ).slice(0, 15);
+            console.log('searchListings results:', this.listingResults.length);
         },
         
         // Select a listing from dropdown

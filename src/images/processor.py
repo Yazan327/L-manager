@@ -26,7 +26,9 @@ class ImageProcessor:
     
     # PropertyFinder recommended ratios
     RATIOS = {
-        'landscape_16_9': (16, 9),    # 16:9 - Primary listing image
+        'pf_standard': (3, 2),         # 3:2 (1.5) - PropertyFinder optimal (1.3-1.8 range)
+        'pf_wide': (16, 10),           # 16:10 (1.6) - PropertyFinder wide
+        'landscape_16_9': (16, 9),     # 16:9 - Primary listing image
         'landscape_4_3': (4, 3),       # 4:3 - Standard photo
         'square': (1, 1),              # 1:1 - Thumbnail/social
         'portrait_9_16': (9, 16),      # 9:16 - Stories/vertical
@@ -39,8 +41,9 @@ class ImageProcessor:
         'original': None,              # Keep original size
         'full_hd': (1920, 1080),       # Full HD
         'hd': (1280, 720),             # HD
-        'medium': (800, 600),          # Medium
-        'small': (640, 480),           # Small
+        'pf_min': (800, 600),          # PropertyFinder minimum
+        'medium': (1024, 768),         # Medium
+        'small': (640, 480),           # Small (below PF min!)
         'thumbnail': (320, 240),       # Thumbnail
     }
     
