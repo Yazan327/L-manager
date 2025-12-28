@@ -382,20 +382,119 @@
         </div>
         
         <!-- Section 4: Media -->
-        <div class="p-6 border-b border-gray-200">
+        <div class="p-6 border-b border-gray-200" x-data="imageManager()">
             <h3 class="text-lg font-semibold mb-1 flex items-center">
                 <i class="fas fa-images text-pink-500 mr-2"></i>Media
             </h3>
-            <p class="text-sm text-gray-500 mb-4">Property photos and virtual tours</p>
+            <p class="text-sm text-gray-500 mb-4">Property photos and virtual tours. Drag to reorder. First image is the main photo.</p>
+            
+            <!-- Hidden input for form submission -->
+            <input type="hidden" name="images" x-model="imagesJson">
             
             <div class="grid grid-cols-1 gap-6">
-                <!-- Images -->
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Property Images (URLs, one per line)</label>
-                    <textarea name="images" rows="4"
-                              class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500 font-mono text-sm"
-                              placeholder="https://example.com/image1.jpg&#10;https://example.com/image2.jpg&#10;https://example.com/image3.jpg">{% if listing and listing.images %}{% if listing.images is string %}{{ listing.images.replace('|', '\n') }}{% else %}{{ listing.images|join('\n') }}{% endif %}{% endif %}</textarea>
-                    <p class="text-xs text-gray-400 mt-1">Add image URLs, one per line. First image will be the main photo. Google Drive links are auto-converted.</p>
+                <!-- Image Upload Zone -->
+                <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center"
+                     :class="{'border-indigo-500 bg-indigo-50': dragOver}"
+                     @dragover.prevent="dragOver = true"
+                     @dragleave="dragOver = false"
+                     @drop.prevent="handleDrop($event)">
+                    <input type="file" id="imageUpload" multiple accept="image/*" class="hidden"
+                           @change="handleFiles($event)">
+                    <label for="imageUpload" class="cursor-pointer">
+                        <i class="fas fa-cloud-upload-alt text-4xl text-gray-400 mb-2"></i>
+                        <p class="text-gray-600">Drop images here or <span class="text-indigo-600 font-medium">click to upload</span></p>
+                        <p class="text-xs text-gray-400 mt-1">JPG, PNG, WebP up to 10MB each</p>
+                    </label>
+                </div>
+                
+                <!-- Or add URL -->
+                <div class="flex gap-2">
+                    <input type="text" x-model="newImageUrl" 
+                           @keydown.enter.prevent="addImageUrl()"
+                           class="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-sm"
+                           placeholder="Or paste image URL and press Enter...">
+                    <button type="button" @click="addImageUrl()" 
+                            class="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm">
+                        <i class="fas fa-plus mr-1"></i>Add URL
+                    </button>
+                </div>
+                
+                <!-- Image Gallery with Drag & Drop Reorder -->
+                <div x-show="images.length > 0" class="space-y-2">
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-medium text-gray-700">
+                            <i class="fas fa-images mr-1"></i><span x-text="images.length"></span> Images
+                        </span>
+                        <div class="flex gap-2">
+                            <a href="/image-editor" target="_blank" class="text-sm text-indigo-600 hover:underline">
+                                <i class="fas fa-magic mr-1"></i>Open Image Editor
+                            </a>
+                            <button type="button" @click="clearAll()" class="text-sm text-red-600 hover:underline">
+                                <i class="fas fa-trash mr-1"></i>Clear All
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Sortable Image Grid -->
+                    <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3" id="imageGrid">
+                        <template x-for="(img, index) in images" :key="img.id || index">
+                            <div class="relative group bg-gray-100 rounded-lg overflow-hidden aspect-[4/3] cursor-move"
+                                 draggable="true"
+                                 @dragstart="dragStart($event, index)"
+                                 @dragover.prevent="dragOver = index"
+                                 @drop.prevent="drop($event, index)"
+                                 :class="{'ring-2 ring-indigo-500': dragOverIndex === index, 'ring-2 ring-yellow-500': index === 0}">
+                                
+                                <!-- Image -->
+                                <img :src="img.url || img" 
+                                     class="w-full h-full object-cover"
+                                     @error="$el.src='https://via.placeholder.com/200x150?text=Error'"
+                                     loading="lazy">
+                                
+                                <!-- Main Badge -->
+                                <div x-show="index === 0" class="absolute top-1 left-1">
+                                    <span class="px-2 py-0.5 bg-yellow-500 text-white text-xs rounded-full font-medium">MAIN</span>
+                                </div>
+                                
+                                <!-- Upload Progress -->
+                                <div x-show="img.uploading" class="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+                                    <div class="text-white text-center">
+                                        <i class="fas fa-spinner fa-spin text-2xl"></i>
+                                        <p class="text-xs mt-1">Uploading...</p>
+                                    </div>
+                                </div>
+                                
+                                <!-- Actions Overlay -->
+                                <div class="absolute inset-0 bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-2">
+                                    <button type="button" @click="moveImage(index, -1)" x-show="index > 0"
+                                            class="p-2 bg-white rounded-full hover:bg-gray-100" title="Move Left">
+                                        <i class="fas fa-arrow-left text-gray-700"></i>
+                                    </button>
+                                    <button type="button" @click="setAsMain(index)" x-show="index !== 0"
+                                            class="p-2 bg-yellow-500 rounded-full hover:bg-yellow-600" title="Set as Main">
+                                        <i class="fas fa-star text-white"></i>
+                                    </button>
+                                    <button type="button" @click="removeImage(index)"
+                                            class="p-2 bg-red-500 rounded-full hover:bg-red-600" title="Remove">
+                                        <i class="fas fa-trash text-white"></i>
+                                    </button>
+                                    <button type="button" @click="moveImage(index, 1)" x-show="index < images.length - 1"
+                                            class="p-2 bg-white rounded-full hover:bg-gray-100" title="Move Right">
+                                        <i class="fas fa-arrow-right text-gray-700"></i>
+                                    </button>
+                                </div>
+                                
+                                <!-- Order Number -->
+                                <div class="absolute bottom-1 right-1">
+                                    <span class="px-1.5 py-0.5 bg-black bg-opacity-60 text-white text-xs rounded" x-text="index + 1"></span>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                    
+                    <p class="text-xs text-gray-500">
+                        <i class="fas fa-info-circle mr-1"></i>Drag images to reorder. The first image (marked MAIN) will be the primary photo on PropertyFinder.
+                    </p>
                 </div>
                 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -932,6 +1031,170 @@ function locationSearch() {
         clearLocation() {
             this.locationId = null;
             this.locationText = '';
+        }
+    }
+}
+
+// Image Manager Component
+function imageManager() {
+    // Parse existing images from the listing
+    let existingImages = [];
+    {% if listing and listing.images %}
+        {% if listing.images is string %}
+            existingImages = {{ listing.images|tojson }}.split('|').filter(u => u.trim()).map((url, i) => ({
+                id: 'existing-' + i,
+                url: url.trim(),
+                uploading: false
+            }));
+        {% else %}
+            existingImages = {{ listing.images|tojson }}.map((url, i) => ({
+                id: 'existing-' + i,
+                url: typeof url === 'string' ? url : (url.url || url.original?.url || ''),
+                uploading: false
+            })).filter(img => img.url);
+        {% endif %}
+    {% endif %}
+    
+    return {
+        images: existingImages,
+        dragOver: false,
+        dragOverIndex: null,
+        draggedIndex: null,
+        newImageUrl: '',
+        listingId: {{ (listing.id if listing else 'null')|tojson }},
+        
+        get imagesJson() {
+            // Return URLs as JSON array for form submission
+            return JSON.stringify(this.images.map(img => img.url || img));
+        },
+        
+        handleFiles(event) {
+            const files = Array.from(event.target.files);
+            this.uploadFiles(files);
+            event.target.value = '';
+        },
+        
+        handleDrop(event) {
+            this.dragOver = false;
+            const files = Array.from(event.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+            if (files.length > 0) {
+                this.uploadFiles(files);
+            }
+        },
+        
+        async uploadFiles(files) {
+            for (const file of files) {
+                if (file.size > 10 * 1024 * 1024) {
+                    alert(`File ${file.name} is too large (max 10MB)`);
+                    continue;
+                }
+                
+                // Add placeholder
+                const tempId = 'upload-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+                const placeholder = {
+                    id: tempId,
+                    url: URL.createObjectURL(file),
+                    uploading: true,
+                    file: file
+                };
+                this.images.push(placeholder);
+                
+                // Upload to server
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    if (this.listingId) {
+                        formData.append('listing_id', this.listingId);
+                    }
+                    
+                    const response = await fetch('/api/images/upload', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        // Update placeholder with real URL
+                        const index = this.images.findIndex(img => img.id === tempId);
+                        if (index !== -1) {
+                            this.images[index] = {
+                                id: data.id || tempId,
+                                url: data.url,
+                                uploading: false
+                            };
+                        }
+                    } else {
+                        throw new Error('Upload failed');
+                    }
+                } catch (error) {
+                    console.error('Upload error:', error);
+                    // Remove failed upload
+                    this.images = this.images.filter(img => img.id !== tempId);
+                    alert(`Failed to upload ${file.name}`);
+                }
+            }
+        },
+        
+        addImageUrl() {
+            if (!this.newImageUrl.trim()) return;
+            
+            // Convert Google Drive links
+            let url = this.newImageUrl.trim();
+            if (url.includes('drive.google.com')) {
+                const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+                if (match) {
+                    url = `https://drive.google.com/uc?export=view&id=${match[1]}`;
+                }
+            }
+            
+            this.images.push({
+                id: 'url-' + Date.now(),
+                url: url,
+                uploading: false
+            });
+            this.newImageUrl = '';
+        },
+        
+        removeImage(index) {
+            this.images.splice(index, 1);
+        },
+        
+        setAsMain(index) {
+            if (index === 0) return;
+            const img = this.images.splice(index, 1)[0];
+            this.images.unshift(img);
+        },
+        
+        moveImage(index, direction) {
+            const newIndex = index + direction;
+            if (newIndex < 0 || newIndex >= this.images.length) return;
+            
+            const temp = this.images[index];
+            this.images[index] = this.images[newIndex];
+            this.images[newIndex] = temp;
+        },
+        
+        clearAll() {
+            if (confirm('Remove all images?')) {
+                this.images = [];
+            }
+        },
+        
+        // Drag & Drop reordering
+        dragStart(event, index) {
+            this.draggedIndex = index;
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', index);
+        },
+        
+        drop(event, targetIndex) {
+            this.dragOverIndex = null;
+            if (this.draggedIndex === null || this.draggedIndex === targetIndex) return;
+            
+            const draggedItem = this.images[this.draggedIndex];
+            this.images.splice(this.draggedIndex, 1);
+            this.images.splice(targetIndex, 0, draggedItem);
+            this.draggedIndex = null;
         }
     }
 }

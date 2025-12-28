@@ -3094,6 +3094,77 @@ def serve_upload(filename):
     return send_from_directory(str(UPLOAD_FOLDER), filename)
 
 
+# ==================== IMAGE UPLOAD ENDPOINT ====================
+
+@app.route('/api/images/upload', methods=['POST'])
+@login_required
+def api_upload_image():
+    """Upload a single image file"""
+    import uuid
+    
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    # Check file type
+    allowed_extensions = {'jpg', 'jpeg', 'png', 'gif', 'webp'}
+    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    if ext not in allowed_extensions:
+        return jsonify({'error': f'Invalid file type. Allowed: {", ".join(allowed_extensions)}'}), 400
+    
+    # Check file size (10MB max)
+    file.seek(0, 2)  # Seek to end
+    size = file.tell()
+    file.seek(0)  # Seek back to start
+    if size > 10 * 1024 * 1024:
+        return jsonify({'error': 'File too large. Maximum size is 10MB'}), 400
+    
+    try:
+        # Get listing_id if provided (for organizing files)
+        listing_id = request.form.get('listing_id')
+        
+        # Generate unique filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        unique_id = str(uuid.uuid4())[:8]
+        filename = f'img_{timestamp}_{unique_id}.{ext}'
+        
+        # Determine save path
+        if listing_id:
+            save_dir = LISTING_IMAGES_FOLDER / str(listing_id)
+            relative_path = f'listings/{listing_id}/{filename}'
+        else:
+            save_dir = UPLOAD_FOLDER / 'temp'
+            relative_path = f'temp/{filename}'
+        
+        save_dir.mkdir(parents=True, exist_ok=True)
+        filepath = save_dir / filename
+        
+        # Save file
+        file.save(str(filepath))
+        
+        # Generate URL
+        url = f'/uploads/{relative_path}'
+        
+        print(f"[ImageUpload] Saved: {relative_path} ({size} bytes)")
+        
+        return jsonify({
+            'success': True,
+            'id': unique_id,
+            'url': url,
+            'filename': filename,
+            'size': size
+        })
+        
+    except Exception as e:
+        import traceback
+        print(f"[ImageUpload] Error: {e}")
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 # ==================== LISTING IMAGES ENDPOINTS ====================
 
 @app.route('/api/listings/summary', methods=['GET'])

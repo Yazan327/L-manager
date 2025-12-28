@@ -60,6 +60,7 @@
         <table class="table mb-0">
             <thead>
                 <tr>
+                    <th style="width: 60px;">Image</th>
                     <th>Reference</th>
                     <th>Title</th>
                     <th>Type</th>
@@ -76,7 +77,23 @@
                     {% for listing in listings %}
                     <tr>
                         <td>
-                            <small class="text-muted">{{ listing.reference_number or listing.id[:8] }}</small>
+                            {% set first_image = listing.images[0] if listing.images else none %}
+                            {% if first_image %}
+                                {% set img_url = first_image if first_image is string else (first_image.url or (first_image.original.url if first_image.original else '')) %}
+                                <img src="{{ img_url }}" 
+                                     alt="Listing image"
+                                     class="rounded"
+                                     style="width: 50px; height: 40px; object-fit: cover;"
+                                     onerror="this.style.display='none'">
+                            {% else %}
+                                <div class="bg-light rounded d-flex align-items-center justify-content-center" 
+                                     style="width: 50px; height: 40px;">
+                                    <i class="bi bi-image text-muted"></i>
+                                </div>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <small class="text-muted">{{ listing.reference_number or listing.reference or listing.id[:8] if listing.id is string else listing.id }}</small>
                         </td>
                         <td>
                             <a href="/listings/{{ listing.id }}" class="text-decoration-none fw-medium">
