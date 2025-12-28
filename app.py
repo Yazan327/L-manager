@@ -3290,8 +3290,10 @@ def api_process_image_with_settings():
 @app.route('/api/images/upload', methods=['POST'])
 @login_required
 def api_upload_image():
-    """Upload a single image file"""
+    """Upload a single image file with automatic optimization for large files"""
     import uuid
+    from PIL import Image
+    import io
     
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
@@ -3306,15 +3308,55 @@ def api_upload_image():
     if ext not in allowed_extensions:
         return jsonify({'error': f'Invalid file type. Allowed: {", ".join(allowed_extensions)}'}), 400
     
-    # No file size limit - Flask MAX_CONTENT_LENGTH handles overall request size (50MB)
-    
     try:
+        # Read file into memory
+        file_data = file.read()
+        original_size = len(file_data)
+        
         # Get listing_id if provided (for organizing files)
         listing_id = request.form.get('listing_id')
         
-        # Generate unique filename
+        # Generate unique filename (always save as JPEG for consistency and smaller size)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         unique_id = str(uuid.uuid4())[:8]
+        
+        # Optimize image if it's large (> 2MB) or if it's a PNG (convert to JPEG)
+        optimized = False
+        if original_size > 2 * 1024 * 1024 or ext == 'png':
+            try:
+                img = Image.open(io.BytesIO(file_data))
+                
+                # Convert to RGB if necessary (for PNG with transparency)
+                if img.mode in ('RGBA', 'LA', 'P'):
+                    # Create white background for transparent images
+                    background = Image.new('RGB', img.size, (255, 255, 255))
+                    if img.mode == 'P':
+                        img = img.convert('RGBA')
+                    background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
+                    img = background
+                elif img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                # Resize if image is very large (max 4000px on longest side for quality)
+                max_dimension = 4000
+                if max(img.size) > max_dimension:
+                    ratio = max_dimension / max(img.size)
+                    new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+                    img = img.resize(new_size, Image.LANCZOS)
+                    print(f"[ImageUpload] Resized from {img.size} to {new_size}")
+                
+                # Save as optimized JPEG with high quality (92 is good balance)
+                output = io.BytesIO()
+                img.save(output, format='JPEG', quality=92, optimize=True)
+                file_data = output.getvalue()
+                ext = 'jpg'
+                optimized = True
+                
+                print(f"[ImageUpload] Optimized: {original_size} -> {len(file_data)} bytes ({100 - len(file_data)*100//original_size}% reduction)")
+            except Exception as opt_err:
+                print(f"[ImageUpload] Optimization failed, using original: {opt_err}")
+                # If optimization fails, use original data
+        
         filename = f'img_{timestamp}_{unique_id}.{ext}'
         
         # Determine save path
@@ -3329,7 +3371,8 @@ def api_upload_image():
         filepath = save_dir / filename
         
         # Save file
-        file.save(str(filepath))
+        with open(filepath, 'wb') as f:
+            f.write(file_data)
         
         # Get file size after saving
         file_size = filepath.stat().st_size
@@ -3337,14 +3380,16 @@ def api_upload_image():
         # Generate URL
         url = f'/uploads/{relative_path}'
         
-        print(f"[ImageUpload] Saved: {relative_path} ({file_size} bytes)")
+        print(f"[ImageUpload] Saved: {relative_path} ({file_size} bytes){' [optimized]' if optimized else ''}")
         
         return jsonify({
             'success': True,
             'id': unique_id,
             'url': url,
             'filename': filename,
-            'size': file_size
+            'size': file_size,
+            'original_size': original_size,
+            'optimized': optimized
         })
         
     except Exception as e:
