@@ -290,6 +290,10 @@ class LocalListing(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
+    def get_images(self):
+        """Public method to get parsed images list"""
+        return self._parse_images()
+    
     def _parse_images(self):
         """Parse images from various storage formats and return URLs"""
         import json

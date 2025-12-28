@@ -256,7 +256,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Parking Slots</label>
                     <input type="number" name="parking_slots" min="0"
-                           value="{{ listing.parking_slots if listing else '' }}"
+                           value="{{ listing.parking_slots|default('', true) if listing else '' }}"
                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
                            placeholder="e.g., 1">
                 </div>
@@ -273,7 +273,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Unit Number</label>
                     <input type="text" name="unit_number"
-                           value="{{ listing.unit_number if listing else '' }}"
+                           value="{{ listing.unit_number|default('', true) if listing else '' }}"
                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
                            placeholder="e.g., 715 (internal use)">
                 </div>
@@ -294,7 +294,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Floor Number</label>
                     <input type="number" name="floor_number" min="0"
-                           value="{{ listing.floor_number if listing else '' }}"
+                           value="{{ listing.floor_number|default('', true) if listing else '' }}"
                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
                            placeholder="e.g., 7">
                 </div>
@@ -303,7 +303,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Property Age (years)</label>
                     <input type="number" name="age" min="0"
-                           value="{{ listing.age if listing else '' }}"
+                           value="{{ listing.age|default('', true) if listing else '' }}"
                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
                            placeholder="e.g., 0">
                 </div>
@@ -325,7 +325,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Owner Name</label>
                     <input type="text" name="owner_name"
-                           value="{{ listing.owner_name if listing else '' }}"
+                           value="{{ listing.owner_name|default('', true) if listing else '' }}"
                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
                            placeholder="Property owner">
                 </div>
@@ -334,7 +334,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Permit Number</label>
                     <input type="text" name="permit_number"
-                           value="{{ listing.permit_number if listing else '' }}"
+                           value="{{ listing.permit_number|default('', true) if listing else '' }}"
                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
                            placeholder="RERA/DLD permit">
                 </div>
@@ -538,7 +538,7 @@
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">360° Tour URL</label>
                         <input type="text" name="video_360"
-                               value="{{ listing.video_360 if listing else '' }}"
+                               value="{{ listing.video_360|default('', true) if listing else '' }}"
                                class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
                                placeholder="https://my360tour.com/... (optional)">
                     </div>
@@ -547,7 +547,7 @@
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Video Tour URL</label>
                         <input type="text" name="video_tour"
-                               value="{{ listing.video_tour if listing else '' }}"
+                               value="{{ listing.video_tour|default('', true) if listing else '' }}"
                                class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
                                placeholder="https://youtube.com/... (optional)">
                     </div>
@@ -614,7 +614,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Title (English) <span class="text-red-500">*</span></label>
                     <input type="text" name="title_en" required maxlength="50"
-                           value="{{ listing.title_en if listing else '' }}"
+                           value="{{ listing.title_en|default('', true) if listing else '' }}"
                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
                            placeholder="e.g., Stunning 2BR in Prime Location"
                            x-model="titleEn">
@@ -625,7 +625,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Title (Arabic)</label>
                     <input type="text" name="title_ar" maxlength="50" dir="rtl"
-                           value="{{ listing.title_ar if listing else '' }}"
+                           value="{{ listing.title_ar|default('', true) if listing else '' }}"
                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
                            placeholder="العنوان بالعربية">
                 </div>
@@ -1073,35 +1073,18 @@ function locationSearch() {
 
 // Image Manager Component
 function imageManager() {
-    // Parse existing images from the listing
+    // Parse existing images from the listing - use pre-parsed images from server
     let existingImages = [];
-    {% if listing and listing.images %}
-        {% if listing.images is string %}
-            try {
-                // Try JSON parse first
-                let parsed = JSON.parse({{ listing.images|tojson }});
-                if (Array.isArray(parsed)) {
-                    existingImages = parsed.filter(u => u && u !== 'None' && u.trim && u.trim()).map((url, i) => ({
-                        id: 'existing-' + i,
-                        url: typeof url === 'string' ? url.trim() : (url.url || ''),
-                        uploading: false
-                    })).filter(img => img.url && img.url !== 'None');
-                }
-            } catch(e) {
-                // Fall back to pipe-separated
-                existingImages = {{ listing.images|tojson }}.split('|').filter(u => u && u.trim() && u.trim() !== 'None').map((url, i) => ({
-                    id: 'existing-' + i,
-                    url: url.trim(),
-                    uploading: false
-                }));
-            }
-        {% else %}
-            existingImages = {{ listing.images|tojson }}.filter(u => u && u !== 'None').map((url, i) => ({
+    {% if listing %}
+        // Use get_images() which properly parses and filters the images
+        const serverImages = {{ listing.get_images()|tojson|default('[]', true) }};
+        if (Array.isArray(serverImages)) {
+            existingImages = serverImages.filter(u => u && u !== 'None' && u !== 'null' && u.trim && u.trim()).map((url, i) => ({
                 id: 'existing-' + i,
-                url: typeof url === 'string' ? url : (url.url || url.original?.url || ''),
+                url: typeof url === 'string' ? url.trim() : (url.url || url),
                 uploading: false
-            })).filter(img => img.url && img.url !== 'None');
-        {% endif %}
+            })).filter(img => img.url && img.url !== 'None' && img.url !== 'null' && img.url.length > 1);
+        }
     {% endif %}
     
     return {
