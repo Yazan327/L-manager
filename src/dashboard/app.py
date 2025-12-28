@@ -22,7 +22,8 @@ from werkzeug.utils import secure_filename
 from api import PropertyFinderClient, PropertyFinderAPIError, Config
 from models import PropertyListing, PropertyType, OfferingType, Location, Price
 from utils import BulkListingManager
-from database import db, LocalListing, PFSession, User, ListingFolder
+from database import db, LocalListing, PFSession, User, ListingFolder, AppSettings
+from images import ImageProcessor
 
 # Setup paths for templates and static files
 TEMPLATE_DIR = Path(__file__).parent / 'templates'
@@ -1419,6 +1420,395 @@ def auth_logout():
     PFSession.query.delete()
     db.session.commit()
     return jsonify({'success': True})
+
+
+# ==================== IMAGE EDITOR ENDPOINTS ====================
+
+# Ensure logos directory exists
+LOGOS_DIR = UPLOAD_FOLDER / 'logos'
+PROCESSED_IMAGES_DIR = UPLOAD_FOLDER / 'processed'
+
+@app.route('/image-editor')
+@login_required
+def image_editor():
+    """Image editor page"""
+    # Get all image settings
+    settings = {
+        'image_default_ratio': AppSettings.get('image_default_ratio', ''),
+        'image_default_size': AppSettings.get('image_default_size', 'full_hd'),
+        'image_quality': AppSettings.get('image_quality', '90'),
+        'image_format': AppSettings.get('image_format', 'JPEG'),
+        'image_qr_enabled': AppSettings.get('image_qr_enabled', 'false'),
+        'image_qr_data': AppSettings.get('image_default_qr_data', ''),
+        'image_qr_position': AppSettings.get('image_qr_position', 'bottom_right'),
+        'image_qr_size_percent': AppSettings.get('image_qr_size_percent', '12'),
+        'image_qr_color': AppSettings.get('image_qr_color', '#000000'),
+        'image_logo_enabled': AppSettings.get('image_logo_enabled', 'false'),
+        'image_logo_position': AppSettings.get('image_logo_position', 'bottom_left'),
+        'image_logo_size': AppSettings.get('image_logo_size', '15'),
+        'image_logo_opacity': AppSettings.get('image_logo_opacity', '80'),
+        'image_default_logo': AppSettings.get('image_default_logo', ''),
+    }
+    return render_template('image_editor.html', settings=settings)
+
+
+@app.route('/api/images/settings', methods=['GET'])
+@login_required
+def api_get_image_settings():
+    """Get image processing settings"""
+    settings = {
+        'default_logo': AppSettings.get('image_default_logo'),
+        'default_qr_data': AppSettings.get('image_default_qr_data'),
+        'default_ratio': AppSettings.get('image_default_ratio', '16:9'),
+        'qr_position': AppSettings.get('image_qr_position', 'bottom-right'),
+        'qr_size_percent': int(AppSettings.get('image_qr_size_percent', '15')),
+        'logo_position': AppSettings.get('image_logo_position', 'bottom-left'),
+        'logo_opacity': int(AppSettings.get('image_logo_opacity', '80'))
+    }
+    return jsonify(settings)
+
+
+@app.route('/api/images/settings', methods=['POST'])
+@permission_required('settings')
+def api_save_image_settings():
+    """Save image processing settings"""
+    data = request.json
+    
+    if 'default_qr_data' in data:
+        AppSettings.set('image_default_qr_data', data['default_qr_data'])
+    if 'default_ratio' in data:
+        AppSettings.set('image_default_ratio', data['default_ratio'])
+    if 'qr_position' in data:
+        AppSettings.set('image_qr_position', data['qr_position'])
+    if 'qr_size_percent' in data:
+        AppSettings.set('image_qr_size_percent', str(data['qr_size_percent']))
+    if 'logo_position' in data:
+        AppSettings.set('image_logo_position', data['logo_position'])
+    if 'logo_opacity' in data:
+        AppSettings.set('image_logo_opacity', str(data['logo_opacity']))
+    
+    return jsonify({'success': True, 'message': 'Settings saved'})
+
+
+@app.route('/api/images/upload-logo', methods=['POST'])
+@permission_required('settings')
+def api_upload_logo():
+    """Upload default logo"""
+    if 'logo' not in request.files:
+        return jsonify({'error': 'No logo file provided'}), 400
+    
+    file = request.files['logo']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    # Ensure logos directory exists
+    LOGOS_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # Save logo with secure filename
+    filename = secure_filename(file.filename)
+    # Use timestamp to avoid caching issues
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'png'
+    logo_filename = f'default_logo_{timestamp}.{ext}'
+    logo_path = LOGOS_DIR / logo_filename
+    
+    file.save(str(logo_path))
+    
+    # Save path in settings
+    relative_path = f'uploads/logos/{logo_filename}'
+    AppSettings.set('image_default_logo', relative_path)
+    
+    return jsonify({
+        'success': True,
+        'logo_path': relative_path,
+        'message': 'Logo uploaded successfully'
+    })
+
+
+@app.route('/api/images/process', methods=['POST'])
+@login_required
+def api_process_images():
+    """Process uploaded images with QR codes and logos (multipart form)"""
+    import base64
+    
+    try:
+        if 'images' not in request.files:
+            return jsonify({'error': 'No images provided'}), 400
+        
+        files = request.files.getlist('images')
+        if not files:
+            return jsonify({'error': 'No images selected'}), 400
+        
+        # Get processing options
+        add_qr = request.form.get('add_qr', 'false').lower() == 'true'
+        add_logo = request.form.get('add_logo', 'false').lower() == 'true'
+        target_ratio = request.form.get('ratio', '')
+        qr_data = request.form.get('qr_data', '') if add_qr else None
+        qr_position = request.form.get('qr_position', 'bottom_right').replace('-', '_')
+        qr_size = int(request.form.get('qr_size', '15'))
+        logo_position = request.form.get('logo_position', 'bottom_left').replace('-', '_')
+        logo_opacity = float(request.form.get('logo_opacity', '80')) / 100
+        
+        # Get logo path
+        logo_source = None
+        if add_logo:
+            logo_setting = AppSettings.get('image_default_logo')
+            if logo_setting:
+                potential_path = str(ROOT_DIR / logo_setting)
+                if Path(potential_path).exists():
+                    logo_source = potential_path
+        
+        # Ensure output directory exists
+        PROCESSED_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+        
+        # Create image processor
+        processor = ImageProcessor()
+        
+        processed_images = []
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        for i, file in enumerate(files):
+            if file.filename == '':
+                continue
+                
+            try:
+                # Read image data
+                image_data = file.read()
+                
+                # Process image
+                processed_bytes, metadata = processor.process_image(
+                    image_source=image_data,
+                    ratio=target_ratio if target_ratio else None,
+                    qr_data=qr_data,
+                    qr_position=qr_position,
+                    qr_size_percent=qr_size,
+                    logo_source=logo_source,
+                    logo_position=logo_position,
+                    logo_opacity=logo_opacity
+                )
+                
+                # Generate output filename
+                original_name = secure_filename(file.filename)
+                name_parts = original_name.rsplit('.', 1)
+                base_name = name_parts[0] if len(name_parts) > 1 else original_name
+                output_filename = f'{base_name}_{timestamp}_{i}.jpg'
+                output_path = PROCESSED_IMAGES_DIR / output_filename
+                
+                # Save processed image
+                with open(output_path, 'wb') as f:
+                    f.write(processed_bytes)
+                
+                # Get data URI for preview
+                data_uri = processor.image_to_base64(processed_bytes)
+                
+                processed_images.append({
+                    'original_name': file.filename,
+                    'output_name': output_filename,
+                    'output_path': f'uploads/processed/{output_filename}',
+                    'preview': data_uri
+                })
+                
+            except Exception as e:
+                processed_images.append({
+                    'original_name': file.filename,
+                    'error': str(e)
+                })
+        
+        return jsonify({
+            'success': True,
+            'processed': processed_images,
+            'count': len([img for img in processed_images if 'error' not in img])
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/images/process-single', methods=['POST'])
+@login_required
+def api_process_single_image():
+    """Process a single image from base64 data"""
+    import base64
+    from io import BytesIO
+    
+    try:
+        data = request.json
+        if not data or 'image' not in data:
+            return jsonify({'error': 'No image provided'}), 400
+        
+        # Parse base64 image
+        image_data_url = data['image']
+        if ',' in image_data_url:
+            header, encoded = image_data_url.split(',', 1)
+        else:
+            encoded = image_data_url
+        
+        image_bytes = base64.b64decode(encoded)
+        
+        # Get processing options
+        target_ratio = data.get('ratio', '')
+        qr_data = data.get('qr_data')
+        qr_position = data.get('qr_position', 'bottom_right').replace('-', '_')
+        qr_size = int(data.get('qr_size_percent', 12))
+        qr_color = data.get('qr_color', '#000000')
+        logo_data = data.get('logo_data')
+        logo_position = data.get('logo_position', 'bottom_left').replace('-', '_')
+        logo_size = int(data.get('logo_size_percent', 10))
+        logo_opacity = float(data.get('logo_opacity', 0.9))
+        output_format = data.get('format', 'JPEG')
+        quality = int(data.get('quality', 90))
+        size_preset = data.get('size', 'original')
+        
+        # Handle logo from base64 if provided
+        logo_source = None
+        temp_logo_path = None
+        if logo_data:
+            if ',' in logo_data:
+                _, logo_encoded = logo_data.split(',', 1)
+            else:
+                logo_encoded = logo_data
+            logo_bytes = base64.b64decode(logo_encoded)
+            # Save to temp file
+            import tempfile
+            fd, temp_logo_path = tempfile.mkstemp(suffix='.png')
+            with os.fdopen(fd, 'wb') as f:
+                f.write(logo_bytes)
+            logo_source = temp_logo_path
+        else:
+            # Check for default logo
+            logo_setting = AppSettings.get('image_default_logo')
+            if logo_setting:
+                potential_path = str(ROOT_DIR / logo_setting)
+                if Path(potential_path).exists():
+                    logo_source = potential_path
+        
+        try:
+            # Create processor and process image
+            processor = ImageProcessor()
+            
+            # Use the actual ratio string that matches the processor's RATIOS dict
+            actual_ratio = target_ratio if target_ratio else None
+            
+            processed_bytes, metadata = processor.process_image(
+                image_source=image_bytes,
+                ratio=actual_ratio,
+                size=size_preset,
+                qr_data=qr_data,
+                qr_position=qr_position,
+                qr_size_percent=qr_size,
+                qr_color=qr_color,
+                logo_source=logo_source,
+                logo_position=logo_position,
+                logo_size_percent=logo_size,
+                logo_opacity=logo_opacity,
+                output_format=output_format,
+                quality=quality
+            )
+            
+            # Convert to data URI
+            mime_types = {'JPEG': 'image/jpeg', 'PNG': 'image/png', 'WEBP': 'image/webp'}
+            mime_type = mime_types.get(output_format.upper(), 'image/jpeg')
+            output_base64 = base64.b64encode(processed_bytes).decode('utf-8')
+            data_uri = f"data:{mime_type};base64,{output_base64}"
+            
+            return jsonify({
+                'success': True,
+                'image': data_uri,
+                'metadata': {
+                    'original_size': list(metadata['original_size']),
+                    'final_size': list(metadata['final_size']),
+                    'file_size': metadata['file_size'],
+                    'format': output_format
+                }
+            })
+            
+        finally:
+            # Clean up temp logo file
+            if temp_logo_path and os.path.exists(temp_logo_path):
+                os.unlink(temp_logo_path)
+                
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/settings/images', methods=['GET'])
+@login_required
+def api_get_settings_images():
+    """Get image settings (alternate endpoint)"""
+    return api_get_image_settings()
+
+
+@app.route('/api/settings/images', methods=['POST'])
+@permission_required('settings')
+def api_save_settings_images():
+    """Save image settings"""
+    data = request.json
+    
+    settings_map = {
+        'ratio': 'image_default_ratio',
+        'size': 'image_default_size',
+        'quality': 'image_quality',
+        'format': 'image_format',
+        'qrEnabled': 'image_qr_enabled',
+        'qrData': 'image_default_qr_data',
+        'qrPosition': 'image_qr_position',
+        'qrSize': 'image_qr_size_percent',
+        'qrColor': 'image_qr_color',
+        'logoEnabled': 'image_logo_enabled',
+        'logoPosition': 'image_logo_position',
+        'logoSize': 'image_logo_size',
+        'logoOpacity': 'image_logo_opacity',
+    }
+    
+    for js_key, db_key in settings_map.items():
+        if js_key in data:
+            value = data[js_key]
+            # Convert booleans to strings
+            if isinstance(value, bool):
+                value = 'true' if value else 'false'
+            AppSettings.set(db_key, str(value))
+    
+    # Handle logo data if provided as base64
+    if data.get('logoData') and data['logoData'].startswith('data:'):
+        import base64
+        try:
+            logo_data_url = data['logoData']
+            if ',' in logo_data_url:
+                _, encoded = logo_data_url.split(',', 1)
+            else:
+                encoded = logo_data_url
+            logo_bytes = base64.b64decode(encoded)
+            
+            # Save logo
+            LOGOS_DIR.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            logo_filename = f'default_logo_{timestamp}.png'
+            logo_path = LOGOS_DIR / logo_filename
+            with open(logo_path, 'wb') as f:
+                f.write(logo_bytes)
+            
+            AppSettings.set('image_default_logo', f'uploads/logos/{logo_filename}')
+        except Exception as e:
+            print(f"Error saving logo: {e}")
+    
+    return jsonify({'success': True, 'message': 'Settings saved successfully'})
+
+
+@app.route('/api/images/download/<filename>')
+@login_required
+def api_download_image(filename):
+    """Download a processed image"""
+    from flask import send_from_directory
+    return send_from_directory(str(PROCESSED_IMAGES_DIR), filename, as_attachment=True)
+
+
+@app.route('/uploads/<path:filename>')
+def serve_upload(filename):
+    """Serve uploaded files"""
+    from flask import send_from_directory
+    return send_from_directory(str(UPLOAD_FOLDER), filename)
 
 
 if __name__ == '__main__':

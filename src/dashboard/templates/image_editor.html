@@ -1,0 +1,542 @@
+{% extends "base.html" %}
+
+{% block title %}Image Editor - L-Manager{% endblock %}
+{% block page_title %}Image Editor{% endblock %}
+
+{% block content %}
+<div x-data="imageEditor()" x-init="init()">
+    <!-- Settings Panel (Collapsible) -->
+    <div class="mb-6 bg-white rounded-lg shadow">
+        <button @click="showSettings = !showSettings" 
+                class="w-full flex items-center justify-between p-4 text-left">
+            <div class="flex items-center gap-3">
+                <i class="fas fa-cog text-indigo-600"></i>
+                <span class="font-semibold">Default Settings</span>
+                <span class="text-sm text-gray-500">(QR Code, Logo, Ratio)</span>
+            </div>
+            <i class="fas" :class="showSettings ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+        </button>
+        
+        <div x-show="showSettings" x-collapse class="border-t p-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- Image Settings -->
+                <div class="space-y-4">
+                    <h3 class="font-semibold text-gray-700 flex items-center gap-2">
+                        <i class="fas fa-image text-blue-500"></i> Image Settings
+                    </h3>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Aspect Ratio</label>
+                        <select x-model="settings.ratio" class="w-full border border-gray-300 rounded-lg px-3 py-2">
+                            <option value="">Keep Original</option>
+                            <option value="landscape_16_9">16:9 Landscape</option>
+                            <option value="landscape_4_3">4:3 Standard</option>
+                            <option value="square">1:1 Square</option>
+                            <option value="portrait_3_4">3:4 Portrait</option>
+                            <option value="portrait_9_16">9:16 Stories</option>
+                            <option value="wide_21_9">21:9 Wide</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Output Size</label>
+                        <select x-model="settings.size" class="w-full border border-gray-300 rounded-lg px-3 py-2">
+                            <option value="original">Original</option>
+                            <option value="full_hd">Full HD (1920x1080)</option>
+                            <option value="hd">HD (1280x720)</option>
+                            <option value="medium">Medium (800x600)</option>
+                            <option value="small">Small (640x480)</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Quality</label>
+                        <div class="flex items-center gap-3">
+                            <input type="range" x-model="settings.quality" min="50" max="100" class="flex-1">
+                            <span class="text-sm font-medium w-12" x-text="settings.quality + '%'"></span>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Format</label>
+                        <select x-model="settings.format" class="w-full border border-gray-300 rounded-lg px-3 py-2">
+                            <option value="JPEG">JPEG</option>
+                            <option value="PNG">PNG</option>
+                            <option value="WEBP">WEBP</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <!-- QR Code Settings -->
+                <div class="space-y-4">
+                    <h3 class="font-semibold text-gray-700 flex items-center gap-2">
+                        <i class="fas fa-qrcode text-purple-500"></i> QR Code
+                    </h3>
+                    
+                    <div class="flex items-center gap-3">
+                        <input type="checkbox" x-model="settings.qrEnabled" id="qrEnabled" class="rounded">
+                        <label for="qrEnabled" class="text-sm font-medium text-gray-700">Add QR Code</label>
+                    </div>
+                    
+                    <div x-show="settings.qrEnabled" class="space-y-3">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">QR Data (URL/Text)</label>
+                            <input type="text" x-model="settings.qrData" 
+                                   class="w-full border border-gray-300 rounded-lg px-3 py-2"
+                                   placeholder="https://example.com">
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Position</label>
+                            <select x-model="settings.qrPosition" class="w-full border border-gray-300 rounded-lg px-3 py-2">
+                                <option value="bottom_right">Bottom Right</option>
+                                <option value="bottom_left">Bottom Left</option>
+                                <option value="top_right">Top Right</option>
+                                <option value="top_left">Top Left</option>
+                                <option value="bottom_center">Bottom Center</option>
+                            </select>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Size</label>
+                            <div class="flex items-center gap-3">
+                                <input type="range" x-model="settings.qrSize" min="5" max="30" class="flex-1">
+                                <span class="text-sm font-medium w-12" x-text="settings.qrSize + '%'"></span>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Color</label>
+                            <input type="color" x-model="settings.qrColor" class="w-full h-10 rounded-lg cursor-pointer">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Logo Settings -->
+                <div class="space-y-4">
+                    <h3 class="font-semibold text-gray-700 flex items-center gap-2">
+                        <i class="fas fa-stamp text-green-500"></i> Logo/Watermark
+                    </h3>
+                    
+                    <div class="flex items-center gap-3">
+                        <input type="checkbox" x-model="settings.logoEnabled" id="logoEnabled" class="rounded">
+                        <label for="logoEnabled" class="text-sm font-medium text-gray-700">Add Logo</label>
+                    </div>
+                    
+                    <div x-show="settings.logoEnabled" class="space-y-3">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Logo Image</label>
+                            <div class="flex items-center gap-3">
+                                <div x-show="settings.logoData" class="w-16 h-16 border rounded-lg overflow-hidden bg-gray-100">
+                                    <img :src="settings.logoData" class="w-full h-full object-contain">
+                                </div>
+                                <label class="flex-1 flex items-center justify-center px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-indigo-400 transition">
+                                    <input type="file" @change="uploadLogo($event)" accept="image/*" class="hidden">
+                                    <span class="text-sm text-gray-600">
+                                        <i class="fas fa-upload mr-2"></i>
+                                        <span x-text="settings.logoData ? 'Change' : 'Upload Logo'"></span>
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Position</label>
+                            <select x-model="settings.logoPosition" class="w-full border border-gray-300 rounded-lg px-3 py-2">
+                                <option value="bottom_left">Bottom Left</option>
+                                <option value="bottom_right">Bottom Right</option>
+                                <option value="top_left">Top Left</option>
+                                <option value="top_right">Top Right</option>
+                                <option value="center">Center</option>
+                            </select>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Size</label>
+                            <div class="flex items-center gap-3">
+                                <input type="range" x-model="settings.logoSize" min="5" max="30" class="flex-1">
+                                <span class="text-sm font-medium w-12" x-text="settings.logoSize + '%'"></span>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Opacity</label>
+                            <div class="flex items-center gap-3">
+                                <input type="range" x-model="settings.logoOpacity" min="0.1" max="1" step="0.1" class="flex-1">
+                                <span class="text-sm font-medium w-12" x-text="Math.round(settings.logoOpacity * 100) + '%'"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mt-6 flex justify-end gap-3">
+                <button @click="resetSettings()" class="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200">
+                    <i class="fas fa-undo mr-2"></i>Reset to Defaults
+                </button>
+                <button @click="saveSettings()" class="px-4 py-2 text-white bg-indigo-600 rounded-lg hover:bg-indigo-700">
+                    <i class="fas fa-save mr-2"></i>Save as Default
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Upload Section -->
+    <div class="mb-6 bg-white rounded-lg shadow p-6">
+        <h3 class="font-semibold text-gray-700 mb-4 flex items-center gap-2">
+            <i class="fas fa-cloud-upload-alt text-indigo-600"></i> Upload Images
+        </h3>
+        
+        <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-indigo-400 transition cursor-pointer"
+             @dragover.prevent="dragOver = true"
+             @dragleave="dragOver = false"
+             @drop.prevent="handleDrop($event)"
+             :class="{ 'border-indigo-400 bg-indigo-50': dragOver }">
+            <input type="file" @change="handleFiles($event)" accept="image/*" multiple class="hidden" id="imageInput">
+            <label for="imageInput" class="cursor-pointer">
+                <i class="fas fa-images text-4xl text-gray-400 mb-4 block"></i>
+                <p class="text-lg font-medium text-gray-700">Drag & drop images here</p>
+                <p class="text-sm text-gray-500 mt-1">or click to browse</p>
+                <p class="text-xs text-gray-400 mt-2">Supports JPEG, PNG, WEBP • Multiple files allowed</p>
+            </label>
+        </div>
+    </div>
+    
+    <!-- Images Queue -->
+    <div x-show="images.length > 0" class="mb-6 bg-white rounded-lg shadow">
+        <div class="p-4 border-b flex items-center justify-between">
+            <h3 class="font-semibold text-gray-700">
+                <i class="fas fa-layer-group text-indigo-600 mr-2"></i>
+                Images (<span x-text="images.length"></span>)
+            </h3>
+            <div class="flex items-center gap-3">
+                <button @click="processAll()" 
+                        :disabled="processing"
+                        class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50">
+                    <i class="fas fa-magic mr-2"></i>Process All
+                </button>
+                <button @click="downloadAll()" 
+                        x-show="processedCount > 0"
+                        class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                    <i class="fas fa-download mr-2"></i>Download All
+                </button>
+                <button @click="clearAll()" class="px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg">
+                    <i class="fas fa-trash mr-2"></i>Clear
+                </button>
+            </div>
+        </div>
+        
+        <!-- Progress -->
+        <div x-show="processing" class="p-4 bg-blue-50 border-b">
+            <div class="flex items-center gap-4">
+                <div class="flex-1">
+                    <div class="h-2 bg-blue-200 rounded-full overflow-hidden">
+                        <div class="h-full bg-blue-600 transition-all duration-300" 
+                             :style="'width: ' + Math.round((processedCount / images.length) * 100) + '%'"></div>
+                    </div>
+                </div>
+                <span class="text-sm text-blue-700 font-medium" x-text="processedCount + ' / ' + images.length"></span>
+            </div>
+        </div>
+        
+        <!-- Image Grid -->
+        <div class="p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+            <template x-for="(img, index) in images" :key="index">
+                <div class="relative group border rounded-lg overflow-hidden bg-gray-100">
+                    <!-- Original/Processed Toggle -->
+                    <div class="aspect-video relative">
+                        <img :src="img.processed || img.original" 
+                             class="w-full h-full object-cover">
+                        
+                        <!-- Status Badge -->
+                        <div class="absolute top-2 left-2">
+                            <span x-show="img.processing" class="px-2 py-1 bg-blue-500 text-white text-xs rounded-full">
+                                <i class="fas fa-spinner fa-spin mr-1"></i>Processing
+                            </span>
+                            <span x-show="img.processed && !img.processing" class="px-2 py-1 bg-green-500 text-white text-xs rounded-full">
+                                <i class="fas fa-check mr-1"></i>Done
+                            </span>
+                            <span x-show="img.error" class="px-2 py-1 bg-red-500 text-white text-xs rounded-full">
+                                <i class="fas fa-exclamation-triangle mr-1"></i>Error
+                            </span>
+                        </div>
+                        
+                        <!-- Actions Overlay -->
+                        <div class="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition">
+                            <button @click="processOne(index)" 
+                                    :disabled="img.processing"
+                                    class="p-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50">
+                                <i class="fas fa-magic"></i>
+                            </button>
+                            <button x-show="img.processed" @click="downloadOne(index)" 
+                                    class="p-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                                <i class="fas fa-download"></i>
+                            </button>
+                            <button x-show="img.processed" @click="previewImage(index)" 
+                                    class="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                                <i class="fas fa-search-plus"></i>
+                            </button>
+                            <button @click="removeImage(index)" 
+                                    class="p-2 bg-red-600 text-white rounded-lg hover:bg-red-700">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Info -->
+                    <div class="p-2 text-xs text-gray-600 truncate" x-text="img.name"></div>
+                </div>
+            </template>
+        </div>
+    </div>
+    
+    <!-- Preview Modal -->
+    <div x-show="previewIndex !== null" 
+         x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-75"
+         @click.self="previewIndex = null"
+         @keydown.escape.window="previewIndex = null">
+        <div class="relative max-w-4xl max-h-[90vh] bg-white rounded-lg overflow-hidden">
+            <button @click="previewIndex = null" class="absolute top-4 right-4 p-2 bg-white rounded-full shadow-lg hover:bg-gray-100 z-10">
+                <i class="fas fa-times text-gray-600"></i>
+            </button>
+            <template x-if="previewIndex !== null && images[previewIndex]">
+                <div>
+                    <img :src="images[previewIndex].processed || images[previewIndex].original" 
+                         class="max-w-full max-h-[80vh] object-contain">
+                    <div class="p-4 border-t">
+                        <div class="flex items-center justify-between">
+                            <span class="font-medium" x-text="images[previewIndex].name"></span>
+                            <div class="flex items-center gap-4 text-sm text-gray-600">
+                                <span x-show="images[previewIndex].metadata">
+                                    <i class="fas fa-expand mr-1"></i>
+                                    <span x-text="images[previewIndex].metadata?.final_size?.join(' × ')"></span>
+                                </span>
+                                <span x-show="images[previewIndex].metadata">
+                                    <i class="fas fa-file mr-1"></i>
+                                    <span x-text="formatFileSize(images[previewIndex].metadata?.file_size)"></span>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function imageEditor() {
+    return {
+        showSettings: false,
+        dragOver: false,
+        processing: false,
+        processedCount: 0,
+        previewIndex: null,
+        images: [],
+        
+        settings: {
+            ratio: '{{ settings.image_default_ratio or "" }}',
+            size: '{{ settings.image_default_size or "full_hd" }}',
+            quality: {{ settings.image_quality or 90 }},
+            format: '{{ settings.image_format or "JPEG" }}',
+            qrEnabled: {{ 'true' if settings.image_qr_enabled == 'true' else 'false' }},
+            qrData: '{{ settings.image_qr_data or "" }}',
+            qrPosition: '{{ settings.image_qr_position or "bottom_right" }}',
+            qrSize: {{ settings.image_qr_size_percent or 12 }},
+            qrColor: '{{ settings.image_qr_color or "#000000" }}',
+            logoEnabled: {{ 'true' if settings.image_logo_enabled == 'true' else 'false' }},
+            logoData: '{{ settings.image_logo_data or "" }}',
+            logoPosition: '{{ settings.image_logo_position or "bottom_left" }}',
+            logoSize: {{ settings.image_logo_size_percent or 10 }},
+            logoOpacity: {{ settings.image_logo_opacity or 0.9 }}
+        },
+        
+        init() {
+            console.log('Image Editor initialized');
+        },
+        
+        handleFiles(event) {
+            const files = event.target.files;
+            this.addFiles(files);
+            event.target.value = '';
+        },
+        
+        handleDrop(event) {
+            this.dragOver = false;
+            const files = event.dataTransfer.files;
+            this.addFiles(files);
+        },
+        
+        addFiles(files) {
+            for (const file of files) {
+                if (file.type.startsWith('image/')) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        this.images.push({
+                            name: file.name,
+                            original: e.target.result,
+                            processed: null,
+                            processing: false,
+                            error: null,
+                            metadata: null
+                        });
+                    };
+                    reader.readAsDataURL(file);
+                }
+            }
+        },
+        
+        async uploadLogo(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                this.settings.logoData = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        },
+        
+        async processOne(index) {
+            const img = this.images[index];
+            if (img.processing) return;
+            
+            img.processing = true;
+            img.error = null;
+            
+            try {
+                const response = await fetch('/api/images/process-single', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        image: img.original,
+                        ratio: this.settings.ratio || null,
+                        size: this.settings.size,
+                        quality: parseInt(this.settings.quality),
+                        format: this.settings.format,
+                        qr_data: this.settings.qrEnabled ? this.settings.qrData : null,
+                        qr_position: this.settings.qrPosition,
+                        qr_size_percent: parseInt(this.settings.qrSize),
+                        qr_color: this.settings.qrColor,
+                        logo_data: this.settings.logoEnabled ? this.settings.logoData : null,
+                        logo_position: this.settings.logoPosition,
+                        logo_size_percent: parseInt(this.settings.logoSize),
+                        logo_opacity: parseFloat(this.settings.logoOpacity)
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    img.processed = data.image;
+                    img.metadata = data.metadata;
+                } else {
+                    img.error = data.error || 'Processing failed';
+                }
+            } catch (e) {
+                img.error = e.message;
+            } finally {
+                img.processing = false;
+            }
+        },
+        
+        async processAll() {
+            this.processing = true;
+            this.processedCount = 0;
+            
+            for (let i = 0; i < this.images.length; i++) {
+                if (!this.images[i].processed) {
+                    await this.processOne(i);
+                }
+                this.processedCount = i + 1;
+            }
+            
+            this.processing = false;
+        },
+        
+        downloadOne(index) {
+            const img = this.images[index];
+            if (!img.processed) return;
+            
+            const link = document.createElement('a');
+            link.href = img.processed;
+            const ext = this.settings.format.toLowerCase();
+            link.download = img.name.replace(/\.[^.]+$/, '') + '_processed.' + ext;
+            link.click();
+        },
+        
+        async downloadAll() {
+            // Download each processed image
+            for (let i = 0; i < this.images.length; i++) {
+                if (this.images[i].processed) {
+                    this.downloadOne(i);
+                    await new Promise(r => setTimeout(r, 200)); // Small delay between downloads
+                }
+            }
+        },
+        
+        removeImage(index) {
+            this.images.splice(index, 1);
+        },
+        
+        clearAll() {
+            if (confirm('Clear all images?')) {
+                this.images = [];
+                this.processedCount = 0;
+            }
+        },
+        
+        previewImage(index) {
+            this.previewIndex = index;
+        },
+        
+        async saveSettings() {
+            try {
+                const response = await fetch('/api/settings/images', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.settings)
+                });
+                
+                if (response.ok) {
+                    alert('Settings saved successfully!');
+                } else {
+                    alert('Failed to save settings');
+                }
+            } catch (e) {
+                alert('Error saving settings: ' + e.message);
+            }
+        },
+        
+        resetSettings() {
+            this.settings = {
+                ratio: 'landscape_16_9',
+                size: 'full_hd',
+                quality: 90,
+                format: 'JPEG',
+                qrEnabled: false,
+                qrData: '',
+                qrPosition: 'bottom_right',
+                qrSize: 12,
+                qrColor: '#000000',
+                logoEnabled: false,
+                logoData: '',
+                logoPosition: 'bottom_left',
+                logoSize: 10,
+                logoOpacity: 0.9
+            };
+        },
+        
+        formatFileSize(bytes) {
+            if (!bytes) return '';
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+        }
+    }
+}
+</script>
+{% endblock %}

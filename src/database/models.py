@@ -880,6 +880,23 @@ class AppSettings(db.Model):
         'default_insights_agent_id': '',  # PF user ID to show by default in insights
         'last_sync_at': '',
         'first_run_completed': 'false',
+        # Image processing settings
+        'image_default_ratio': 'landscape_16_9',
+        'image_default_size': 'full_hd',
+        'image_max_dimension': '1920',
+        'image_quality': '90',
+        'image_format': 'JPEG',
+        'image_qr_enabled': 'true',
+        'image_qr_data': '',              # Default QR data (URL, etc.)
+        'image_qr_position': 'bottom_right',
+        'image_qr_size_percent': '12',
+        'image_qr_color': '#000000',
+        'image_qr_opacity': '1.0',
+        'image_logo_enabled': 'false',
+        'image_logo_data': '',            # Base64 encoded logo
+        'image_logo_position': 'bottom_left',
+        'image_logo_size_percent': '10',
+        'image_logo_opacity': '0.9',
     }
     
     @classmethod

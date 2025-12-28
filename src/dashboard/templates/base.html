@@ -47,6 +47,10 @@
                     <span x-show="sidebarOpen">Bulk Upload</span>
                 </a>
                 {% endif %}
+                <a href="{{ url_for('image_editor') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'image_editor' %}bg-indigo-700{% endif %}">
+                    <i class="fas fa-image w-8"></i>
+                    <span x-show="sidebarOpen">Image Editor</span>
+                </a>
                 <a href="{{ url_for('insights') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'insights' %}bg-indigo-700{% endif %}">
                     <i class="fas fa-chart-line w-8"></i>
                     <span x-show="sidebarOpen">Insights</span>
