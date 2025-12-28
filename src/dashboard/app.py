@@ -44,9 +44,29 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Initialize database
 db.init_app(app)
 
-# Create tables and default admin user
+# Create tables and run migrations
 with app.app_context():
     db.create_all()
+    
+    # Migration: Add folder_id column to listings table if it doesn't exist
+    try:
+        from sqlalchemy import text, inspect
+        inspector = inspect(db.engine)
+        columns = [col['name'] for col in inspector.get_columns('listings')]
+        
+        if 'folder_id' not in columns:
+            # Add folder_id column
+            with db.engine.connect() as conn:
+                # Check if PostgreSQL or SQLite
+                dialect = db.engine.dialect.name
+                if dialect == 'postgresql':
+                    conn.execute(text('ALTER TABLE listings ADD COLUMN folder_id INTEGER REFERENCES listing_folders(id)'))
+                else:
+                    conn.execute(text('ALTER TABLE listings ADD COLUMN folder_id INTEGER'))
+                conn.commit()
+            print("✓ Migration: Added folder_id column to listings table")
+    except Exception as e:
+        print(f"Migration check: {e}")
     
     # Create default admin user if no users exist
     if User.query.count() == 0:
