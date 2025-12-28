@@ -628,7 +628,27 @@ def sync_pf_leads_to_db(pf_leads):
 ALLOWED_EXTENSIONS = {'json', 'csv'}
 UPLOAD_FOLDER.mkdir(exist_ok=True)
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max for image processing
+
+
+# Global error handler for unhandled exceptions
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Handle unhandled exceptions"""
+    import traceback
+    print(f"[ERROR] Unhandled exception: {type(e).__name__}: {e}")
+    traceback.print_exc()
+    
+    # Check if it's an API request
+    if request.path.startswith('/api/'):
+        return jsonify({
+            'error': f'{type(e).__name__}: {str(e)}',
+            'success': False
+        }), 500
+    
+    # For non-API requests, show error page or redirect
+    flash(f'An error occurred: {str(e)}', 'error')
+    return redirect(url_for('index'))
 
 
 def get_client():

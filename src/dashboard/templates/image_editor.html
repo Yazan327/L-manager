@@ -408,36 +408,64 @@ function imageEditor() {
             img.error = null;
             
             try {
+                // Check image size before sending
+                const imageSizeMB = (img.original.length * 0.75) / (1024 * 1024);
+                console.log(`Processing image ${index}: ~${imageSizeMB.toFixed(2)} MB`);
+                
+                if (imageSizeMB > 20) {
+                    img.error = `Image too large (${imageSizeMB.toFixed(1)} MB). Please use smaller images.`;
+                    img.processing = false;
+                    return;
+                }
+                
+                const payload = {
+                    image: img.original,
+                    ratio: this.settings.ratio || null,
+                    size: this.settings.size || 'original',
+                    quality: parseInt(this.settings.quality) || 90,
+                    format: this.settings.format || 'JPEG',
+                    qr_data: this.settings.qrEnabled ? this.settings.qrData : null,
+                    qr_position: this.settings.qrPosition || 'bottom_right',
+                    qr_size_percent: parseInt(this.settings.qrSize) || 12,
+                    qr_color: this.settings.qrColor || '#000000',
+                    logo_data: this.settings.logoEnabled ? this.settings.logoData : null,
+                    logo_position: this.settings.logoPosition || 'bottom_left',
+                    logo_size_percent: parseInt(this.settings.logoSize) || 10,
+                    logo_opacity: parseFloat(this.settings.logoOpacity) || 0.9
+                };
+                
                 const response = await fetch('/api/images/process-single', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        image: img.original,
-                        ratio: this.settings.ratio || null,
-                        size: this.settings.size,
-                        quality: parseInt(this.settings.quality),
-                        format: this.settings.format,
-                        qr_data: this.settings.qrEnabled ? this.settings.qrData : null,
-                        qr_position: this.settings.qrPosition,
-                        qr_size_percent: parseInt(this.settings.qrSize),
-                        qr_color: this.settings.qrColor,
-                        logo_data: this.settings.logoEnabled ? this.settings.logoData : null,
-                        logo_position: this.settings.logoPosition,
-                        logo_size_percent: parseInt(this.settings.logoSize),
-                        logo_opacity: parseFloat(this.settings.logoOpacity)
-                    })
+                    body: JSON.stringify(payload)
                 });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    let errorMsg;
+                    try {
+                        const errorJson = JSON.parse(errorText);
+                        errorMsg = errorJson.error || `Server error: ${response.status}`;
+                    } catch {
+                        errorMsg = errorText || `Server error: ${response.status}`;
+                    }
+                    img.error = errorMsg;
+                    console.error(`Processing failed for image ${index}:`, errorMsg);
+                    return;
+                }
                 
                 const data = await response.json();
                 
                 if (data.success) {
                     img.processed = data.image;
                     img.metadata = data.metadata;
+                    console.log(`Image ${index} processed successfully:`, data.metadata);
                 } else {
                     img.error = data.error || 'Processing failed';
                 }
             } catch (e) {
-                img.error = e.message;
+                img.error = `Network error: ${e.message}`;
+                console.error(`Processing error for image ${index}:`, e);
             } finally {
                 img.processing = false;
             }
