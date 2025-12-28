@@ -1476,8 +1476,9 @@ def edit_listing(listing_id):
         local_id = int(listing_id)
         local_listing = LocalListing.query.get(local_id)
         if local_listing:
+            # Pass the model object directly so template can use get_images()
             return render_template('listing_form.html', 
-                                 listing=local_listing.to_dict(),
+                                 listing=local_listing,
                                  property_types=property_types,
                                  edit_mode=True)
     except (ValueError, TypeError):

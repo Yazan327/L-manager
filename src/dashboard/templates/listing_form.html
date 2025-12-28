@@ -1073,11 +1073,37 @@ function locationSearch() {
 
 // Image Manager Component
 function imageManager() {
-    // Parse existing images from the listing - use pre-parsed images from server
+    // Parse existing images from the listing
     let existingImages = [];
     {% if listing %}
-        // Use get_images() which properly parses and filters the images
-        const serverImages = {{ listing.get_images()|tojson|default('[]', true) }};
+        // Get images - works with both model objects and dicts
+        let rawImages = null;
+        try {
+            {% if listing.get_images %}
+                rawImages = {{ listing.get_images()|tojson|default('[]', true) }};
+            {% else %}
+                rawImages = {{ listing.images|tojson|default('[]', true) }};
+            {% endif %}
+        } catch(e) {
+            rawImages = [];
+        }
+        
+        // Parse images from various formats
+        let serverImages = [];
+        if (Array.isArray(rawImages)) {
+            serverImages = rawImages;
+        } else if (typeof rawImages === 'string' && rawImages && rawImages !== 'None') {
+            try {
+                const parsed = JSON.parse(rawImages);
+                if (Array.isArray(parsed)) {
+                    serverImages = parsed;
+                }
+            } catch(e) {
+                // Try pipe-separated format
+                serverImages = rawImages.split('|').filter(u => u && u.trim() && u !== 'None');
+            }
+        }
+        
         if (Array.isArray(serverImages)) {
             existingImages = serverImages.filter(u => u && u !== 'None' && u !== 'null' && u.trim && u.trim()).map((url, i) => ({
                 id: 'existing-' + i,
