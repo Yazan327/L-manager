@@ -46,28 +46,27 @@ db.init_app(app)
 
 # Create tables and run migrations
 with app.app_context():
-    # First create all new tables (including listing_folders)
-    db.create_all()
+    from sqlalchemy import text, inspect
     
-    # Migration: Add folder_id column to listings table if it doesn't exist
+    # Run migrations BEFORE create_all - add missing columns to existing tables
     try:
-        from sqlalchemy import text, inspect
         inspector = inspect(db.engine)
+        existing_tables = inspector.get_table_names()
         
-        # Check if listings table exists and if folder_id column is missing
-        if 'listings' in inspector.get_table_names():
+        # Migration: Add folder_id column to listings table if it doesn't exist
+        if 'listings' in existing_tables:
             columns = [col['name'] for col in inspector.get_columns('listings')]
             
             if 'folder_id' not in columns:
-                # Add folder_id column (without foreign key constraint for simpler migration)
                 with db.engine.connect() as conn:
-                    dialect = db.engine.dialect.name
                     conn.execute(text('ALTER TABLE listings ADD COLUMN folder_id INTEGER'))
                     conn.commit()
                 print("✓ Migration: Added folder_id column to listings table")
     except Exception as e:
-        # Column might already exist or other non-critical error
         print(f"Migration note: {e}")
+    
+    # Now create any new tables (including listing_folders)
+    db.create_all()
     
     # Create default admin user if no users exist
     if User.query.count() == 0:
