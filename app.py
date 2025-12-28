@@ -32,6 +32,13 @@ STATIC_DIR = SRC_DIR / 'dashboard' / 'static'
 # Production settings
 IS_PRODUCTION = os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('PRODUCTION', 'false').lower() == 'true'
 
+# Public URL for external access (needed for PropertyFinder media URLs)
+# Set APP_PUBLIC_URL in Railway environment variables to your domain
+APP_PUBLIC_URL = os.environ.get('APP_PUBLIC_URL') or os.environ.get('RAILWAY_PUBLIC_DOMAIN')
+if APP_PUBLIC_URL and not APP_PUBLIC_URL.startswith('http'):
+    APP_PUBLIC_URL = f'https://{APP_PUBLIC_URL}'
+print(f"[STARTUP] APP_PUBLIC_URL: {APP_PUBLIC_URL or 'NOT SET - local images will NOT work with PropertyFinder!'}")
+
 # Storage Configuration - Use Railway Volume in production
 RAILWAY_VOLUME_PATH = Path('/data')
 if IS_PRODUCTION and RAILWAY_VOLUME_PATH.exists():

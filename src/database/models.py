@@ -660,13 +660,55 @@ class LocalListing(db.Model):
             ]
             pf_data['amenities'] = [a.strip() for a in amenities_list if a.strip() in valid_amenities]
         
-        # Media - Images in API format (auto-convert Google Drive URLs)
+        # Media - Images in API format
+        # PropertyFinder requires publicly accessible URLs
         if self.images:
-            images_list = self.images.split('|') if isinstance(self.images, str) else self.images
-            images_list = [convert_google_drive_url(url.strip()) for url in images_list if url.strip() and url.strip().startswith('http')]
-            if images_list:
+            import os
+            
+            # Get public URL base (Railway or custom domain)
+            public_url = os.environ.get('APP_PUBLIC_URL') or os.environ.get('RAILWAY_PUBLIC_DOMAIN')
+            if public_url and not public_url.startswith('http'):
+                public_url = f'https://{public_url}'
+            
+            # Parse images from JSON or pipe-separated format
+            if isinstance(self.images, str):
+                try:
+                    import json as json_module
+                    parsed = json_module.loads(self.images)
+                    images_list = parsed if isinstance(parsed, list) else [parsed]
+                except:
+                    images_list = self.images.split('|')
+            else:
+                images_list = self.images
+            
+            processed_urls = []
+            for img in images_list:
+                if not img:
+                    continue
+                    
+                url = img.strip() if isinstance(img, str) else str(img)
+                if not url or url.lower() == 'none':
+                    continue
+                
+                # Convert local paths to public URLs
+                if url.startswith('/uploads/') and public_url:
+                    url = f'{public_url}{url}'
+                elif url.startswith('uploads/') and public_url:
+                    url = f'{public_url}/{url}'
+                elif url.startswith('listings/') and public_url:
+                    url = f'{public_url}/uploads/{url}'
+                
+                # Convert Google Drive URLs
+                if url.startswith('http'):
+                    url = convert_google_drive_url(url)
+                    processed_urls.append(url)
+                elif public_url and '/uploads/' in url:
+                    # Local path converted to public URL
+                    processed_urls.append(url)
+            
+            if processed_urls:
                 pf_data['media'] = {
-                    'images': [{'original': {'url': url}} for url in images_list]
+                    'images': [{'original': {'url': url}} for url in processed_urls]
                 }
         
         # Media - Videos (auto-convert Google Drive URLs)
