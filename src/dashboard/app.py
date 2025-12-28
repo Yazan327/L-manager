@@ -46,27 +46,28 @@ db.init_app(app)
 
 # Create tables and run migrations
 with app.app_context():
+    # First create all new tables (including listing_folders)
     db.create_all()
     
     # Migration: Add folder_id column to listings table if it doesn't exist
     try:
         from sqlalchemy import text, inspect
         inspector = inspect(db.engine)
-        columns = [col['name'] for col in inspector.get_columns('listings')]
         
-        if 'folder_id' not in columns:
-            # Add folder_id column
-            with db.engine.connect() as conn:
-                # Check if PostgreSQL or SQLite
-                dialect = db.engine.dialect.name
-                if dialect == 'postgresql':
-                    conn.execute(text('ALTER TABLE listings ADD COLUMN folder_id INTEGER REFERENCES listing_folders(id)'))
-                else:
+        # Check if listings table exists and if folder_id column is missing
+        if 'listings' in inspector.get_table_names():
+            columns = [col['name'] for col in inspector.get_columns('listings')]
+            
+            if 'folder_id' not in columns:
+                # Add folder_id column (without foreign key constraint for simpler migration)
+                with db.engine.connect() as conn:
+                    dialect = db.engine.dialect.name
                     conn.execute(text('ALTER TABLE listings ADD COLUMN folder_id INTEGER'))
-                conn.commit()
-            print("✓ Migration: Added folder_id column to listings table")
+                    conn.commit()
+                print("✓ Migration: Added folder_id column to listings table")
     except Exception as e:
-        print(f"Migration check: {e}")
+        # Column might already exist or other non-critical error
+        print(f"Migration note: {e}")
     
     # Create default admin user if no users exist
     if User.query.count() == 0:
