@@ -4001,7 +4001,19 @@ def api_move_listings_to_folder():
 def loops_page():
     """Loop management page"""
     loops = LoopConfig.query.order_by(LoopConfig.created_at.desc()).all()
-    listings = LocalListing.query.filter(LocalListing.folder_id != ListingFolder.query.filter_by(name='Duplicated').first().id if ListingFolder.query.filter_by(name='Duplicated').first() else True).order_by(LocalListing.reference).all()
+    
+    # Get primary listings only (exclude "Duplicated" folder)
+    duplicated_folder = ListingFolder.query.filter_by(name='Duplicated').first()
+    if duplicated_folder:
+        listings = LocalListing.query.filter(
+            db.or_(
+                LocalListing.folder_id != duplicated_folder.id,
+                LocalListing.folder_id == None
+            )
+        ).order_by(LocalListing.reference).all()
+    else:
+        listings = LocalListing.query.order_by(LocalListing.reference).all()
+    
     return render_template('loops.html', loops=loops, listings=listings)
 
 
