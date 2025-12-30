@@ -441,6 +441,31 @@
                 <i class="fas fa-list text-indigo-500 mr-2"></i>Listings Details
             </h3>
             <div class="flex flex-wrap items-center gap-3">
+                <!-- Column Settings -->
+                <div class="relative" x-data="{ showColumnSettings: false }">
+                    <button @click="showColumnSettings = !showColumnSettings" 
+                            class="flex items-center gap-1 px-2 py-1 text-sm text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded">
+                        <i class="fas fa-columns"></i>
+                        <span class="hidden sm:inline">Columns</span>
+                    </button>
+                    <div x-show="showColumnSettings" @click.outside="showColumnSettings = false"
+                         class="absolute right-0 top-full mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg p-3 min-w-[200px]">
+                        <p class="text-xs font-semibold text-gray-500 uppercase mb-2">Show/Hide Columns</p>
+                        <div class="space-y-1 max-h-64 overflow-y-auto">
+                            <template x-for="col in columnOptions" :key="col.key">
+                                <label class="flex items-center gap-2 px-2 py-1 hover:bg-gray-50 rounded cursor-pointer text-sm">
+                                    <input type="checkbox" :checked="visibleColumns.includes(col.key)" 
+                                           @change="toggleColumn(col.key)" class="rounded text-indigo-600">
+                                    <span x-text="col.label"></span>
+                                </label>
+                            </template>
+                        </div>
+                        <div class="border-t mt-2 pt-2 flex gap-2">
+                            <button @click="resetColumns()" class="text-xs text-gray-500 hover:text-gray-700">Reset</button>
+                            <button @click="showColumnSettings = false" class="text-xs text-indigo-600 hover:text-indigo-800 ml-auto">Done</button>
+                        </div>
+                    </div>
+                </div>
                 <!-- Page Size Selector -->
                 <div class="flex items-center gap-2">
                     <label class="text-sm text-gray-500">Show:</label>
@@ -464,27 +489,39 @@
             <table class="w-full text-xs">
                 <thead class="bg-gray-50 sticky top-0">
                     <tr>
-                        <th @click="sortTable('reference')" class="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
+                        <th x-show="visibleColumns.includes('reference')" @click="sortTable('reference')" class="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
                             <div class="flex items-center gap-1">Ref <span x-show="tableSortColumn === 'reference'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
                         </th>
-                        <th @click="sortTable('type')" class="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
+                        <th x-show="visibleColumns.includes('type')" @click="sortTable('type')" class="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
                             <div class="flex items-center gap-1">Type <span x-show="tableSortColumn === 'type'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
                         </th>
-                        <th @click="sortTable('bedrooms')" class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
+                        <th x-show="visibleColumns.includes('bedrooms')" @click="sortTable('bedrooms')" class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
                             <div class="flex items-center justify-center gap-1">BR <span x-show="tableSortColumn === 'bedrooms'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
                         </th>
-                        <th class="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase">Location</th>
-                        <th @click="sortTable('qualityScore')" class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100" title="Quality Score">
+                        <th x-show="visibleColumns.includes('location')" class="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase">Location</th>
+                        <th x-show="visibleColumns.includes('exposure')" @click="sortTable('exposure')" class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100" title="Exposure Type">
+                            <div class="flex items-center justify-center gap-1">Boost <span x-show="tableSortColumn === 'exposure'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
+                        </th>
+                        <th x-show="visibleColumns.includes('publishedAt')" @click="sortTable('publishedAt')" class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100" title="Published Date">
+                            <div class="flex items-center justify-center gap-1">Published <span x-show="tableSortColumn === 'publishedAt'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
+                        </th>
+                        <th x-show="visibleColumns.includes('qualityScore')" @click="sortTable('qualityScore')" class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100" title="Quality Score">
                             <div class="flex items-center justify-center gap-1">Q% <span x-show="tableSortColumn === 'qualityScore'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
                         </th>
-                        <th class="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase">Agent</th>
-                        <th @click="sortTable('price')" class="px-2 py-2 text-right text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
+                        <th x-show="visibleColumns.includes('agent')" class="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase">Agent</th>
+                        <th x-show="visibleColumns.includes('price')" @click="sortTable('price')" class="px-2 py-2 text-right text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
                             <div class="flex items-center justify-end gap-1">Price <span x-show="tableSortColumn === 'price'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
                         </th>
-                        <th @click="sortTable('status')" class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
+                        <th x-show="visibleColumns.includes('status')" @click="sortTable('status')" class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
                             <div class="flex items-center justify-center gap-1">Status <span x-show="tableSortColumn === 'status'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
                         </th>
-                        <th @click="sortTable('leads')" class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
+                        <th x-show="visibleColumns.includes('impressions')" @click="sortTable('impressions')" class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100" title="Search Impressions">
+                            <div class="flex items-center justify-center gap-1"><i class="fas fa-eye text-purple-400 mr-1"></i>Impr <span x-show="tableSortColumn === 'impressions'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
+                        </th>
+                        <th x-show="visibleColumns.includes('clicks')" @click="sortTable('clicks')" class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100" title="Clicks">
+                            <div class="flex items-center justify-center gap-1"><i class="fas fa-mouse-pointer text-blue-400 mr-1"></i>Clicks <span x-show="tableSortColumn === 'clicks'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
+                        </th>
+                        <th x-show="visibleColumns.includes('leads')" @click="sortTable('leads')" class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
                             <div class="flex items-center justify-center gap-1">Leads <span x-show="tableSortColumn === 'leads'" x-text="tableSortDir === 'asc' ? '↑' : '↓'"></span></div>
                         </th>
                         <th class="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase" x-show="dataSource === 'pf'"></th>
@@ -494,9 +531,9 @@
                     <template x-for="listing in paginatedListings" :key="listing.id || listing.reference">
                         <tr class="hover:bg-gray-50">
                             <!-- Reference -->
-                            <td class="px-2 py-1.5 font-mono text-xs text-gray-600" x-text="listing.reference || listing.id || '-'"></td>
+                            <td x-show="visibleColumns.includes('reference')" class="px-2 py-1.5 font-mono text-xs text-gray-600" x-text="listing.reference || listing.id || '-'"></td>
                             <!-- Property Type with Category/Offering badge -->
-                            <td class="px-2 py-1.5">
+                            <td x-show="visibleColumns.includes('type')" class="px-2 py-1.5">
                                 <div class="flex items-center gap-1">
                                     <span class="capitalize text-xs" x-text="(listing.type || listing.property_type || '-').replace(/-/g, ' ')"></span>
                                     <span class="text-xs px-1 rounded" 
@@ -505,16 +542,28 @@
                                 </div>
                             </td>
                             <!-- Bedrooms -->
-                            <td class="px-2 py-1.5 text-center text-xs" x-text="getBedrooms(listing)"></td>
+                            <td x-show="visibleColumns.includes('bedrooms')" class="px-2 py-1.5 text-center text-xs" x-text="getBedrooms(listing)"></td>
                             <!-- Location (click to copy location + ID) -->
-                            <td class="px-2 py-1.5 cursor-pointer hover:bg-indigo-50" 
+                            <td x-show="visibleColumns.includes('location')" class="px-2 py-1.5 cursor-pointer hover:bg-indigo-50" 
                                 @click.stop="copyLocationWithId(listing)"
                                 :title="'Click to copy: ' + getLocation(listing) + (listing.location?.id ? ' (ID: ' + listing.location.id + ')' : '')">
                                 <div class="max-w-[120px] truncate text-xs hover:text-indigo-600" 
                                      x-text="getLocation(listing)"></div>
                             </td>
+                            <!-- Exposure/Boost Type -->
+                            <td x-show="visibleColumns.includes('exposure')" class="px-2 py-1.5 text-center">
+                                <span class="px-1.5 py-0.5 text-xs rounded-full"
+                                      :class="getExposureClass(listing)"
+                                      x-text="getExposureType(listing)">
+                                </span>
+                            </td>
+                            <!-- Published Date -->
+                            <td x-show="visibleColumns.includes('publishedAt')" class="px-2 py-1.5 text-center text-xs text-gray-500" 
+                                :title="getPublishedAt(listing, true)"
+                                x-text="getPublishedAt(listing)">
+                            </td>
                             <!-- Quality Score -->
-                            <td class="px-2 py-1.5 text-center">
+                            <td x-show="visibleColumns.includes('qualityScore')" class="px-2 py-1.5 text-center">
                                 <span class="text-xs font-medium" 
                                       :class="{
                                           'text-green-600': (listing.qualityScore?.value || 0) >= 80,
@@ -524,13 +573,13 @@
                                       x-text="listing.qualityScore?.value || '-'"></span>
                             </td>
                             <!-- Agent -->
-                            <td class="px-2 py-1.5">
+                            <td x-show="visibleColumns.includes('agent')" class="px-2 py-1.5">
                                 <div class="max-w-[80px] truncate text-xs" :title="getAgentName(listing)" x-text="getAgentName(listing)"></div>
                             </td>
                             <!-- Price -->
-                            <td class="px-2 py-1.5 text-right text-xs font-medium" x-text="formatPrice(listing.price)"></td>
+                            <td x-show="visibleColumns.includes('price')" class="px-2 py-1.5 text-right text-xs font-medium" x-text="formatPrice(listing.price)"></td>
                             <!-- Status -->
-                            <td class="px-2 py-1.5 text-center">
+                            <td x-show="visibleColumns.includes('status')" class="px-2 py-1.5 text-center">
                                 <span class="px-1.5 py-0.5 text-xs rounded-full" 
                                       :class="{
                                           'bg-green-100 text-green-700': getStatus(listing) === 'live',
@@ -541,8 +590,18 @@
                                       x-text="getStatus(listing)">
                                 </span>
                             </td>
+                            <!-- Impressions -->
+                            <td x-show="visibleColumns.includes('impressions')" class="px-2 py-1.5 text-center">
+                                <span class="text-xs" :class="getImpressions(listing) > 0 ? 'text-purple-600 font-medium' : 'text-gray-400'" 
+                                      x-text="getImpressions(listing)"></span>
+                            </td>
+                            <!-- Clicks -->
+                            <td x-show="visibleColumns.includes('clicks')" class="px-2 py-1.5 text-center">
+                                <span class="text-xs" :class="getClicks(listing) > 0 ? 'text-blue-600 font-medium' : 'text-gray-400'" 
+                                      x-text="getClicks(listing)"></span>
+                            </td>
                             <!-- Leads Received -->
-                            <td class="px-2 py-1.5 text-center">
+                            <td x-show="visibleColumns.includes('leads')" class="px-2 py-1.5 text-center">
                                 <span class="text-xs font-medium" :class="getLeadsCount(listing) > 0 ? 'text-green-600' : 'text-gray-400'" x-text="getLeadsCount(listing)"></span>
                             </td>
                             <!-- Action -->
@@ -650,6 +709,25 @@ function insightsData() {
         // Agent stats
         agentStats: [],
         
+        // Column visibility settings
+        columnOptions: [
+            { key: 'reference', label: 'Reference' },
+            { key: 'type', label: 'Type' },
+            { key: 'bedrooms', label: 'Bedrooms' },
+            { key: 'location', label: 'Location' },
+            { key: 'exposure', label: 'Boost/Exposure' },
+            { key: 'publishedAt', label: 'Published Date' },
+            { key: 'qualityScore', label: 'Quality Score' },
+            { key: 'agent', label: 'Agent' },
+            { key: 'price', label: 'Price' },
+            { key: 'status', label: 'Status' },
+            { key: 'impressions', label: 'Impressions' },
+            { key: 'clicks', label: 'Clicks' },
+            { key: 'leads', label: 'Leads' }
+        ],
+        visibleColumns: JSON.parse(localStorage.getItem('insights_visible_columns') || 'null') || 
+            ['reference', 'type', 'bedrooms', 'location', 'exposure', 'publishedAt', 'qualityScore', 'price', 'status', 'impressions', 'clicks', 'leads'],
+        
         get listings() {
             return this.dataSource === 'pf' ? this.pfListings : this.localListings;
         },
@@ -718,6 +796,15 @@ function insightsData() {
                     case 'clicks':
                         aVal = a.statistics?.clicks ?? a.clicks ?? 0;
                         bVal = b.statistics?.clicks ?? b.clicks ?? 0;
+                        break;
+                    case 'exposure':
+                        // Sort order: Featured > Premium > Standard
+                        aVal = this.getExposureType(a) === 'Featured' ? 3 : this.getExposureType(a) === 'Premium' ? 2 : 1;
+                        bVal = this.getExposureType(b) === 'Featured' ? 3 : this.getExposureType(b) === 'Premium' ? 2 : 1;
+                        break;
+                    case 'publishedAt':
+                        aVal = new Date(a.portals?.propertyfinder?.publishedAt || a.publishedAt || 0).getTime();
+                        bVal = new Date(b.portals?.propertyfinder?.publishedAt || b.publishedAt || 0).getTime();
                         break;
                     default:
                         aVal = 0;
@@ -813,6 +900,86 @@ function insightsData() {
                 const leadListingId = String(lead.listing?.id || lead.listing?.reference || lead.listingId || '');
                 return leadListingId === listingId;
             }).length;
+        },
+        
+        // Column visibility management
+        toggleColumn(key) {
+            const idx = this.visibleColumns.indexOf(key);
+            if (idx > -1) {
+                this.visibleColumns.splice(idx, 1);
+            } else {
+                this.visibleColumns.push(key);
+            }
+            localStorage.setItem('insights_visible_columns', JSON.stringify(this.visibleColumns));
+        },
+        
+        resetColumns() {
+            this.visibleColumns = ['reference', 'type', 'bedrooms', 'location', 'exposure', 'publishedAt', 'qualityScore', 'price', 'status', 'impressions', 'clicks', 'leads'];
+            localStorage.setItem('insights_visible_columns', JSON.stringify(this.visibleColumns));
+        },
+        
+        // Get exposure/boost type from products object
+        getExposureType(listing) {
+            const products = listing.products;
+            if (products) {
+                // Check for featured/premium/standard objects with data
+                if (products.featured && (products.featured.id || products.featured.createdAt)) {
+                    return 'Featured';
+                }
+                if (products.premium && (products.premium.id || products.premium.createdAt)) {
+                    return 'Premium';
+                }
+                if (products.standard && (products.standard.id || products.standard.createdAt)) {
+                    return 'Standard';
+                }
+                // Fallback for different structures
+                if (typeof products === 'object' && !Array.isArray(products)) {
+                    if (products.type) return products.type.charAt(0).toUpperCase() + products.type.slice(1);
+                    if (products.name) return products.name.charAt(0).toUpperCase() + products.name.slice(1);
+                }
+                if (Array.isArray(products) && products.length > 0) {
+                    const hasFeature = products.some(p => p.type === 'featured' || p.name === 'featured');
+                    const hasPremium = products.some(p => p.type === 'premium' || p.name === 'premium');
+                    if (hasFeature) return 'Featured';
+                    if (hasPremium) return 'Premium';
+                }
+            }
+            // Fallback for direct flags
+            if (listing.featured) return 'Featured';
+            if (listing.premium) return 'Premium';
+            return 'Standard';
+        },
+        
+        getExposureClass(listing) {
+            const type = this.getExposureType(listing);
+            switch(type) {
+                case 'Featured': return 'bg-yellow-100 text-yellow-800';
+                case 'Premium': return 'bg-purple-100 text-purple-800';
+                default: return 'bg-gray-100 text-gray-600';
+            }
+        },
+        
+        // Get published date from portals.propertyfinder.publishedAt
+        getPublishedAt(listing, full = false) {
+            const publishedAt = listing.portals?.propertyfinder?.publishedAt || listing.publishedAt || listing.published_at;
+            if (!publishedAt) return '-';
+            const date = new Date(publishedAt);
+            if (full) {
+                return date.toLocaleString();
+            }
+            // Short format: DD/MM HH:MM
+            return date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' }) + 
+                   ' ' + date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        },
+        
+        // Get impressions from statistics
+        getImpressions(listing) {
+            return listing.statistics?.impressions || listing.impressions || 0;
+        },
+        
+        // Get clicks from statistics
+        getClicks(listing) {
+            return listing.statistics?.clicks || listing.clicks || 0;
         },
         
         getTotalLeadsForListings() {
@@ -1167,25 +1334,35 @@ function insightsData() {
                 percent: totalLeads > 0 ? Math.round((count / totalLeads) * 100) : 0
             })).sort((a, b) => b.count - a.count);
             
-            // Exposure/Product Types
+            // Exposure/Product Types - properly check products.featured, products.premium, products.standard
             const exposureCounts = {};
             listings.forEach(l => {
-                // Handle products as array or object
-                let products = l.products;
-                if (products && !Array.isArray(products)) {
-                    // If it's an object, try to extract product type
-                    const type = products.type || products.name || 'Standard';
-                    exposureCounts[type] = (exposureCounts[type] || 0) + 1;
-                } else if (Array.isArray(products) && products.length > 0) {
-                    products.forEach(p => {
-                        const type = p.type || p.name || 'Standard';
-                        exposureCounts[type] = (exposureCounts[type] || 0) + 1;
-                    });
+                const products = l.products;
+                let type = 'Standard';
+                
+                if (products) {
+                    // Check for featured/premium/standard objects with data
+                    if (products.featured && (products.featured.id || products.featured.createdAt)) {
+                        type = 'Featured';
+                    } else if (products.premium && (products.premium.id || products.premium.createdAt)) {
+                        type = 'Premium';
+                    } else if (products.standard && (products.standard.id || products.standard.createdAt)) {
+                        type = 'Standard';
+                    } else if (typeof products === 'object' && !Array.isArray(products)) {
+                        // Fallback: check for type/name property
+                        type = products.type || products.name || 'Standard';
+                    } else if (Array.isArray(products) && products.length > 0) {
+                        // Handle array of products
+                        const hasFeature = products.some(p => p.type === 'featured' || p.name === 'featured');
+                        const hasPremium = products.some(p => p.type === 'premium' || p.name === 'premium');
+                        type = hasFeature ? 'Featured' : hasPremium ? 'Premium' : 'Standard';
+                    }
                 } else {
-                    // No products, use featured flag or default to Standard
-                    const type = l.featured ? 'Featured' : (l.premium ? 'Premium' : 'Standard');
-                    exposureCounts[type] = (exposureCounts[type] || 0) + 1;
+                    // No products object, check direct flags
+                    type = l.featured ? 'Featured' : (l.premium ? 'Premium' : 'Standard');
                 }
+                
+                exposureCounts[type] = (exposureCounts[type] || 0) + 1;
             });
             const totalForExposure = listings.length;
             this.charts.exposureTypes = Object.entries(exposureCounts).map(([label, count]) => ({

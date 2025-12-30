@@ -570,8 +570,49 @@ def check_and_run_loops():
             print(f"[SCHEDULER] Error checking loops: {e}")
 
 
+def auto_refresh_pf_data():
+    """Background job to automatically refresh PropertyFinder data"""
+    with app.app_context():
+        try:
+            # Check if auto-sync is enabled (use existing settings names)
+            auto_sync_enabled = AppSettings.get('auto_sync_enabled', 'true') == 'true'
+            if not auto_sync_enabled:
+                return
+            
+            # Get sync interval (use existing setting name, default: 30 minutes)
+            sync_interval = int(AppSettings.get('sync_interval_minutes', '30'))
+            
+            # Check if cache is stale
+            last_updated = PFCache.get_last_update('listings')
+            if last_updated:
+                age_minutes = (datetime.now() - last_updated).total_seconds() / 60
+                if age_minutes < sync_interval:
+                    print(f"[AUTO-REFRESH] Cache is fresh ({age_minutes:.1f}m old), skipping")
+                    return
+            
+            print("[AUTO-REFRESH] Refreshing PropertyFinder data...")
+            get_cached_pf_data(force_refresh=True, quick_load=False)
+            print("[AUTO-REFRESH] Complete")
+            
+        except Exception as e:
+            print(f"[AUTO-REFRESH] Error: {e}")
+
+
 # Start the scheduler
 start_loop_scheduler()
+
+# Add auto-refresh job (check every 5 minutes, but only refresh if stale)
+try:
+    loop_scheduler.add_job(
+        func=auto_refresh_pf_data,
+        trigger=IntervalTrigger(minutes=5),
+        id='pf_auto_refresh',
+        name='Auto-refresh PropertyFinder data',
+        replace_existing=True
+    )
+    print("[SCHEDULER] PF auto-refresh job added")
+except Exception as e:
+    print(f"[SCHEDULER] Failed to add auto-refresh job: {e}")
 
 
 # ==================== GLOBAL ERROR HANDLER ====================
@@ -762,9 +803,9 @@ def build_location_map(listings, force_refresh=False):
 def load_cache_from_db():
     """Load cached data from database on first access - LAZY loading"""
     global _pf_cache
-    # Only load last_updated, not the actual data
+    # Only load last_updated, not the actual data (get from listings cache specifically)
     if _pf_cache['last_updated'] is None:
-        _pf_cache['last_updated'] = PFCache.get_last_update()
+        _pf_cache['last_updated'] = PFCache.get_last_update('listings')
 
 def get_cached_pf_data(force_refresh=False, quick_load=False):
     """Get PropertyFinder data with caching (DB-backed)
@@ -1634,11 +1675,13 @@ def api_pf_insights():
     # If we have cached data and not forcing refresh, return immediately (no API calls)
     if cached_listings and not force_refresh:
         print(f"[Insights] Returning {len(cached_listings)} cached listings (no API call)")
+        # Get last_updated from DB if not in memory
+        last_updated = _pf_cache.get('last_updated') or PFCache.get_last_update('listings')
         cache = {
             'listings': cached_listings,
             'users': cached_users,
             'leads': cached_leads,
-            'last_updated': _pf_cache['last_updated'],
+            'last_updated': last_updated,
             'from_cache': True
         }
     elif force_refresh:

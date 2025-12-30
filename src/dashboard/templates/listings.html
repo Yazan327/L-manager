@@ -52,7 +52,7 @@
                         </a>
                         <!-- Folder actions (show on hover) -->
                         <div class="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1">
-                            <button @click.prevent="editFolder({{ folder | tojson | e }})" 
+                            <button @click.prevent="editFolderById({{ folder.id }})" 
                                     class="p-1 text-gray-400 hover:text-indigo-600 hover:bg-white rounded">
                                 <i class="fas fa-edit text-xs"></i>
                             </button>
@@ -569,6 +569,9 @@ function listingsPage() {
         pagination: {{ pagination | tojson | safe if pagination else '{}' }},
         selectedIds: [],
         
+        // Folders data from server
+        allFolders: {{ folders | tojson | safe if folders else '[]' }},
+        
         // Folder state
         showFolderSidebar: localStorage.getItem('showFolderSidebar') !== 'false',
         showCreateFolderModal: false,
@@ -602,6 +605,13 @@ function listingsPage() {
         resetFolderForm() {
             this.folderForm = { name: '', color: 'indigo', icon: 'fa-folder', description: '' };
             this.editingFolderId = null;
+        },
+        
+        editFolderById(folderId) {
+            const folder = this.allFolders.find(f => f.id === folderId);
+            if (folder) {
+                this.editFolder(folder);
+            }
         },
         
         editFolder(folder) {

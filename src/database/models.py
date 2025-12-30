@@ -794,8 +794,8 @@ class PFCache(db.Model):
             cache = cls.query.filter_by(cache_type=cache_type).first()
             return cache.updated_at if cache else None
         else:
-            # Get the oldest update time across all cache types
-            cache = cls.query.order_by(cls.updated_at.asc()).first()
+            # Get the most recent update time across all cache types (for 'listings')
+            cache = cls.query.filter_by(cache_type='listings').first()
             return cache.updated_at if cache else None
     
     @classmethod
