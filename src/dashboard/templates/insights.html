@@ -721,12 +721,12 @@ function insightsData() {
             { key: 'agent', label: 'Agent' },
             { key: 'price', label: 'Price' },
             { key: 'status', label: 'Status' },
-            { key: 'impressions', label: 'Impressions' },
-            { key: 'clicks', label: 'Clicks' },
+            { key: 'impressions', label: 'Impressions (N/A)' },
+            { key: 'clicks', label: 'Clicks (N/A)' },
             { key: 'leads', label: 'Leads' }
         ],
         visibleColumns: JSON.parse(localStorage.getItem('insights_visible_columns') || 'null') || 
-            ['reference', 'type', 'bedrooms', 'location', 'exposure', 'publishedAt', 'qualityScore', 'price', 'status', 'impressions', 'clicks', 'leads'],
+            ['reference', 'type', 'bedrooms', 'location', 'exposure', 'publishedAt', 'qualityScore', 'price', 'status', 'leads'],
         
         get listings() {
             return this.dataSource === 'pf' ? this.pfListings : this.localListings;
@@ -798,9 +798,10 @@ function insightsData() {
                         bVal = b.statistics?.clicks ?? b.clicks ?? 0;
                         break;
                     case 'exposure':
-                        // Sort order: Featured > Premium > Standard
-                        aVal = this.getExposureType(a) === 'Featured' ? 3 : this.getExposureType(a) === 'Premium' ? 2 : 1;
-                        bVal = this.getExposureType(b) === 'Featured' ? 3 : this.getExposureType(b) === 'Premium' ? 2 : 1;
+                        // Sort order: Spotlight > Featured > Premium > Standard
+                        const exposureOrder = { 'Spotlight': 4, 'Featured': 3, 'Premium': 2, 'Standard': 1 };
+                        aVal = exposureOrder[this.getExposureType(a)] || 1;
+                        bVal = exposureOrder[this.getExposureType(b)] || 1;
                         break;
                     case 'publishedAt':
                         aVal = new Date(a.portals?.propertyfinder?.publishedAt || a.publishedAt || 0).getTime();
@@ -914,12 +915,18 @@ function insightsData() {
         },
         
         resetColumns() {
-            this.visibleColumns = ['reference', 'type', 'bedrooms', 'location', 'exposure', 'publishedAt', 'qualityScore', 'price', 'status', 'impressions', 'clicks', 'leads'];
+            // Note: clicks/impressions not shown by default - data not available from PF API
+            this.visibleColumns = ['reference', 'type', 'bedrooms', 'location', 'exposure', 'publishedAt', 'qualityScore', 'price', 'status', 'leads'];
             localStorage.setItem('insights_visible_columns', JSON.stringify(this.visibleColumns));
         },
         
         // Get exposure/boost type from products object
         getExposureType(listing) {
+            // Check for Spotlight first (CTS priority 100)
+            if (listing.ctsPriority === 100 || listing.spotlight || listing.spotlightStatus === 'spotlight') {
+                return 'Spotlight';
+            }
+            
             const products = listing.products;
             if (products) {
                 // Check for featured/premium/standard objects with data
@@ -953,6 +960,7 @@ function insightsData() {
         getExposureClass(listing) {
             const type = this.getExposureType(listing);
             switch(type) {
+                case 'Spotlight': return 'bg-orange-100 text-orange-800';
                 case 'Featured': return 'bg-yellow-100 text-yellow-800';
                 case 'Premium': return 'bg-purple-100 text-purple-800';
                 default: return 'bg-gray-100 text-gray-600';
@@ -1337,39 +1345,22 @@ function insightsData() {
             // Exposure/Product Types - properly check products.featured, products.premium, products.standard
             const exposureCounts = {};
             listings.forEach(l => {
-                const products = l.products;
-                let type = 'Standard';
-                
-                if (products) {
-                    // Check for featured/premium/standard objects with data
-                    if (products.featured && (products.featured.id || products.featured.createdAt)) {
-                        type = 'Featured';
-                    } else if (products.premium && (products.premium.id || products.premium.createdAt)) {
-                        type = 'Premium';
-                    } else if (products.standard && (products.standard.id || products.standard.createdAt)) {
-                        type = 'Standard';
-                    } else if (typeof products === 'object' && !Array.isArray(products)) {
-                        // Fallback: check for type/name property
-                        type = products.type || products.name || 'Standard';
-                    } else if (Array.isArray(products) && products.length > 0) {
-                        // Handle array of products
-                        const hasFeature = products.some(p => p.type === 'featured' || p.name === 'featured');
-                        const hasPremium = products.some(p => p.type === 'premium' || p.name === 'premium');
-                        type = hasFeature ? 'Featured' : hasPremium ? 'Premium' : 'Standard';
-                    }
-                } else {
-                    // No products object, check direct flags
-                    type = l.featured ? 'Featured' : (l.premium ? 'Premium' : 'Standard');
-                }
-                
+                // Use the getExposureType helper for consistency
+                const type = this.getExposureType(l);
                 exposureCounts[type] = (exposureCounts[type] || 0) + 1;
             });
             const totalForExposure = listings.length;
+            // Sort by priority: Spotlight > Featured > Premium > Standard
+            const exposureOrder = ['Spotlight', 'Featured', 'Premium', 'Standard'];
             this.charts.exposureTypes = Object.entries(exposureCounts).map(([label, count]) => ({
                 label: label.charAt(0).toUpperCase() + label.slice(1).replace(/-/g, ' '),
                 count,
                 percent: totalForExposure > 0 ? Math.round((count / totalForExposure) * 100) : 0
-            })).sort((a, b) => b.count - a.count);
+            })).sort((a, b) => {
+                const aOrder = exposureOrder.indexOf(a.label);
+                const bOrder = exposureOrder.indexOf(b.label);
+                return (aOrder === -1 ? 99 : aOrder) - (bOrder === -1 ? 99 : bOrder);
+            });
             
             // Offerings (sale vs rent)
             this.charts.offerings = this.groupBy(listings, l => 
@@ -1576,11 +1567,11 @@ function insightsData() {
         
         getExposureColor(exposure) {
             const exposureColors = {
+                'spotlight': '#f97316',  // Orange for spotlight
                 'featured': '#f59e0b',
                 'premium': '#8b5cf6',
                 'standard': '#6b7280',
                 'signature': '#ec4899',
-                'spotlight': '#ef4444',
                 'basic': '#9ca3af'
             };
             return exposureColors[exposure?.toLowerCase()] || '#6b7280';
