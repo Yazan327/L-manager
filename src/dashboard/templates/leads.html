@@ -11,6 +11,25 @@
             <p class="text-gray-600">Manage incoming leads from all sources</p>
         </div>
         <div class="flex gap-2">
+            <!-- View Toggle -->
+            <div class="flex bg-gray-100 rounded-lg p-1">
+                <button @click="viewMode = 'list'" 
+                        :class="viewMode === 'list' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-600 hover:text-gray-900'"
+                        class="px-3 py-1.5 rounded-md text-sm font-medium flex items-center gap-1.5 transition-all">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
+                    </svg>
+                    List
+                </button>
+                <button @click="viewMode = 'kanban'" 
+                        :class="viewMode === 'kanban' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-600 hover:text-gray-900'"
+                        class="px-3 py-1.5 rounded-md text-sm font-medium flex items-center gap-1.5 transition-all">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/>
+                    </svg>
+                    Kanban
+                </button>
+            </div>
             <button @click="showAddModal = true" 
                     class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -115,8 +134,8 @@
         </div>
     </div>
 
-    <!-- Leads Table -->
-    <div class="bg-white rounded-lg shadow-sm border overflow-hidden">
+    <!-- Leads Table (List View) -->
+    <div x-show="viewMode === 'list'" class="bg-white rounded-lg shadow-sm border overflow-hidden">
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
@@ -271,6 +290,101 @@
                     </template>
                 </tbody>
             </table>
+        </div>
+    </div>
+
+    <!-- Kanban View -->
+    <div x-show="viewMode === 'kanban'" class="overflow-x-auto pb-4">
+        <div class="flex gap-4 min-w-max">
+            <!-- Kanban Columns -->
+            <template x-for="column in kanbanColumns" :key="column.status">
+                <div class="w-80 flex-shrink-0 bg-gray-50 rounded-lg">
+                    <!-- Column Header -->
+                    <div class="p-3 border-b bg-white rounded-t-lg">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <div class="w-3 h-3 rounded-full" :class="column.color"></div>
+                                <span class="font-medium text-gray-900" x-text="column.label"></span>
+                            </div>
+                            <span class="bg-gray-200 text-gray-600 text-xs px-2 py-0.5 rounded-full" 
+                                  x-text="getLeadsByStatus(column.status).length"></span>
+                        </div>
+                    </div>
+                    
+                    <!-- Column Cards -->
+                    <div class="p-2 space-y-2 max-h-[calc(100vh-350px)] overflow-y-auto">
+                        <template x-for="lead in getLeadsByStatus(column.status)" :key="lead.id">
+                            <div @click="viewLead(lead)" 
+                                 class="bg-white rounded-lg shadow-sm border p-3 cursor-pointer hover:shadow-md transition-shadow">
+                                <!-- Lead Name & Channel -->
+                                <div class="flex items-start justify-between mb-2">
+                                    <div class="font-medium text-gray-900 truncate pr-2" x-text="lead.name"></div>
+                                    <span class="px-1.5 py-0.5 text-xs rounded flex-shrink-0"
+                                          :class="getChannelClass(lead.channel)"
+                                          x-text="lead.channel || lead.source"></span>
+                                </div>
+                                
+                                <!-- Contact Info -->
+                                <div class="text-sm text-gray-500 mb-2">
+                                    <div x-show="lead.email" class="truncate" x-text="lead.email"></div>
+                                    <div x-show="lead.phone" x-text="lead.phone"></div>
+                                </div>
+                                
+                                <!-- Listing -->
+                                <div x-show="lead.listing_reference || lead.pf_listing_id" class="text-xs text-gray-400 mb-2">
+                                    <span class="bg-gray-100 px-1.5 py-0.5 rounded" x-text="lead.listing_reference || lead.pf_listing_id"></span>
+                                </div>
+                                
+                                <!-- Footer: Agent & Date -->
+                                <div class="flex items-center justify-between text-xs text-gray-400 mt-2 pt-2 border-t">
+                                    <div class="flex items-center gap-1 truncate">
+                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                                        </svg>
+                                        <span x-text="lead.pf_agent_name || 'Unassigned'"></span>
+                                    </div>
+                                    <div x-text="formatDateShort(lead.received_at || lead.created_at)"></div>
+                                </div>
+                                
+                                <!-- Quick Actions -->
+                                <div class="flex gap-2 mt-2 pt-2 border-t">
+                                    <a x-show="lead.phone || lead.whatsapp" 
+                                       :href="'https://wa.me/' + (lead.whatsapp || lead.phone)?.replace(/[^0-9]/g, '')" 
+                                       target="_blank" @click.stop
+                                       class="text-green-600 hover:text-green-800 p-1" title="WhatsApp">
+                                        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                                            <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+                                        </svg>
+                                    </a>
+                                    <a x-show="lead.response_link" :href="lead.response_link" target="_blank" @click.stop
+                                       class="text-indigo-600 hover:text-indigo-800 p-1" title="Reply in PF">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
+                                        </svg>
+                                    </a>
+                                    <select :value="lead.status" @click.stop @change="updateStatus(lead.id, $event.target.value)"
+                                            class="ml-auto text-xs border rounded px-1 py-0.5"
+                                            :class="getStatusClass(lead.status)">
+                                        <option value="new">New</option>
+                                        <option value="contacted">Contacted</option>
+                                        <option value="qualified">Qualified</option>
+                                        <option value="viewing">Viewing</option>
+                                        <option value="negotiation">Negotiation</option>
+                                        <option value="won">Won</option>
+                                        <option value="lost">Lost</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </template>
+                        
+                        <!-- Empty State -->
+                        <div x-show="getLeadsByStatus(column.status).length === 0" 
+                             class="text-center py-8 text-gray-400 text-sm">
+                            No leads
+                        </div>
+                    </div>
+                </div>
+            </template>
         </div>
     </div>
 
@@ -467,6 +581,18 @@ function leadsManager() {
         sortDirection: 'desc',
         stats: { total: 0, new: 0, contacted: 0, qualified: 0, won: 0 },
         newLead: { name: '', email: '', phone: '', source: 'phone', priority: 'medium', message: '', listing_reference: '' },
+        viewMode: localStorage.getItem('leads_view_mode') || 'list',
+        
+        // Kanban columns configuration
+        kanbanColumns: [
+            { status: 'new', label: 'New', color: 'bg-blue-500' },
+            { status: 'contacted', label: 'Contacted', color: 'bg-yellow-500' },
+            { status: 'qualified', label: 'Qualified', color: 'bg-green-500' },
+            { status: 'viewing', label: 'Viewing', color: 'bg-purple-500' },
+            { status: 'negotiation', label: 'Negotiation', color: 'bg-orange-500' },
+            { status: 'won', label: 'Won', color: 'bg-emerald-500' },
+            { status: 'lost', label: 'Lost', color: 'bg-red-500' }
+        ],
         
         get uniqueAgents() {
             const agents = new Set();
@@ -479,6 +605,10 @@ function leadsManager() {
         
         async init() {
             await this.loadLeads();
+            // Watch viewMode changes and save to localStorage
+            this.$watch('viewMode', (val) => {
+                localStorage.setItem('leads_view_mode', val);
+            });
         },
         
         async loadLeads() {
@@ -700,9 +830,27 @@ function leadsManager() {
             this.showViewModal = true;
         },
         
+        // Get leads filtered by status (for kanban)
+        getLeadsByStatus(status) {
+            return this.filteredLeads.filter(l => l.status === status);
+        },
+        
         formatDate(dateStr) {
             if (!dateStr) return '-';
             return new Date(dateStr).toLocaleDateString('en-AE', { day: 'numeric', month: 'short', year: 'numeric' });
+        },
+        
+        formatDateShort(dateStr) {
+            if (!dateStr) return '-';
+            const date = new Date(dateStr);
+            const now = new Date();
+            const diffDays = Math.floor((now - date) / (1000 * 60 * 60 * 24));
+            
+            if (diffDays === 0) return 'Today';
+            if (diffDays === 1) return 'Yesterday';
+            if (diffDays < 7) return diffDays + 'd ago';
+            
+            return date.toLocaleDateString('en-AE', { day: 'numeric', month: 'short' });
         },
         
         getSourceClass(source) {
