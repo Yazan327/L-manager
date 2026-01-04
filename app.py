@@ -3414,6 +3414,89 @@ def api_bulk_delete_leads():
     return jsonify({'success': True, 'deleted': deleted})
 
 
+@app.route('/api/leads/bulk-update', methods=['POST'])
+@login_required
+def api_bulk_update_leads():
+    """Bulk update status, source, or assigned person for multiple leads"""
+    data = request.get_json()
+    lead_ids = data.get('ids', [])
+    
+    if not lead_ids:
+        return jsonify({'success': False, 'error': 'No leads selected'}), 400
+    
+    updates = {}
+    if 'status' in data and data['status']:
+        updates['status'] = data['status']
+    if 'source' in data and data['source']:
+        updates['source'] = data['source']
+    if 'assigned_to_id' in data:
+        updates['assigned_to_id'] = data['assigned_to_id'] if data['assigned_to_id'] else None
+    
+    if not updates:
+        return jsonify({'success': False, 'error': 'No updates provided'}), 400
+    
+    updated = 0
+    for lead_id in lead_ids:
+        lead = Lead.query.get(lead_id)
+        if lead:
+            for field, value in updates.items():
+                setattr(lead, field, value)
+            updated += 1
+    
+    db.session.commit()
+    return jsonify({'success': True, 'updated': updated})
+
+
+@app.route('/api/leads/<int:lead_id>/comments', methods=['GET'])
+@login_required
+def api_get_lead_comments(lead_id):
+    """Get all comments for a lead"""
+    from src.database.models import LeadComment
+    lead = Lead.query.get_or_404(lead_id)
+    comments = LeadComment.query.filter_by(lead_id=lead_id).order_by(LeadComment.created_at.desc()).all()
+    return jsonify({'comments': [c.to_dict() for c in comments]})
+
+
+@app.route('/api/leads/<int:lead_id>/comments', methods=['POST'])
+@login_required
+def api_add_lead_comment(lead_id):
+    """Add a comment to a lead"""
+    from src.database.models import LeadComment
+    lead = Lead.query.get_or_404(lead_id)
+    data = request.get_json()
+    
+    content = data.get('content', '').strip()
+    if not content:
+        return jsonify({'success': False, 'error': 'Comment content is required'}), 400
+    
+    comment = LeadComment(
+        lead_id=lead_id,
+        user_id=current_user.id,
+        content=content
+    )
+    db.session.add(comment)
+    db.session.commit()
+    
+    return jsonify({'success': True, 'comment': comment.to_dict()})
+
+
+@app.route('/api/leads/<int:lead_id>/comments/<int:comment_id>', methods=['DELETE'])
+@login_required
+def api_delete_lead_comment(lead_id, comment_id):
+    """Delete a comment from a lead"""
+    from src.database.models import LeadComment
+    comment = LeadComment.query.filter_by(id=comment_id, lead_id=lead_id).first_or_404()
+    
+    # Only allow deletion by comment author or admin
+    if comment.user_id != current_user.id and current_user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    db.session.delete(comment)
+    db.session.commit()
+    
+    return jsonify({'success': True})
+
+
 @app.route('/api/leads/refresh-agents', methods=['POST'])
 @login_required
 def api_refresh_lead_agents():

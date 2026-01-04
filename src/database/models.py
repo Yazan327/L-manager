@@ -891,6 +891,32 @@ class Lead(db.Model):
             'received_at': self.received_at.isoformat() if self.received_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'comments_count': len(self.comments) if hasattr(self, 'comments') else 0,
+        }
+
+
+class LeadComment(db.Model):
+    """Comments/notes on leads with timestamps and user attribution"""
+    __tablename__ = 'lead_comments'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    lead_id = db.Column(db.Integer, db.ForeignKey('crm_leads.id', ondelete='CASCADE'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    lead = db.relationship('Lead', backref=db.backref('comments', lazy='dynamic', cascade='all, delete-orphan'))
+    user = db.relationship('User')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'lead_id': self.lead_id,
+            'user_id': self.user_id,
+            'user_name': self.user.name if self.user else 'System',
+            'content': self.content,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
 

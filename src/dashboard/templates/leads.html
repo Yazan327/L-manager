@@ -58,6 +58,13 @@
                 </svg>
                 Delete (<span x-text="selectedLeads.length"></span>)
             </button>
+            <button x-show="selectedLeads.length > 0" @click="showBulkUpdateModal = true"
+                    class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 flex items-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                </svg>
+                Bulk Update (<span x-text="selectedLeads.length"></span>)
+            </button>
             <button @click="openSettingsModal()" 
                     class="bg-gray-100 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-200" title="Configure Statuses & Sources">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -567,6 +574,53 @@
                                   rows="3" class="w-full px-3 py-2 border rounded-lg mt-1"
                                   placeholder="Add notes..."></textarea>
                     </div>
+                    
+                    <!-- Comments Section -->
+                    <div class="col-span-2 mt-4 pt-4 border-t">
+                        <div class="flex items-center justify-between mb-3">
+                            <div class="text-sm font-medium text-gray-700">Comments</div>
+                            <span class="text-xs text-gray-400" x-text="leadComments.length + ' comment(s)'"></span>
+                        </div>
+                        
+                        <!-- Add Comment -->
+                        <div class="flex gap-2 mb-4">
+                            <input type="text" x-model="newComment" @keyup.enter="addComment()"
+                                   class="flex-1 px-3 py-2 border rounded-lg text-sm"
+                                   placeholder="Add a comment...">
+                            <button @click="addComment()" :disabled="!newComment.trim() || addingComment"
+                                    class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm">
+                                <span x-text="addingComment ? '...' : 'Add'"></span>
+                            </button>
+                        </div>
+                        
+                        <!-- Comments List -->
+                        <div class="space-y-3 max-h-60 overflow-y-auto">
+                            <template x-if="loadingComments">
+                                <div class="text-center py-4 text-gray-400 text-sm">Loading comments...</div>
+                            </template>
+                            <template x-if="!loadingComments && leadComments.length === 0">
+                                <div class="text-center py-4 text-gray-400 text-sm">No comments yet</div>
+                            </template>
+                            <template x-for="comment in leadComments" :key="comment.id">
+                                <div class="bg-gray-50 rounded-lg p-3">
+                                    <div class="flex items-start justify-between">
+                                        <div class="flex items-center gap-2 text-xs text-gray-500">
+                                            <span class="font-medium text-gray-700" x-text="comment.user_name"></span>
+                                            <span>•</span>
+                                            <span x-text="formatDateShort(comment.created_at)"></span>
+                                        </div>
+                                        <button @click="deleteComment(comment.id)" 
+                                                class="text-gray-400 hover:text-red-500 p-1" title="Delete">
+                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                    <div class="text-sm text-gray-700 mt-1 whitespace-pre-wrap" x-text="comment.content"></div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -667,6 +721,67 @@
             </div>
         </div>
     </div>
+
+    <!-- Bulk Update Modal -->
+    <div x-show="showBulkUpdateModal" x-cloak class="fixed inset-0 z-50 overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen px-4">
+            <div class="fixed inset-0 bg-black opacity-50" @click="showBulkUpdateModal = false"></div>
+            <div class="relative bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold">Bulk Update <span x-text="selectedLeads.length"></span> Leads</h3>
+                    <button @click="showBulkUpdateModal = false" class="text-gray-400 hover:text-gray-600">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                
+                <p class="text-sm text-gray-500 mb-4">Leave fields empty to keep current values</p>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                        <select x-model="bulkUpdate.status" class="w-full px-3 py-2 border rounded-lg">
+                            <option value="">-- No Change --</option>
+                            <template x-for="s in customStatuses" :key="s.id">
+                                <option :value="s.id" x-text="s.label"></option>
+                            </template>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Source</label>
+                        <select x-model="bulkUpdate.source" class="w-full px-3 py-2 border rounded-lg">
+                            <option value="">-- No Change --</option>
+                            <template x-for="src in customSources" :key="src.id">
+                                <option :value="src.id" x-text="src.label"></option>
+                            </template>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Assign To</label>
+                        <select x-model="bulkUpdate.assigned_to_id" class="w-full px-3 py-2 border rounded-lg">
+                            <option value="">-- No Change --</option>
+                            <option value="null">Unassigned</option>
+                            <template x-for="member in teamMembers" :key="member.id">
+                                <option :value="member.id" x-text="member.name"></option>
+                            </template>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="mt-6 flex justify-end gap-3">
+                    <button type="button" @click="showBulkUpdateModal = false"
+                            class="px-4 py-2 border rounded-lg hover:bg-gray-50">Cancel</button>
+                    <button @click="applyBulkUpdate()" :disabled="bulkUpdating"
+                            class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50">
+                        <span x-text="bulkUpdating ? 'Updating...' : 'Apply Update'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -696,6 +811,17 @@ function leadsManager() {
         editStatuses: [],
         editSources: [],
         savingConfig: false,
+        
+        // Bulk update
+        showBulkUpdateModal: false,
+        bulkUpdate: { status: '', source: '', assigned_to_id: '' },
+        bulkUpdating: false,
+        
+        // Comments
+        leadComments: [],
+        newComment: '',
+        loadingComments: false,
+        addingComment: false,
         
         // Kanban columns (derived from customStatuses)
         get kanbanColumns() {
@@ -792,6 +918,87 @@ function leadsManager() {
             } catch (e) {
                 console.error('Failed to bulk delete:', e);
                 alert('Failed to delete: ' + e.message);
+            }
+        },
+        
+        async applyBulkUpdate() {
+            this.bulkUpdating = true;
+            try {
+                const payload = { ids: this.selectedLeads };
+                if (this.bulkUpdate.status) payload.status = this.bulkUpdate.status;
+                if (this.bulkUpdate.source) payload.source = this.bulkUpdate.source;
+                if (this.bulkUpdate.assigned_to_id !== '') payload.assigned_to_id = this.bulkUpdate.assigned_to_id || null;
+                
+                const resp = await fetch('/api/leads/bulk-update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.showBulkUpdateModal = false;
+                    this.bulkUpdate = { status: '', source: '', assigned_to_id: '' };
+                    await this.loadLeads();
+                    alert(`Updated ${data.updated} leads`);
+                } else {
+                    alert('Failed to update: ' + (data.error || 'Unknown error'));
+                }
+            } catch (e) {
+                console.error('Failed to bulk update:', e);
+                alert('Failed to update: ' + e.message);
+            }
+            this.bulkUpdating = false;
+        },
+        
+        async loadComments(leadId) {
+            this.loadingComments = true;
+            this.leadComments = [];
+            try {
+                const resp = await fetch(`/api/leads/${leadId}/comments`);
+                const data = await resp.json();
+                this.leadComments = data.comments || [];
+            } catch (e) {
+                console.error('Failed to load comments:', e);
+            }
+            this.loadingComments = false;
+        },
+        
+        async addComment() {
+            if (!this.newComment.trim() || !this.selectedLead) return;
+            this.addingComment = true;
+            try {
+                const resp = await fetch(`/api/leads/${this.selectedLead.id}/comments`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: this.newComment })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.leadComments.unshift(data.comment);
+                    this.newComment = '';
+                } else {
+                    alert('Failed to add comment: ' + (data.error || 'Unknown error'));
+                }
+            } catch (e) {
+                console.error('Failed to add comment:', e);
+            }
+            this.addingComment = false;
+        },
+        
+        async deleteComment(commentId) {
+            if (!confirm('Delete this comment?')) return;
+            try {
+                const resp = await fetch(`/api/leads/${this.selectedLead.id}/comments/${commentId}`, {
+                    method: 'DELETE'
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.leadComments = this.leadComments.filter(c => c.id !== commentId);
+                } else {
+                    alert('Failed to delete: ' + (data.error || 'Unknown error'));
+                }
+            } catch (e) {
+                console.error('Failed to delete comment:', e);
             }
         },
         
@@ -956,7 +1163,10 @@ function leadsManager() {
         
         viewLead(lead) {
             this.selectedLead = { ...lead };
+            this.newComment = '';
+            this.leadComments = [];
             this.showViewModal = true;
+            this.loadComments(lead.id);
         },
         
         // Get leads filtered by status (for kanban)
