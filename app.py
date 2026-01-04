@@ -3276,6 +3276,53 @@ def leads_page():
     return render_template('leads.html')
 
 
+@app.route('/api/leads/config', methods=['GET'])
+@login_required
+def api_get_leads_config():
+    """Get lead configuration (statuses, sources, team members)"""
+    import json
+    
+    # Get custom statuses and sources from settings
+    statuses_json = AppSettings.get('lead_statuses')
+    sources_json = AppSettings.get('lead_sources')
+    
+    try:
+        statuses = json.loads(statuses_json) if statuses_json else []
+    except:
+        statuses = []
+    
+    try:
+        sources = json.loads(sources_json) if sources_json else []
+    except:
+        sources = []
+    
+    # Get all users for assignment
+    users = User.query.filter_by(is_active=True).all()
+    team_members = [{'id': u.id, 'name': u.name, 'email': u.email, 'role': u.role} for u in users]
+    
+    return jsonify({
+        'statuses': statuses,
+        'sources': sources,
+        'team_members': team_members
+    })
+
+
+@app.route('/api/leads/config', methods=['POST'])
+@login_required
+def api_update_leads_config():
+    """Update lead configuration (statuses, sources)"""
+    import json
+    data = request.get_json()
+    
+    if 'statuses' in data:
+        AppSettings.set('lead_statuses', json.dumps(data['statuses']))
+    
+    if 'sources' in data:
+        AppSettings.set('lead_sources', json.dumps(data['sources']))
+    
+    return jsonify({'success': True})
+
+
 @app.route('/api/leads', methods=['GET'])
 @login_required
 def api_get_leads():
@@ -3299,7 +3346,8 @@ def api_create_lead():
         message=data.get('message'),
         listing_reference=data.get('listing_reference'),
         priority=data.get('priority', 'medium'),
-        status='new'
+        status='new',
+        assigned_to_id=data.get('assigned_to_id') or None
     )
     
     db.session.add(lead)

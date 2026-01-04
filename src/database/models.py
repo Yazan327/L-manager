@@ -985,6 +985,9 @@ class AppSettings(db.Model):
         'default_insights_agent_id': '',  # PF user ID to show by default in insights
         'last_sync_at': '',
         'first_run_completed': 'false',
+        # Lead CRM settings - JSON arrays
+        'lead_statuses': '[{"id":"new","label":"New","color":"blue"},{"id":"contacted","label":"Contacted","color":"yellow"},{"id":"qualified","label":"Qualified","color":"green"},{"id":"viewing","label":"Viewing","color":"purple"},{"id":"negotiation","label":"Negotiation","color":"orange"},{"id":"won","label":"Won","color":"emerald"},{"id":"lost","label":"Lost","color":"red"},{"id":"spam","label":"Spam","color":"gray"}]',
+        'lead_sources': '[{"id":"propertyfinder","label":"PropertyFinder","color":"red"},{"id":"bayut","label":"Bayut","color":"blue"},{"id":"website","label":"Website","color":"purple"},{"id":"facebook","label":"Facebook","color":"indigo"},{"id":"instagram","label":"Instagram","color":"pink"},{"id":"whatsapp","label":"WhatsApp","color":"green"},{"id":"phone","label":"Phone","color":"gray"},{"id":"email","label":"Email","color":"cyan"},{"id":"referral","label":"Referral","color":"amber"},{"id":"zapier","label":"Zapier","color":"orange"},{"id":"other","label":"Other","color":"gray"}]',
         # Image processing settings
         'image_default_ratio': 'landscape_16_9',
         'image_default_size': 'full_hd',
