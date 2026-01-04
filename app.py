@@ -22,7 +22,7 @@ from werkzeug.utils import secure_filename
 from api import PropertyFinderClient, PropertyFinderAPIError, Config
 from models import PropertyListing, PropertyType, OfferingType, Location, Price
 from utils import BulkListingManager
-from database import db, LocalListing, PFSession, User, PFCache, AppSettings, ListingFolder, LoopConfig, LoopListing, DuplicatedListing, LoopExecutionLog
+from database import db, LocalListing, PFSession, User, PFCache, AppSettings, ListingFolder, LoopConfig, LoopListing, DuplicatedListing, LoopExecutionLog, Lead, LeadComment
 from images import ImageProcessor
 
 # APScheduler for background loop execution
@@ -3451,17 +3451,19 @@ def api_bulk_update_leads():
 @login_required
 def api_get_lead_comments(lead_id):
     """Get all comments for a lead"""
-    from src.database.models import LeadComment
-    lead = Lead.query.get_or_404(lead_id)
-    comments = LeadComment.query.filter_by(lead_id=lead_id).order_by(LeadComment.created_at.desc()).all()
-    return jsonify({'comments': [c.to_dict() for c in comments]})
+    try:
+        lead = Lead.query.get_or_404(lead_id)
+        comments = LeadComment.query.filter_by(lead_id=lead_id).order_by(LeadComment.created_at.desc()).all()
+        return jsonify({'comments': [c.to_dict() for c in comments]})
+    except Exception as e:
+        # Table might not exist yet
+        return jsonify({'comments': []})
 
 
 @app.route('/api/leads/<int:lead_id>/comments', methods=['POST'])
 @login_required
 def api_add_lead_comment(lead_id):
     """Add a comment to a lead"""
-    from src.database.models import LeadComment
     lead = Lead.query.get_or_404(lead_id)
     data = request.get_json()
     
@@ -3484,7 +3486,6 @@ def api_add_lead_comment(lead_id):
 @login_required
 def api_delete_lead_comment(lead_id, comment_id):
     """Delete a comment from a lead"""
-    from src.database.models import LeadComment
     comment = LeadComment.query.filter_by(id=comment_id, lead_id=lead_id).first_or_404()
     
     # Only allow deletion by comment author or admin
