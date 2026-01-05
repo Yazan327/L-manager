@@ -3447,6 +3447,36 @@ def api_bulk_update_leads():
     return jsonify({'success': True, 'updated': updated})
 
 
+@app.route('/api/leads/cleanup-sources', methods=['POST'])
+@login_required
+def api_cleanup_lead_sources():
+    """Fix leads with invalid source IDs (like source_12345...) by setting them to 'other'"""
+    import json
+    
+    # Get valid sources
+    sources_json = AppSettings.get('lead_sources')
+    try:
+        valid_sources = json.loads(sources_json) if sources_json else []
+        valid_source_ids = {s['id'] for s in valid_sources}
+    except:
+        valid_source_ids = set()
+    
+    # Add some default valid sources
+    valid_source_ids.update(['propertyfinder', 'bayut', 'website', 'facebook', 'instagram', 
+                              'whatsapp', 'phone', 'email', 'referral', 'zapier', 'other'])
+    
+    # Find and fix leads with invalid sources
+    fixed = 0
+    leads = Lead.query.all()
+    for lead in leads:
+        if lead.source and lead.source not in valid_source_ids:
+            lead.source = 'other'
+            fixed += 1
+    
+    db.session.commit()
+    return jsonify({'success': True, 'fixed': fixed})
+
+
 @app.route('/api/leads/<int:lead_id>/comments', methods=['GET'])
 @login_required
 def api_get_lead_comments(lead_id):

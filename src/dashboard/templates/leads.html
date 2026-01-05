@@ -720,6 +720,20 @@
                     </div>
                 </div>
                 
+                <!-- Cleanup Section -->
+                <div class="mt-4 pt-4 border-t">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <div class="text-sm font-medium text-gray-700">Cleanup Invalid Sources</div>
+                            <div class="text-xs text-gray-500">Fix leads with invalid source IDs (like source_123...)</div>
+                        </div>
+                        <button @click="cleanupSources()" :disabled="cleaningUp"
+                                class="px-3 py-1.5 text-sm bg-orange-100 text-orange-700 rounded hover:bg-orange-200 disabled:opacity-50">
+                            <span x-text="cleaningUp ? 'Fixing...' : 'Fix Now'"></span>
+                        </button>
+                    </div>
+                </div>
+                
                 <div class="mt-6 flex justify-end gap-3">
                     <button type="button" @click="showSettingsModal = false"
                             class="px-4 py-2 border rounded-lg hover:bg-gray-50">Cancel</button>
@@ -821,6 +835,7 @@ function leadsManager() {
         editStatuses: [],
         editSources: [],
         savingConfig: false,
+        cleaningUp: false,
         
         // Bulk update
         showBulkUpdateModal: false,
@@ -1429,6 +1444,28 @@ function leadsManager() {
                 alert('Failed to save: ' + e.message);
             }
             this.savingConfig = false;
+        },
+        
+        async cleanupSources() {
+            this.cleaningUp = true;
+            try {
+                const resp = await fetch('/api/leads/cleanup-sources', { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    if (data.fixed > 0) {
+                        alert(`Fixed ${data.fixed} leads with invalid sources`);
+                        await this.loadLeads();
+                    } else {
+                        alert('No leads with invalid sources found');
+                    }
+                } else {
+                    alert('Failed to cleanup: ' + (data.error || 'Unknown error'));
+                }
+            } catch (e) {
+                console.error('Failed to cleanup sources:', e);
+                alert('Failed to cleanup: ' + e.message);
+            }
+            this.cleaningUp = false;
         },
         
         getStatusLabel(statusId) {
