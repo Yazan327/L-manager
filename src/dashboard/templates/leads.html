@@ -3,7 +3,7 @@
 {% block title %}Leads - L-Manager{% endblock %}
 
 {% block content %}
-<div x-data="leadsManager()" x-init="init()" class="space-y-6 max-w-full overflow-hidden">
+<div x-data="leadsManager()" x-init="init()" class="space-y-6">
     <!-- Header -->
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -309,9 +309,9 @@
     </div>
 
     <!-- Kanban View -->
-    <div x-show="viewMode === 'kanban'" class="w-full max-w-full">
-        <div class="overflow-x-auto pb-4 -mx-6 px-6">
-            <div class="inline-flex gap-4">
+    <div x-show="viewMode === 'kanban'" class="w-full">
+        <div class="overflow-x-auto pb-4">
+            <div class="inline-flex gap-4 min-w-max">
                 <!-- Kanban Columns -->
                 <template x-for="column in kanbanColumns" :key="column.status">
                     <div class="w-72 sm:w-80 flex-shrink-0 bg-gray-50 rounded-lg"
