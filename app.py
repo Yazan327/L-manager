@@ -3473,7 +3473,7 @@ def api_add_lead_comment(lead_id):
     
     comment = LeadComment(
         lead_id=lead_id,
-        user_id=current_user.id,
+        user_id=g.user.id,
         content=content
     )
     db.session.add(comment)
@@ -3489,7 +3489,7 @@ def api_delete_lead_comment(lead_id, comment_id):
     comment = LeadComment.query.filter_by(id=comment_id, lead_id=lead_id).first_or_404()
     
     # Only allow deletion by comment author or admin
-    if comment.user_id != current_user.id and current_user.role != 'admin':
+    if comment.user_id != g.user.id and g.user.role != 'admin':
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     db.session.delete(comment)
