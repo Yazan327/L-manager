@@ -344,8 +344,8 @@
                                 <div class="flex items-start justify-between mb-2">
                                     <div class="font-medium text-gray-900 truncate pr-2" x-text="lead.name"></div>
                                     <span class="px-1.5 py-0.5 text-xs rounded flex-shrink-0"
-                                          :class="getChannelClass(lead.channel)"
-                                          x-text="lead.channel || lead.source"></span>
+                                          :class="getSourceClass(lead.source)"
+                                          x-text="lead.channel || getSourceLabel(lead.source)"></span>
                                 </div>
                                 
                                 <!-- Contact Info -->
