@@ -662,8 +662,9 @@
                                         <option value="pink">Pink</option>
                                         <option value="indigo">Indigo</option>
                                     </select>
-                                    <input type="text" x-model="status.label" 
-                                           class="flex-1 px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500">
+                                    <input type="text" x-model="status.label" @input="updateStatusId(status)"
+                                           class="flex-1 px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500"
+                                           placeholder="Enter status name">
                                     <button @click="removeStatus(index)" :disabled="editStatuses.length <= 1"
                                             class="text-red-500 hover:text-red-700 disabled:opacity-30 disabled:cursor-not-allowed p-1">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -696,8 +697,9 @@
                                         <option value="pink">Pink</option>
                                         <option value="indigo">Indigo</option>
                                     </select>
-                                    <input type="text" x-model="source.label" 
-                                           class="flex-1 px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500">
+                                    <input type="text" x-model="source.label" @input="updateSourceId(source)"
+                                           class="flex-1 px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500"
+                                           placeholder="Enter source name">
                                     <button @click="removeSource(index)" :disabled="editSources.length <= 1"
                                             class="text-red-500 hover:text-red-700 disabled:opacity-30 disabled:cursor-not-allowed p-1">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1285,7 +1287,14 @@ function leadsManager() {
         
         addStatus() {
             const id = 'status_' + Date.now();
-            this.editStatuses.push({ id, label: 'New Status', color: 'gray' });
+            this.editStatuses.push({ id, label: '', color: 'gray' });
+        },
+        
+        // Update status ID when label changes (for new statuses only)
+        updateStatusId(status) {
+            if (status.id.startsWith('status_') && status.label) {
+                status.id = status.label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+            }
         },
         
         removeStatus(index) {
@@ -1295,8 +1304,17 @@ function leadsManager() {
         },
         
         addSource() {
+            // Generate a temporary ID - will be updated when user types the label
             const id = 'source_' + Date.now();
-            this.editSources.push({ id, label: 'New Source', color: 'gray' });
+            this.editSources.push({ id, label: '', color: 'gray' });
+        },
+        
+        // Update source ID when label changes (for new sources only)
+        updateSourceId(source) {
+            if (source.id.startsWith('source_') && source.label) {
+                // Create a slug from the label
+                source.id = source.label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+            }
         },
         
         removeSource(index) {
