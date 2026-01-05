@@ -313,7 +313,11 @@
         <div class="flex gap-4 min-w-max">
             <!-- Kanban Columns -->
             <template x-for="column in kanbanColumns" :key="column.status">
-                <div class="w-80 flex-shrink-0 bg-gray-50 rounded-lg">
+                <div class="w-80 flex-shrink-0 bg-gray-50 rounded-lg"
+                     @dragover.prevent="dragOverColumn($event, column.status)"
+                     @dragleave="dragLeaveColumn($event)"
+                     @drop.prevent="dropOnColumn($event, column.status)"
+                     :class="dragOverStatus === column.status && 'ring-2 ring-blue-400 ring-inset'">
                     <!-- Column Header -->
                     <div class="p-3 border-b bg-white rounded-t-lg">
                         <div class="flex items-center justify-between">
@@ -327,10 +331,14 @@
                     </div>
                     
                     <!-- Column Cards -->
-                    <div class="p-2 space-y-2 max-h-[calc(100vh-350px)] overflow-y-auto">
+                    <div class="p-2 space-y-2 max-h-[calc(100vh-350px)] overflow-y-auto min-h-[100px]">
                         <template x-for="lead in getLeadsByStatus(column.status)" :key="lead.id">
                             <div @click="viewLead(lead)" 
-                                 class="bg-white rounded-lg shadow-sm border p-3 cursor-pointer hover:shadow-md transition-shadow">
+                                 draggable="true"
+                                 @dragstart="dragStart($event, lead)"
+                                 @dragend="dragEnd($event)"
+                                 :class="draggingLeadId === lead.id && 'opacity-50'"
+                                 class="bg-white rounded-lg shadow-sm border p-3 cursor-grab hover:shadow-md transition-shadow active:cursor-grabbing">
                                 <!-- Lead Name & Channel -->
                                 <div class="flex items-start justify-between mb-2">
                                     <div class="font-medium text-gray-900 truncate pr-2" x-text="lead.name"></div>
@@ -825,6 +833,10 @@ function leadsManager() {
         loadingComments: false,
         addingComment: false,
         
+        // Drag and drop for Kanban
+        draggingLeadId: null,
+        dragOverStatus: null,
+        
         // Kanban columns (derived from customStatuses)
         get kanbanColumns() {
             return this.customStatuses.map(s => ({
@@ -1174,6 +1186,76 @@ function leadsManager() {
         // Get leads filtered by status (for kanban)
         getLeadsByStatus(status) {
             return this.filteredLeads.filter(l => l.status === status);
+        },
+        
+        // Drag and drop handlers for Kanban
+        dragStart(event, lead) {
+            this.draggingLeadId = lead.id;
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', lead.id);
+            // Add a slight delay to show the drag effect
+            setTimeout(() => {
+                event.target.classList.add('opacity-50');
+            }, 0);
+        },
+        
+        dragEnd(event) {
+            this.draggingLeadId = null;
+            this.dragOverStatus = null;
+            event.target.classList.remove('opacity-50');
+        },
+        
+        dragOverColumn(event, status) {
+            event.preventDefault();
+            this.dragOverStatus = status;
+        },
+        
+        dragLeaveColumn(event) {
+            // Only clear if leaving the column entirely
+            if (!event.currentTarget.contains(event.relatedTarget)) {
+                this.dragOverStatus = null;
+            }
+        },
+        
+        async dropOnColumn(event, newStatus) {
+            event.preventDefault();
+            this.dragOverStatus = null;
+            
+            const leadId = parseInt(event.dataTransfer.getData('text/plain'));
+            if (!leadId) return;
+            
+            const lead = this.leads.find(l => l.id === leadId);
+            if (!lead || lead.status === newStatus) {
+                this.draggingLeadId = null;
+                return;
+            }
+            
+            // Optimistically update UI
+            const oldStatus = lead.status;
+            lead.status = newStatus;
+            this.filterLeads();
+            
+            // Update on server
+            try {
+                const resp = await fetch(`/api/leads/${leadId}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: newStatus })
+                });
+                if (!resp.ok) {
+                    // Revert on error
+                    lead.status = oldStatus;
+                    this.filterLeads();
+                } else {
+                    this.updateStats();
+                }
+            } catch (e) {
+                console.error('Failed to update status:', e);
+                lead.status = oldStatus;
+                this.filterLeads();
+            }
+            
+            this.draggingLeadId = null;
         },
         
         formatDate(dateStr) {
