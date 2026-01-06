@@ -3,14 +3,16 @@
 {% block title %}Leads - L-Manager{% endblock %}
 
 {% block content %}
-<div x-data="leadsManager()" x-init="init()" class="space-y-6 max-w-full overflow-x-hidden">
-    <!-- Header Section -->
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-            <h1 class="text-2xl font-bold text-gray-900">Leads</h1>
-            <p class="text-gray-600">Manage incoming leads from all sources</p>
-        </div>
-        <div class="flex gap-2">
+<div x-data="leadsManager()" x-init="init()" class="space-y-6">
+    <!-- Fixed Header Section (not affected by Kanban scroll) -->
+    <div class="max-w-full overflow-hidden">
+        <!-- Header Section -->
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 flex-wrap">
+            <div>
+                <h1 class="text-2xl font-bold text-gray-900">Leads</h1>
+                <p class="text-gray-600">Manage incoming leads from all sources</p>
+            </div>
+            <div class="flex gap-2 flex-wrap">
             <!-- View Toggle -->
             <div class="flex bg-gray-100 rounded-lg p-1">
                 <button @click="viewMode = 'list'" 
@@ -72,79 +74,81 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
                 </svg>
             </button>
-        </div>
-    </div>
-
-    <!-- Stats Cards -->
-    <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <div class="bg-white rounded-lg p-4 shadow-sm border">
-            <div class="text-2xl font-bold text-gray-900" x-text="stats.total">0</div>
-            <div class="text-sm text-gray-500">Total Leads</div>
-        </div>
-        <div class="bg-white rounded-lg p-4 shadow-sm border border-blue-200">
-            <div class="text-2xl font-bold text-blue-600" x-text="stats.new">0</div>
-            <div class="text-sm text-gray-500">New</div>
-        </div>
-        <div class="bg-white rounded-lg p-4 shadow-sm border border-yellow-200">
-            <div class="text-2xl font-bold text-yellow-600" x-text="stats.contacted">0</div>
-            <div class="text-sm text-gray-500">Contacted</div>
-        </div>
-        <div class="bg-white rounded-lg p-4 shadow-sm border border-green-200">
-            <div class="text-2xl font-bold text-green-600" x-text="stats.qualified">0</div>
-            <div class="text-sm text-gray-500">Qualified</div>
-        </div>
-        <div class="bg-white rounded-lg p-4 shadow-sm border border-purple-200">
-            <div class="text-2xl font-bold text-purple-600" x-text="stats.won">0</div>
-            <div class="text-sm text-gray-500">Won</div>
-        </div>
-    </div>
-
-    <!-- Filters -->
-    <div class="bg-white rounded-lg p-4 shadow-sm border">
-        <div class="flex flex-wrap gap-4">
-            <div class="flex-1 min-w-[200px]">
-                <input type="text" x-model="filters.search" @input="filterLeads()"
-                       placeholder="Search by name, email, phone..."
-                       class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
             </div>
-            <select x-model="filters.status" @change="filterLeads()"
-                    class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
-                <option value="">All Status</option>
-                <template x-for="status in customStatuses" :key="status.id">
-                    <option :value="status.id" x-text="status.label"></option>
-                </template>
-            </select>
-            <select x-model="filters.source" @change="filterLeads()"
-                    class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
-                <option value="">All Sources</option>
-                <template x-for="source in customSources" :key="source.id">
-                    <option :value="source.id" x-text="source.label"></option>
-                </template>
-            </select>
-            <select x-model="filters.assigned" @change="filterLeads()"
-                    class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
-                <option value="">All Team</option>
-                <template x-for="member in teamMembers" :key="member.id">
-                    <option :value="member.id" x-text="member.name"></option>
-                </template>
-            </select>
-            <select x-model="filters.priority" @change="filterLeads()"
-                    class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
-                <option value="">All Priority</option>
-                <option value="urgent">Urgent</option>
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
-            </select>
-            <!-- Settings Button -->
-            <button @click="showSettingsModal = true" class="px-3 py-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg" title="Configure Statuses & Sources">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                </svg>
-            </button>
+        </div>
+
+        <!-- Stats Cards -->
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mt-6">
+            <div class="bg-white rounded-lg p-4 shadow-sm border">
+                <div class="text-2xl font-bold text-gray-900" x-text="stats.total">0</div>
+                <div class="text-sm text-gray-500">Total Leads</div>
+            </div>
+            <div class="bg-white rounded-lg p-4 shadow-sm border border-blue-200">
+                <div class="text-2xl font-bold text-blue-600" x-text="stats.new">0</div>
+                <div class="text-sm text-gray-500">New</div>
+            </div>
+            <div class="bg-white rounded-lg p-4 shadow-sm border border-yellow-200">
+                <div class="text-2xl font-bold text-yellow-600" x-text="stats.contacted">0</div>
+                <div class="text-sm text-gray-500">Contacted</div>
+            </div>
+            <div class="bg-white rounded-lg p-4 shadow-sm border border-green-200">
+                <div class="text-2xl font-bold text-green-600" x-text="stats.qualified">0</div>
+                <div class="text-sm text-gray-500">Qualified</div>
+            </div>
+            <div class="bg-white rounded-lg p-4 shadow-sm border border-purple-200">
+                <div class="text-2xl font-bold text-purple-600" x-text="stats.won">0</div>
+                <div class="text-sm text-gray-500">Won</div>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="bg-white rounded-lg p-4 shadow-sm border mt-6">
+            <div class="flex flex-wrap gap-4">
+                <div class="flex-1 min-w-[200px]">
+                    <input type="text" x-model="filters.search" @input="filterLeads()"
+                           placeholder="Search by name, email, phone..."
+                           class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                </div>
+                <select x-model="filters.status" @change="filterLeads()"
+                        class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                    <option value="">All Status</option>
+                    <template x-for="status in customStatuses" :key="status.id">
+                        <option :value="status.id" x-text="status.label"></option>
+                    </template>
+                </select>
+                <select x-model="filters.source" @change="filterLeads()"
+                        class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                    <option value="">All Sources</option>
+                    <template x-for="source in customSources" :key="source.id">
+                        <option :value="source.id" x-text="source.label"></option>
+                    </template>
+                </select>
+                <select x-model="filters.assigned" @change="filterLeads()"
+                        class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                    <option value="">All Team</option>
+                    <template x-for="member in teamMembers" :key="member.id">
+                        <option :value="member.id" x-text="member.name"></option>
+                    </template>
+                </select>
+                <select x-model="filters.priority" @change="filterLeads()"
+                        class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                    <option value="">All Priority</option>
+                    <option value="urgent">Urgent</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                </select>
+                <!-- Settings Button -->
+                <button @click="showSettingsModal = true" class="px-3 py-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg" title="Configure Statuses & Sources">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    </svg>
+                </button>
+            </div>
         </div>
     </div>
+    <!-- End of fixed header section -->
 
     <!-- Leads Table (List View) -->
     <div x-show="viewMode === 'list'" class="bg-white rounded-lg shadow-sm border overflow-hidden">
@@ -308,9 +312,9 @@
         </div>
     </div>
 
-    <!-- Kanban View -->
-    <div x-show="viewMode === 'kanban'" class="w-full">
-        <div class="overflow-x-auto pb-4">
+    <!-- Kanban View (isolated scrollable area) -->
+    <div x-show="viewMode === 'kanban'" class="w-full overflow-x-auto">
+        <div class="pb-4">
             <div class="inline-flex gap-4 min-w-max">
                 <!-- Kanban Columns -->
                 <template x-for="column in kanbanColumns" :key="column.status">
