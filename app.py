@@ -3706,6 +3706,157 @@ def api_sync_leads_from_pf():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ==================== CONTACTS ====================
+
+from database import Contact
+
+@app.route('/api/contacts', methods=['GET'])
+@login_required
+def api_get_contacts():
+    """Get all contacts with optional search"""
+    search = request.args.get('search', '').strip()
+    query = Contact.query.order_by(Contact.name)
+    
+    if search:
+        query = query.filter(
+            (Contact.name.ilike(f'%{search}%')) |
+            (Contact.phone.ilike(f'%{search}%')) |
+            (Contact.email.ilike(f'%{search}%')) |
+            (Contact.company.ilike(f'%{search}%'))
+        )
+    
+    contacts = query.all()
+    return jsonify({
+        'contacts': [c.to_dict() for c in contacts],
+        'country_codes': Contact.COUNTRY_CODES
+    })
+
+
+@app.route('/api/contacts', methods=['POST'])
+@login_required
+def api_create_contact():
+    """Create a new contact"""
+    data = request.get_json()
+    
+    # Validate required fields
+    if not data.get('name') or not data.get('phone'):
+        return jsonify({'error': 'Name and phone are required'}), 400
+    
+    # Build full phone with country code
+    phone = data.get('phone', '').strip()
+    country_code = data.get('country_code', '+971').strip()
+    
+    # If phone already has country code, use it as-is
+    if phone.startswith('+'):
+        full_phone = phone
+    else:
+        # Remove leading zero and prepend country code
+        full_phone = country_code + phone.lstrip('0')
+    
+    contact = Contact(
+        name=data.get('name'),
+        phone=full_phone,
+        country_code=country_code,
+        email=data.get('email'),
+        company=data.get('company'),
+        notes=data.get('notes'),
+        tags=','.join(data.get('tags', [])) if isinstance(data.get('tags'), list) else data.get('tags'),
+        lead_id=data.get('lead_id'),
+        created_by_id=current_user.id
+    )
+    
+    db.session.add(contact)
+    db.session.commit()
+    
+    return jsonify({'success': True, 'contact': contact.to_dict()})
+
+
+@app.route('/api/contacts/<int:contact_id>', methods=['GET'])
+@login_required
+def api_get_contact(contact_id):
+    """Get a single contact"""
+    contact = Contact.query.get_or_404(contact_id)
+    return jsonify(contact.to_dict())
+
+
+@app.route('/api/contacts/<int:contact_id>', methods=['PATCH'])
+@login_required
+def api_update_contact(contact_id):
+    """Update a contact"""
+    contact = Contact.query.get_or_404(contact_id)
+    data = request.get_json()
+    
+    if 'name' in data:
+        contact.name = data['name']
+    if 'phone' in data:
+        phone = data['phone'].strip()
+        country_code = data.get('country_code', contact.country_code or '+971').strip()
+        if phone.startswith('+'):
+            contact.phone = phone
+        else:
+            contact.phone = country_code + phone.lstrip('0')
+        contact.country_code = country_code
+    if 'email' in data:
+        contact.email = data['email']
+    if 'company' in data:
+        contact.company = data['company']
+    if 'notes' in data:
+        contact.notes = data['notes']
+    if 'tags' in data:
+        contact.tags = ','.join(data['tags']) if isinstance(data['tags'], list) else data['tags']
+    
+    db.session.commit()
+    return jsonify({'success': True, 'contact': contact.to_dict()})
+
+
+@app.route('/api/contacts/<int:contact_id>', methods=['DELETE'])
+@login_required
+def api_delete_contact(contact_id):
+    """Delete a contact"""
+    contact = Contact.query.get_or_404(contact_id)
+    db.session.delete(contact)
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+@app.route('/api/contacts/from-lead/<int:lead_id>', methods=['POST'])
+@login_required
+def api_create_contact_from_lead(lead_id):
+    """Create a contact from an existing lead"""
+    lead = Lead.query.get_or_404(lead_id)
+    
+    # Check if contact already exists for this lead
+    existing = Contact.query.filter_by(lead_id=lead_id).first()
+    if existing:
+        return jsonify({'success': True, 'contact': existing.to_dict(), 'existing': True})
+    
+    # Create contact from lead
+    phone = lead.phone or lead.whatsapp or ''
+    country_code = '+971'
+    
+    # Try to extract country code from phone
+    if phone.startswith('+'):
+        for code, _ in Contact.COUNTRY_CODES:
+            if phone.startswith(code):
+                country_code = code
+                break
+    
+    contact = Contact(
+        name=lead.name,
+        phone=phone,
+        country_code=country_code,
+        email=lead.email,
+        notes=lead.message,
+        lead_id=lead.id,
+        created_by_id=current_user.id
+    )
+    
+    db.session.add(contact)
+    db.session.commit()
+    
+    return jsonify({'success': True, 'contact': contact.to_dict()})
+
+
 # ==================== WEBHOOKS ====================
 
 @app.route('/webhooks/zapier', methods=['POST'])

@@ -919,6 +919,80 @@ class LeadComment(db.Model):
         }
 
 
+# ==================== CONTACTS ====================
+
+class Contact(db.Model):
+    """Saved contacts with phone numbers and country codes"""
+    __tablename__ = 'contacts'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False)
+    phone = db.Column(db.String(50), nullable=False)  # Full phone with country code
+    country_code = db.Column(db.String(10), default='+971')  # UAE default
+    email = db.Column(db.String(120))
+    company = db.Column(db.String(200))
+    notes = db.Column(db.Text)
+    tags = db.Column(db.String(500))  # comma-separated
+    
+    # Linked to lead (optional)
+    lead_id = db.Column(db.Integer, db.ForeignKey('crm_leads.id'), nullable=True)
+    
+    # Created by
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    lead = db.relationship('Lead', backref=db.backref('contacts', lazy='dynamic'))
+    created_by = db.relationship('User')
+    
+    # Common country codes
+    COUNTRY_CODES = [
+        ('+971', 'UAE'),
+        ('+966', 'Saudi Arabia'),
+        ('+973', 'Bahrain'),
+        ('+974', 'Qatar'),
+        ('+965', 'Kuwait'),
+        ('+968', 'Oman'),
+        ('+20', 'Egypt'),
+        ('+91', 'India'),
+        ('+92', 'Pakistan'),
+        ('+63', 'Philippines'),
+        ('+44', 'UK'),
+        ('+1', 'USA/Canada'),
+        ('+86', 'China'),
+        ('+7', 'Russia'),
+        ('+33', 'France'),
+        ('+49', 'Germany'),
+    ]
+    
+    def get_full_phone(self):
+        """Get phone with country code"""
+        if self.phone.startswith('+'):
+            return self.phone
+        return f"{self.country_code}{self.phone.lstrip('0')}"
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'phone': self.phone,
+            'country_code': self.country_code,
+            'full_phone': self.get_full_phone(),
+            'email': self.email,
+            'company': self.company,
+            'notes': self.notes,
+            'tags': self.tags.split(',') if self.tags else [],
+            'lead_id': self.lead_id,
+            'created_by_id': self.created_by_id,
+            'created_by_name': self.created_by.name if self.created_by else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 # ==================== CRM: CUSTOMERS ====================
 
 class Customer(db.Model):

@@ -67,6 +67,13 @@
                 </svg>
                 Bulk Update (<span x-text="selectedLeads.length"></span>)
             </button>
+            <button @click="showContactsModal = true; loadContacts()" 
+                    class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
+                </svg>
+                Contacts
+            </button>
             <button @click="openSettingsModal()" 
                     class="bg-gray-100 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-200" title="Configure Statuses & Sources">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -317,16 +324,23 @@
         <div class="pb-4">
             <div class="inline-flex gap-4 min-w-max">
                 <!-- Kanban Columns -->
-                <template x-for="column in kanbanColumns" :key="column.status">
+                <template x-for="(column, colIndex) in kanbanColumns" :key="column.status">
                     <div class="w-72 sm:w-80 flex-shrink-0 bg-gray-50 rounded-lg"
-                         @dragover.prevent="dragOverColumn($event, column.status)"
-                         @dragleave="dragLeaveColumn($event)"
-                         @drop.prevent="dropOnColumn($event, column.status)"
-                         :class="dragOverStatus === column.status && 'ring-2 ring-blue-400 ring-inset'">
-                        <!-- Column Header -->
-                        <div class="p-3 border-b bg-white rounded-t-lg">
+                         @dragover.prevent="handleColumnDragOver($event, column.status, colIndex)"
+                         @dragleave="handleColumnDragLeave($event)"
+                         @drop.prevent="handleColumnDrop($event, column.status, colIndex)"
+                         :class="[dragOverStatus === column.status && !draggingColumnIndex && 'ring-2 ring-blue-400 ring-inset', 
+                                  dragOverColumnIndex === colIndex && draggingColumnIndex !== null && 'ring-2 ring-purple-400 ring-inset']">
+                        <!-- Column Header (draggable for reordering) -->
+                        <div class="p-3 border-b bg-white rounded-t-lg cursor-move"
+                             draggable="true"
+                             @dragstart="startColumnDrag($event, colIndex)"
+                             @dragend="endColumnDrag($event)">
                             <div class="flex items-center justify-between">
                                 <div class="flex items-center gap-2">
+                                    <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8h16M4 16h16"/>
+                                    </svg>
                                     <div class="w-3 h-3 rounded-full" :class="column.color"></div>
                                     <span class="font-medium text-gray-900" x-text="column.label"></span>
                                 </div>
@@ -667,6 +681,34 @@
                             </template>
                         </div>
                     </div>
+                    
+                    <!-- Actions -->
+                    <div class="col-span-2 mt-4 pt-4 border-t flex gap-3 flex-wrap">
+                        <button @click="saveContactFromLead(selectedLead)" 
+                                class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-2 text-sm">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/>
+                            </svg>
+                            Save to Contacts
+                        </button>
+                        <a x-show="selectedLead?.phone || selectedLead?.whatsapp" 
+                           :href="'https://wa.me/' + (selectedLead?.whatsapp || selectedLead?.phone)?.replace(/[^0-9]/g, '')" 
+                           target="_blank"
+                           class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 flex items-center gap-2 text-sm">
+                            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+                            </svg>
+                            WhatsApp
+                        </a>
+                        <a x-show="selectedLead?.phone" 
+                           :href="'tel:' + selectedLead?.phone"
+                           class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 text-sm">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/>
+                            </svg>
+                            Call
+                        </a>
+                    </div>
                 </div>
             </div>
         </div>
@@ -844,6 +886,132 @@
             </div>
         </div>
     </div>
+
+    <!-- Contacts Modal -->
+    <div x-show="showContactsModal" x-cloak class="fixed inset-0 z-50 overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen px-4">
+            <div class="fixed inset-0 bg-black opacity-50" @click="showContactsModal = false"></div>
+            <div class="relative bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] flex flex-col">
+                <!-- Header -->
+                <div class="p-4 border-b flex items-center justify-between">
+                    <h3 class="text-lg font-semibold">Contacts</h3>
+                    <button @click="showContactsModal = false" class="text-gray-400 hover:text-gray-600">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                
+                <!-- Add/Edit Contact Form -->
+                <div class="p-4 border-b bg-gray-50">
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Name *</label>
+                            <input type="text" x-model="newContact.name" placeholder="Contact name"
+                                   class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-green-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Country Code</label>
+                            <select x-model="newContact.country_code" 
+                                    class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-green-500">
+                                <template x-for="cc in countryCodes" :key="cc[0]">
+                                    <option :value="cc[0]" x-text="cc[0] + ' ' + cc[1]"></option>
+                                </template>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Phone *</label>
+                            <input type="text" x-model="newContact.phone" placeholder="Phone number"
+                                   class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-green-500">
+                        </div>
+                        <div class="flex items-end">
+                            <button @click="saveContact()" :disabled="savingContact || !newContact.name || !newContact.phone"
+                                    class="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 text-sm">
+                                <span x-text="editingContactId ? 'Update' : 'Add Contact'"></span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Email</label>
+                            <input type="email" x-model="newContact.email" placeholder="Email"
+                                   class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-green-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Company</label>
+                            <input type="text" x-model="newContact.company" placeholder="Company"
+                                   class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-green-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Notes</label>
+                            <input type="text" x-model="newContact.notes" placeholder="Notes"
+                                   class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-green-500">
+                        </div>
+                    </div>
+                    <div x-show="editingContactId" class="mt-2">
+                        <button @click="cancelEditContact()" class="text-sm text-gray-500 hover:text-gray-700">
+                            Cancel editing
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Search -->
+                <div class="p-4 border-b">
+                    <input type="text" x-model="contactSearch" @input="loadContacts()" 
+                           placeholder="Search contacts..."
+                           class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500">
+                </div>
+                
+                <!-- Contacts List -->
+                <div class="flex-1 overflow-y-auto p-4">
+                    <div x-show="loadingContacts" class="text-center py-8 text-gray-500">
+                        Loading contacts...
+                    </div>
+                    <div x-show="!loadingContacts && contacts.length === 0" class="text-center py-8 text-gray-400">
+                        No contacts found
+                    </div>
+                    <div x-show="!loadingContacts" class="space-y-2">
+                        <template x-for="contact in contacts" :key="contact.id">
+                            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100">
+                                <div class="flex-1">
+                                    <div class="font-medium text-gray-900" x-text="contact.name"></div>
+                                    <div class="text-sm text-gray-600">
+                                        <span x-text="contact.full_phone"></span>
+                                        <span x-show="contact.email" class="ml-2">• <span x-text="contact.email"></span></span>
+                                        <span x-show="contact.company" class="ml-2">• <span x-text="contact.company"></span></span>
+                                    </div>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <a :href="'https://wa.me/' + contact.full_phone.replace(/[^0-9]/g, '')" 
+                                       target="_blank" class="text-green-600 hover:text-green-800 p-2" title="WhatsApp">
+                                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                                            <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+                                        </svg>
+                                    </a>
+                                    <a :href="'tel:' + contact.full_phone" 
+                                       class="text-blue-600 hover:text-blue-800 p-2" title="Call">
+                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/>
+                                        </svg>
+                                    </a>
+                                    <button @click="editContact(contact)" class="text-gray-600 hover:text-gray-800 p-2" title="Edit">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                        </svg>
+                                    </button>
+                                    <button @click="deleteContact(contact.id)" class="text-red-600 hover:text-red-800 p-2" title="Delete">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -886,9 +1054,23 @@ function leadsManager() {
         loadingComments: false,
         addingComment: false,
         
-        // Drag and drop for Kanban
+        // Drag and drop for Kanban (leads)
         draggingLeadId: null,
         dragOverStatus: null,
+        
+        // Drag and drop for Kanban columns (reordering)
+        draggingColumnIndex: null,
+        dragOverColumnIndex: null,
+        
+        // Contacts
+        showContactsModal: false,
+        contacts: [],
+        loadingContacts: false,
+        contactSearch: '',
+        countryCodes: [],
+        newContact: { name: '', phone: '', country_code: '+971', email: '', company: '', notes: '' },
+        editingContactId: null,
+        savingContact: false,
         
         // Kanban columns (derived from customStatuses)
         get kanbanColumns() {
@@ -1287,12 +1469,12 @@ function leadsManager() {
             return this.filteredLeads.filter(l => l.status === status);
         },
         
-        // Drag and drop handlers for Kanban
+        // Drag and drop handlers for Kanban leads
         dragStart(event, lead) {
             this.draggingLeadId = lead.id;
+            this.draggingColumnIndex = null; // Not dragging a column
             event.dataTransfer.effectAllowed = 'move';
-            event.dataTransfer.setData('text/plain', lead.id);
-            // Add a slight delay to show the drag effect
+            event.dataTransfer.setData('text/plain', JSON.stringify({ type: 'lead', id: lead.id }));
             setTimeout(() => {
                 event.target.classList.add('opacity-50');
             }, 0);
@@ -1304,30 +1486,89 @@ function leadsManager() {
             event.target.classList.remove('opacity-50');
         },
         
-        dragOverColumn(event, status) {
-            event.preventDefault();
-            this.dragOverStatus = status;
+        // Column drag handlers
+        startColumnDrag(event, index) {
+            this.draggingColumnIndex = index;
+            this.draggingLeadId = null; // Not dragging a lead
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', JSON.stringify({ type: 'column', index: index }));
+            event.stopPropagation();
         },
         
-        dragLeaveColumn(event) {
-            // Only clear if leaving the column entirely
+        endColumnDrag(event) {
+            this.draggingColumnIndex = null;
+            this.dragOverColumnIndex = null;
+        },
+        
+        handleColumnDragOver(event, status, colIndex) {
+            event.preventDefault();
+            if (this.draggingColumnIndex !== null) {
+                // Dragging a column
+                this.dragOverColumnIndex = colIndex;
+            } else if (this.draggingLeadId !== null) {
+                // Dragging a lead
+                this.dragOverStatus = status;
+            }
+        },
+        
+        handleColumnDragLeave(event) {
             if (!event.currentTarget.contains(event.relatedTarget)) {
                 this.dragOverStatus = null;
+                this.dragOverColumnIndex = null;
             }
         },
         
-        async dropOnColumn(event, newStatus) {
+        async handleColumnDrop(event, status, colIndex) {
             event.preventDefault();
-            this.dragOverStatus = null;
             
-            const leadId = parseInt(event.dataTransfer.getData('text/plain'));
-            if (!leadId) return;
-            
-            const lead = this.leads.find(l => l.id === leadId);
-            if (!lead || lead.status === newStatus) {
-                this.draggingLeadId = null;
-                return;
+            try {
+                const data = JSON.parse(event.dataTransfer.getData('text/plain'));
+                
+                if (data.type === 'column') {
+                    // Reordering columns
+                    await this.reorderColumn(data.index, colIndex);
+                } else if (data.type === 'lead') {
+                    // Moving a lead to a different status
+                    await this.dropLeadOnColumn(data.id, status);
+                }
+            } catch (e) {
+                // Fallback for old lead drag (plain ID)
+                const leadId = parseInt(event.dataTransfer.getData('text/plain'));
+                if (leadId) {
+                    await this.dropLeadOnColumn(leadId, status);
+                }
             }
+            
+            this.dragOverStatus = null;
+            this.dragOverColumnIndex = null;
+            this.draggingColumnIndex = null;
+            this.draggingLeadId = null;
+        },
+        
+        async reorderColumn(fromIndex, toIndex) {
+            if (fromIndex === toIndex) return;
+            
+            // Reorder customStatuses array
+            const statuses = [...this.customStatuses];
+            const [moved] = statuses.splice(fromIndex, 1);
+            statuses.splice(toIndex, 0, moved);
+            this.customStatuses = statuses;
+            
+            // Save to server
+            try {
+                await fetch('/api/leads/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ statuses: statuses })
+                });
+            } catch (e) {
+                console.error('Failed to save column order:', e);
+            }
+        },
+        
+        async dropLeadOnColumn(leadId, newStatus) {
+            const lead = this.leads.find(l => l.id === leadId);
+            if (!lead || lead.status === newStatus) return;
             
             // Optimistically update UI
             const oldStatus = lead.status;
@@ -1342,7 +1583,6 @@ function leadsManager() {
                     body: JSON.stringify({ status: newStatus })
                 });
                 if (!resp.ok) {
-                    // Revert on error
                     lead.status = oldStatus;
                     this.filterLeads();
                 } else {
@@ -1353,7 +1593,28 @@ function leadsManager() {
                 lead.status = oldStatus;
                 this.filterLeads();
             }
+        },
+        
+        // Legacy handlers (can be removed later)
+        dragOverColumn(event, status) {
+            event.preventDefault();
+            this.dragOverStatus = status;
+        },
+        
+        dragLeaveColumn(event) {
+            if (!event.currentTarget.contains(event.relatedTarget)) {
+                this.dragOverStatus = null;
+            }
+        },
+        
+        async dropOnColumn(event, newStatus) {
+            event.preventDefault();
+            this.dragOverStatus = null;
             
+            const leadId = parseInt(event.dataTransfer.getData('text/plain'));
+            if (!leadId) return;
+            
+            await this.dropLeadOnColumn(leadId, newStatus);
             this.draggingLeadId = null;
         },
         
@@ -1560,6 +1821,102 @@ function leadsManager() {
         getSourceLabel(sourceId) {
             const s = this.customSources.find(src => src.id === sourceId);
             return s ? s.label : sourceId;
+        },
+        
+        // ==================== CONTACTS ====================
+        
+        async loadContacts() {
+            this.loadingContacts = true;
+            try {
+                const params = new URLSearchParams();
+                if (this.contactSearch) params.set('search', this.contactSearch);
+                
+                const resp = await fetch('/api/contacts?' + params.toString());
+                const data = await resp.json();
+                this.contacts = data.contacts || [];
+                this.countryCodes = data.country_codes || [['+971', 'UAE']];
+            } catch (e) {
+                console.error('Failed to load contacts:', e);
+            }
+            this.loadingContacts = false;
+        },
+        
+        async saveContact() {
+            this.savingContact = true;
+            try {
+                const url = this.editingContactId 
+                    ? `/api/contacts/${this.editingContactId}` 
+                    : '/api/contacts';
+                const method = this.editingContactId ? 'PATCH' : 'POST';
+                
+                const resp = await fetch(url, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.newContact)
+                });
+                
+                const data = await resp.json();
+                if (data.success) {
+                    this.resetContactForm();
+                    await this.loadContacts();
+                } else {
+                    alert('Failed to save contact: ' + (data.error || 'Unknown error'));
+                }
+            } catch (e) {
+                console.error('Failed to save contact:', e);
+                alert('Failed to save contact: ' + e.message);
+            }
+            this.savingContact = false;
+        },
+        
+        editContact(contact) {
+            this.editingContactId = contact.id;
+            this.newContact = {
+                name: contact.name,
+                phone: contact.phone,
+                country_code: contact.country_code || '+971',
+                email: contact.email || '',
+                company: contact.company || '',
+                notes: contact.notes || ''
+            };
+        },
+        
+        cancelEditContact() {
+            this.resetContactForm();
+        },
+        
+        resetContactForm() {
+            this.editingContactId = null;
+            this.newContact = { name: '', phone: '', country_code: '+971', email: '', company: '', notes: '' };
+        },
+        
+        async deleteContact(id) {
+            if (!confirm('Delete this contact?')) return;
+            try {
+                const resp = await fetch(`/api/contacts/${id}`, { method: 'DELETE' });
+                const data = await resp.json();
+                if (data.success) {
+                    await this.loadContacts();
+                }
+            } catch (e) {
+                console.error('Failed to delete contact:', e);
+            }
+        },
+        
+        async saveContactFromLead(lead) {
+            try {
+                const resp = await fetch(`/api/contacts/from-lead/${lead.id}`, { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    if (data.existing) {
+                        alert('Contact already exists: ' + data.contact.name);
+                    } else {
+                        alert('Contact saved: ' + data.contact.name);
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to save contact from lead:', e);
+            }
         }
     }
 }
