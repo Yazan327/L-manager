@@ -630,7 +630,7 @@
                     </div>
                     <div class="col-span-2">
                         <div class="text-sm text-gray-500">Notes</div>
-                        <textarea x-model="selectedLead.notes" @blur="updateNotes(selectedLead.id, selectedLead.notes)"
+                        <textarea x-model="selectedLead.notes" @input.debounce.500ms="updateNotes(selectedLead.id, selectedLead.notes)"
                                   rows="3" class="w-full px-3 py-2 border rounded-lg mt-1"
                                   placeholder="Add notes..."></textarea>
                     </div>
@@ -1365,6 +1365,9 @@ function leadsManager() {
                     body: JSON.stringify({ notes: notes || '' })
                 });
                 if (!resp.ok) throw new Error('Failed to save notes');
+                // Update the lead in the local array too
+                const lead = this.leads.find(l => l.id === id);
+                if (lead) lead.notes = notes || '';
             } catch (e) {
                 console.error('Failed to update notes:', e);
             }
