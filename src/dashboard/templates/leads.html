@@ -3,16 +3,16 @@
 {% block title %}Leads - L-Manager{% endblock %}
 
 {% block content %}
-<div x-data="leadsManager()" x-init="init()" class="space-y-6">
+<div x-data="leadsManager()" x-init="init()" class="space-y-6 w-full">
     <!-- Fixed Header Section (not affected by Kanban scroll) -->
-    <div class="max-w-full overflow-hidden">
+    <div class="w-full overflow-hidden">
         <!-- Header Section -->
-        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 flex-wrap">
-            <div>
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div class="shrink-0">
                 <h1 class="text-2xl font-bold text-gray-900">Leads</h1>
                 <p class="text-gray-600">Manage incoming leads from all sources</p>
             </div>
-            <div class="flex gap-2 flex-wrap">
+            <div class="flex gap-2 flex-wrap justify-end">
             <!-- View Toggle -->
             <div class="flex bg-gray-100 rounded-lg p-1">
                 <button @click="viewMode = 'list'" 

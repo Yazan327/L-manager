@@ -11,8 +11,8 @@
     </style>
     {% block head_scripts %}{% endblock %}
 </head>
-<body class="bg-gray-100 min-h-screen">
-    <div x-data="{ sidebarOpen: true, userMenuOpen: false }" class="flex">
+<body class="bg-gray-100 min-h-screen overflow-x-hidden">
+    <div x-data="{ sidebarOpen: true, userMenuOpen: false }" class="flex overflow-x-hidden">
         <!-- Sidebar -->
         <aside :class="sidebarOpen ? 'w-64' : 'w-20'" class="bg-indigo-800 min-h-screen transition-all duration-300 fixed">
             <div class="p-4">
@@ -90,7 +90,7 @@
         </aside>
         
         <!-- Main Content -->
-        <main :class="sidebarOpen ? 'ml-64' : 'ml-20'" class="flex-1 transition-all duration-300">
+        <main :class="sidebarOpen ? 'ml-64' : 'ml-20'" class="flex-1 transition-all duration-300 overflow-x-hidden max-w-full">
             <!-- Top Bar -->
             <header class="bg-white shadow-sm px-6 py-4">
                 <div class="flex items-center justify-between">
@@ -159,7 +159,7 @@
             {% endwith %}
             
             <!-- Page Content -->
-            <div class="p-6 overflow-x-hidden">
+            <div class="p-6 overflow-x-hidden max-w-full">
                 {% block content %}{% endblock %}
             </div>
         </main>
