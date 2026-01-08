@@ -389,45 +389,78 @@
                                                @change="toggleLeadSelection(lead.id)"
                                                class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 w-4 h-4">
                                     </div>
-                                    <!-- Lead Name & Channel -->
+                                    
+                                    <!-- Lead Name & Source/Channel (name is required) -->
                                     <div class="flex items-start justify-between mb-2 pr-6">
                                         <div class="font-medium text-gray-900 truncate pr-2" x-text="lead.name"></div>
-                                        <span class="px-1.5 py-0.5 text-xs rounded flex-shrink-0"
+                                        <span x-show="showField('source')" class="px-1.5 py-0.5 text-xs rounded flex-shrink-0"
                                               :class="getSourceClass(lead.source)"
                                               x-text="lead.channel || getSourceLabel(lead.source)"></span>
                                     </div>
                                     
                                     <!-- Contact Info -->
-                                    <div class="text-sm text-gray-500 mb-2">
-                                        <div x-show="lead.email" class="truncate" x-text="lead.email"></div>
-                                        <div x-show="lead.phone" x-text="lead.phone"></div>
+                                    <div x-show="showField('email') || showField('phone') || showField('whatsapp')" class="text-sm text-gray-500 mb-2">
+                                        <div x-show="showField('email') && lead.email" class="truncate" x-text="lead.email"></div>
+                                        <div x-show="showField('phone') && lead.phone" x-text="lead.phone"></div>
+                                        <div x-show="showField('whatsapp') && lead.whatsapp && lead.whatsapp !== lead.phone" class="flex items-center gap-1">
+                                            <svg class="w-3 h-3 text-green-500" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/></svg>
+                                            <span x-text="lead.whatsapp"></span>
+                                        </div>
                                     </div>
                                     
-                                    <!-- Listing -->
-                                    <div x-show="lead.listing_reference || lead.pf_listing_id" class="text-xs text-gray-400 mb-2">
+                                    <!-- Message Preview -->
+                                    <div x-show="showField('message') && lead.message" class="text-xs text-gray-500 mb-2 line-clamp-2" x-text="lead.message"></div>
+                                    
+                                    <!-- Listing Reference -->
+                                    <div x-show="showField('listing_reference') && (lead.listing_reference || lead.pf_listing_id)" class="text-xs text-gray-400 mb-2">
                                         <span class="bg-gray-100 px-1.5 py-0.5 rounded" x-text="lead.listing_reference || lead.pf_listing_id"></span>
                                     </div>
                                     
-                                    <!-- Type Badge -->
-                                    <div class="mb-2">
-                                        <span class="px-1.5 py-0.5 text-xs rounded font-medium"
+                                    <!-- Badges Row: Type, Priority, PF Status -->
+                                    <div class="flex flex-wrap gap-1 mb-2">
+                                        <!-- Type Badge -->
+                                        <span x-show="showField('lead_type')" class="px-1.5 py-0.5 text-xs rounded font-medium"
                                               :class="lead.lead_type === 'for_rent' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'"
                                               x-text="lead.lead_type === 'for_rent' ? 'Rent' : 'Sale'"></span>
+                                        <!-- Priority Badge -->
+                                        <span x-show="showField('priority') && lead.priority && lead.priority !== 'medium'" 
+                                              class="px-1.5 py-0.5 text-xs rounded font-medium"
+                                              :class="{
+                                                  'bg-gray-100 text-gray-600': lead.priority === 'low',
+                                                  'bg-orange-100 text-orange-700': lead.priority === 'high',
+                                                  'bg-red-100 text-red-700': lead.priority === 'urgent'
+                                              }"
+                                              x-text="lead.priority"></span>
+                                        <!-- PF Status Badge -->
+                                        <span x-show="showField('pf_status') && lead.pf_status" 
+                                              class="px-1.5 py-0.5 text-xs rounded"
+                                              :class="getPfStatusClass(lead.pf_status)"
+                                              x-text="lead.pf_status"></span>
                                     </div>
                                     
-                                    <!-- Footer: Responsible & Date -->
-                                    <div class="flex items-center justify-between text-xs text-gray-400 mt-2 pt-2 border-t">
-                                        <div class="flex items-center gap-1 truncate">
+                                    <!-- Notes Preview -->
+                                    <div x-show="showField('notes') && lead.notes" class="text-xs text-gray-500 mb-2 p-1.5 bg-yellow-50 rounded border border-yellow-100 line-clamp-2" x-text="lead.notes"></div>
+                                    
+                                    <!-- Next Follow-up -->
+                                    <div x-show="showField('next_follow_up') && lead.next_follow_up" class="text-xs mb-2 flex items-center gap-1"
+                                         :class="isOverdue(lead.next_follow_up) ? 'text-red-500' : 'text-blue-500'">
+                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                        <span>Follow-up: <span x-text="formatDateShort(lead.next_follow_up)"></span></span>
+                                    </div>
+                                    
+                                    <!-- Footer: Assigned To & Date -->
+                                    <div x-show="showField('assigned_to') || showField('received_at')" class="flex items-center justify-between text-xs text-gray-400 mt-2 pt-2 border-t">
+                                        <div x-show="showField('assigned_to')" class="flex items-center gap-1 truncate">
                                             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
                                             </svg>
                                             <span x-text="lead.assigned_to_name || lead.pf_agent_name || 'Unassigned'"></span>
                                         </div>
-                                        <div x-text="formatDateShort(lead.received_at || lead.created_at)"></div>
+                                        <div x-show="showField('received_at')" x-text="formatDateShort(lead.received_at || lead.created_at)"></div>
                                     </div>
                                     
                                     <!-- Quick Actions -->
-                                    <div class="flex gap-2 mt-2 pt-2 border-t">
+                                    <div x-show="showField('quick_actions')" class="flex gap-2 mt-2 pt-2 border-t">
                                         <a x-show="lead.phone || lead.whatsapp" 
                                            :href="'https://wa.me/' + (lead.whatsapp || lead.phone)?.replace(/[^0-9]/g, '')" 
                                            target="_blank" @click.stop
@@ -925,8 +958,30 @@
                     </div>
                 </div>
                 
+                <!-- Card Display Settings -->
+                <div class="col-span-2 mt-4 pt-4 border-t">
+                    <div class="flex items-center justify-between mb-3">
+                        <h4 class="font-medium text-gray-900">Kanban Card Display</h4>
+                        <span class="text-xs text-gray-500">Choose which fields to show on lead cards</span>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2">
+                        <template x-for="field in availableCardFields" :key="field.id">
+                            <label class="flex items-center gap-2 p-2 rounded border hover:bg-gray-50 cursor-pointer"
+                                   :class="cardDisplayFields.includes(field.id) ? 'border-blue-300 bg-blue-50' : 'border-gray-200'">
+                                <input type="checkbox" 
+                                       :checked="cardDisplayFields.includes(field.id)"
+                                       :disabled="field.required"
+                                       @change="toggleCardField(field.id)"
+                                       class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                                <span class="text-sm" :class="field.required ? 'font-medium' : ''" x-text="field.label"></span>
+                                <span x-show="field.required" class="text-xs text-gray-400">(required)</span>
+                            </label>
+                        </template>
+                    </div>
+                </div>
+                
                 <!-- Cleanup Section -->
-                <div class="mt-4 pt-4 border-t">
+                <div class="col-span-2 mt-4 pt-4 border-t">
                     <div class="flex items-center justify-between">
                         <div>
                             <div class="text-sm font-medium text-gray-700">Cleanup Invalid Sources</div>
@@ -1167,6 +1222,26 @@ function leadsManager() {
         editSources: [],
         savingConfig: false,
         cleaningUp: false,
+        
+        // Card display settings
+        cardDisplayFields: JSON.parse(localStorage.getItem('leads_card_fields') || 'null') || ['name', 'source', 'email', 'phone', 'listing_reference', 'lead_type', 'assigned_to', 'received_at'],
+        availableCardFields: [
+            { id: 'name', label: 'Name', required: true },
+            { id: 'source', label: 'Source/Channel' },
+            { id: 'email', label: 'Email' },
+            { id: 'phone', label: 'Phone' },
+            { id: 'whatsapp', label: 'WhatsApp' },
+            { id: 'message', label: 'Message Preview' },
+            { id: 'listing_reference', label: 'Listing Reference' },
+            { id: 'lead_type', label: 'Lead Type (Rent/Sale)' },
+            { id: 'priority', label: 'Priority' },
+            { id: 'pf_status', label: 'PF Status' },
+            { id: 'assigned_to', label: 'Assigned To' },
+            { id: 'received_at', label: 'Date Received' },
+            { id: 'next_follow_up', label: 'Next Follow-up' },
+            { id: 'notes', label: 'Notes Preview' },
+            { id: 'quick_actions', label: 'Quick Actions' }
+        ],
         
         // Bulk update
         showBulkUpdateModal: false,
@@ -1893,6 +1968,11 @@ function leadsManager() {
             return date.toLocaleDateString('en-AE', { day: 'numeric', month: 'short' });
         },
         
+        isOverdue(dateStr) {
+            if (!dateStr) return false;
+            return new Date(dateStr) < new Date();
+        },
+        
         getSourceClass(source) {
             const classes = {
                 propertyfinder: 'bg-red-100 text-red-800',
@@ -2022,9 +2102,25 @@ function leadsManager() {
             }
         },
         
+        toggleCardField(fieldId) {
+            const idx = this.cardDisplayFields.indexOf(fieldId);
+            if (idx >= 0) {
+                this.cardDisplayFields.splice(idx, 1);
+            } else {
+                this.cardDisplayFields.push(fieldId);
+            }
+        },
+        
+        showField(fieldId) {
+            return this.cardDisplayFields.includes(fieldId);
+        },
+        
         async saveConfig() {
             this.savingConfig = true;
             try {
+                // Save card display fields to localStorage
+                localStorage.setItem('leads_card_fields', JSON.stringify(this.cardDisplayFields));
+                
                 const resp = await fetch('/api/leads/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
