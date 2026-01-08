@@ -59,11 +59,17 @@ def convert_google_drive_url(url):
 class User(db.Model):
     """Dashboard user with role-based permissions"""
     __tablename__ = 'users'
+    __table_args__ = (
+        db.Index('idx_users_role', 'role'),
+        db.Index('idx_users_is_active', 'is_active'),
+        db.Index('idx_users_pf_agent_id', 'pf_agent_id'),
+        db.Index('idx_users_created_at', 'created_at'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(120), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(256), nullable=False)
-    name = db.Column(db.String(100), nullable=False)
+    name = db.Column(db.String(100), nullable=False, index=True)
     role = db.Column(db.String(20), default='viewer')  # admin, manager, agent, viewer
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -174,6 +180,10 @@ class User(db.Model):
 class ListingFolder(db.Model):
     """Folders/Groups for organizing listings"""
     __tablename__ = 'listing_folders'
+    __table_args__ = (
+        db.Index('idx_folders_parent_id', 'parent_id'),
+        db.Index('idx_folders_name', 'name'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -224,9 +234,28 @@ class ListingFolder(db.Model):
 class LocalListing(db.Model):
     """Local listing storage model"""
     __tablename__ = 'listings'
+    __table_args__ = (
+        db.Index('idx_listings_folder_id', 'folder_id'),
+        db.Index('idx_listings_status', 'status'),
+        db.Index('idx_listings_offering_type', 'offering_type'),
+        db.Index('idx_listings_property_type', 'property_type'),
+        db.Index('idx_listings_emirate', 'emirate'),
+        db.Index('idx_listings_city', 'city'),
+        db.Index('idx_listings_location_id', 'location_id'),
+        db.Index('idx_listings_price', 'price'),
+        db.Index('idx_listings_bedrooms', 'bedrooms'),
+        db.Index('idx_listings_assigned_agent', 'assigned_agent'),
+        db.Index('idx_listings_pf_listing_id', 'pf_listing_id'),
+        db.Index('idx_listings_created_at', 'created_at'),
+        db.Index('idx_listings_updated_at', 'updated_at'),
+        # Composite indexes for common queries
+        db.Index('idx_listings_status_offering', 'status', 'offering_type'),
+        db.Index('idx_listings_emirate_city', 'emirate', 'city'),
+        db.Index('idx_listings_type_beds_price', 'property_type', 'bedrooms', 'price'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
-    reference = db.Column(db.String(50), unique=True, nullable=False)
+    reference = db.Column(db.String(50), unique=True, nullable=False, index=True)
     
     # Folder/Group assignment
     folder_id = db.Column(db.Integer, db.ForeignKey('listing_folders.id'), nullable=True)
@@ -753,6 +782,9 @@ class PFSession(db.Model):
 class PFCache(db.Model):
     """Cache PropertyFinder API data in database for fast access"""
     __tablename__ = 'pf_cache'
+    __table_args__ = (
+        db.Index('idx_pf_cache_type', 'cache_type'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     cache_type = db.Column(db.String(50), nullable=False)  # 'listings', 'users', 'leads'
@@ -814,6 +846,24 @@ class PFCache(db.Model):
 class Lead(db.Model):
     """Incoming leads from all sources: PropertyFinder, Bayut, Zapier, etc."""
     __tablename__ = 'crm_leads'
+    __table_args__ = (
+        db.Index('idx_leads_status', 'status'),
+        db.Index('idx_leads_source', 'source'),
+        db.Index('idx_leads_priority', 'priority'),
+        db.Index('idx_leads_lead_type', 'lead_type'),
+        db.Index('idx_leads_assigned_to_id', 'assigned_to_id'),
+        db.Index('idx_leads_pf_agent_id', 'pf_agent_id'),
+        db.Index('idx_leads_customer_id', 'customer_id'),
+        db.Index('idx_leads_received_at', 'received_at'),
+        db.Index('idx_leads_created_at', 'created_at'),
+        db.Index('idx_leads_next_follow_up', 'next_follow_up'),
+        db.Index('idx_leads_source_id', 'source_id'),
+        db.Index('idx_leads_pf_listing_id', 'pf_listing_id'),
+        # Composite indexes for common filters
+        db.Index('idx_leads_status_source', 'status', 'source'),
+        db.Index('idx_leads_status_assigned', 'status', 'assigned_to_id'),
+        db.Index('idx_leads_agent_status', 'pf_agent_id', 'status'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     
@@ -823,7 +873,7 @@ class Lead(db.Model):
     channel = db.Column(db.String(30))  # whatsapp, email, call, etc.
     
     # Contact Info
-    name = db.Column(db.String(200), nullable=False)
+    name = db.Column(db.String(200), nullable=False, index=True)
     email = db.Column(db.String(120))
     phone = db.Column(db.String(50))
     whatsapp = db.Column(db.String(50))
@@ -899,6 +949,11 @@ class Lead(db.Model):
 class LeadComment(db.Model):
     """Comments/notes on leads with timestamps and user attribution"""
     __tablename__ = 'lead_comments'
+    __table_args__ = (
+        db.Index('idx_lead_comments_lead_id', 'lead_id'),
+        db.Index('idx_lead_comments_user_id', 'user_id'),
+        db.Index('idx_lead_comments_created_at', 'created_at'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     lead_id = db.Column(db.Integer, db.ForeignKey('crm_leads.id', ondelete='CASCADE'), nullable=False)
@@ -926,6 +981,14 @@ class LeadComment(db.Model):
 class Contact(db.Model):
     """Saved contacts with phone numbers and country codes"""
     __tablename__ = 'contacts'
+    __table_args__ = (
+        db.Index('idx_contacts_name', 'name'),
+        db.Index('idx_contacts_phone', 'phone'),
+        db.Index('idx_contacts_email', 'email'),
+        db.Index('idx_contacts_lead_id', 'lead_id'),
+        db.Index('idx_contacts_created_by_id', 'created_by_id'),
+        db.Index('idx_contacts_created_at', 'created_at'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(200), nullable=False)
@@ -1000,6 +1063,15 @@ class Contact(db.Model):
 class Customer(db.Model):
     """Customer/prospect for CRM"""
     __tablename__ = 'crm_customers'
+    __table_args__ = (
+        db.Index('idx_customers_name', 'name'),
+        db.Index('idx_customers_phone', 'phone'),
+        db.Index('idx_customers_customer_type', 'customer_type'),
+        db.Index('idx_customers_status', 'status'),
+        db.Index('idx_customers_assigned_agent_id', 'assigned_agent_id'),
+        db.Index('idx_customers_created_at', 'created_at'),
+        db.Index('idx_customers_last_contact', 'last_contact'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     
@@ -1148,6 +1220,10 @@ class AppSettings(db.Model):
 class LoopConfig(db.Model):
     """Configuration for a listing loop (auto-duplicate/republish)"""
     __tablename__ = 'loop_configs'
+    __table_args__ = (
+        db.Index('idx_loop_configs_is_active', 'is_active'),
+        db.Index('idx_loop_configs_next_run', 'next_run_at'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -1220,6 +1296,11 @@ class LoopConfig(db.Model):
 class LoopListing(db.Model):
     """A listing assigned to a loop"""
     __tablename__ = 'loop_listings'
+    __table_args__ = (
+        db.Index('idx_loop_listings_loop_config_id', 'loop_config_id'),
+        db.Index('idx_loop_listings_listing_id', 'listing_id'),
+        db.Index('idx_loop_listings_order_index', 'order_index'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     loop_config_id = db.Column(db.Integer, db.ForeignKey('loop_configs.id'), nullable=False)
@@ -1256,6 +1337,13 @@ class LoopListing(db.Model):
 class DuplicatedListing(db.Model):
     """Track duplicated listings created by loops"""
     __tablename__ = 'duplicated_listings'
+    __table_args__ = (
+        db.Index('idx_duplicated_original', 'original_listing_id'),
+        db.Index('idx_duplicated_duplicate', 'duplicate_listing_id'),
+        db.Index('idx_duplicated_loop', 'loop_config_id'),
+        db.Index('idx_duplicated_status', 'status'),
+        db.Index('idx_duplicated_pf_id', 'pf_listing_id'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     
@@ -1303,6 +1391,13 @@ class DuplicatedListing(db.Model):
 class LoopExecutionLog(db.Model):
     """Log of loop executions for debugging and monitoring"""
     __tablename__ = 'loop_execution_logs'
+    __table_args__ = (
+        db.Index('idx_loop_exec_loop_config', 'loop_config_id'),
+        db.Index('idx_loop_exec_listing', 'listing_id'),
+        db.Index('idx_loop_exec_action', 'action'),
+        db.Index('idx_loop_exec_success', 'success'),
+        db.Index('idx_loop_exec_executed_at', 'executed_at'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     loop_config_id = db.Column(db.Integer, db.ForeignKey('loop_configs.id'), nullable=False)
@@ -1392,6 +1487,12 @@ BOARD_PERMISSIONS = {
 class BoardMember(db.Model):
     """Board membership with role-based permissions"""
     __tablename__ = 'board_members'
+    __table_args__ = (
+        db.UniqueConstraint('board_id', 'user_id', name='unique_board_member'),
+        db.Index('idx_board_members_board_id', 'board_id'),
+        db.Index('idx_board_members_user_id', 'user_id'),
+        db.Index('idx_board_members_role', 'role'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     board_id = db.Column(db.Integer, db.ForeignKey('task_boards.id'), nullable=False)
@@ -1410,9 +1511,6 @@ class BoardMember(db.Model):
     # Relationships
     user = db.relationship('User', foreign_keys=[user_id], backref='board_memberships')
     invited_by = db.relationship('User', foreign_keys=[invited_by_id])
-    
-    # Unique constraint - one membership per user per board
-    __table_args__ = (db.UniqueConstraint('board_id', 'user_id', name='unique_board_member'),)
     
     def has_permission(self, permission):
         """Check if member has a specific permission"""
@@ -1448,6 +1546,12 @@ task_assignee_association = db.Table('task_assignees',
 class TaskBoard(db.Model):
     """Task boards for organizing tasks (like Trello boards)"""
     __tablename__ = 'task_boards'
+    __table_args__ = (
+        db.Index('idx_task_boards_created_by_id', 'created_by_id'),
+        db.Index('idx_task_boards_is_archived', 'is_archived'),
+        db.Index('idx_task_boards_is_private', 'is_private'),
+        db.Index('idx_task_boards_created_at', 'created_at'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(200), nullable=False)
@@ -1567,6 +1671,9 @@ class TaskBoard(db.Model):
 class TaskLabel(db.Model):
     """Labels for tasks (like Trello labels)"""
     __tablename__ = 'task_labels'
+    __table_args__ = (
+        db.Index('idx_task_labels_board_id', 'board_id'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -1595,6 +1702,19 @@ task_label_association = db.Table('task_label_association',
 class Task(db.Model):
     """Individual tasks within a board"""
     __tablename__ = 'tasks'
+    __table_args__ = (
+        db.Index('idx_tasks_board_id', 'board_id'),
+        db.Index('idx_tasks_column_id', 'column_id'),
+        db.Index('idx_tasks_assignee_id', 'assignee_id'),
+        db.Index('idx_tasks_created_by_id', 'created_by_id'),
+        db.Index('idx_tasks_priority', 'priority'),
+        db.Index('idx_tasks_due_date', 'due_date'),
+        db.Index('idx_tasks_is_completed', 'is_completed'),
+        db.Index('idx_tasks_position', 'position'),
+        db.Index('idx_tasks_created_at', 'created_at'),
+        db.Index('idx_tasks_board_column', 'board_id', 'column_id'),
+        db.Index('idx_tasks_board_position', 'board_id', 'position'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(500), nullable=False)
@@ -1719,6 +1839,11 @@ class Task(db.Model):
 class TaskComment(db.Model):
     """Comments on tasks"""
     __tablename__ = 'task_comments'
+    __table_args__ = (
+        db.Index('idx_task_comments_task_id', 'task_id'),
+        db.Index('idx_task_comments_user_id', 'user_id'),
+        db.Index('idx_task_comments_created_at', 'created_at'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     task_id = db.Column(db.Integer, db.ForeignKey('tasks.id'), nullable=False)
