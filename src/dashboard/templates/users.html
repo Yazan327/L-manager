@@ -230,6 +230,14 @@
                 </div>
                 
                 <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                    <input type="email" name="email" x-model="editingUser.email" required
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500 bg-gray-50"
+                           readonly title="Email cannot be changed">
+                    <p class="text-xs text-gray-500 mt-1">Email cannot be changed after creation</p>
+                </div>
+                
+                <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Role</label>
                     <select name="role" x-model="editingUser.role"
                             class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
@@ -244,19 +252,20 @@
                         <i class="fas fa-lock text-amber-500 mr-1"></i>Locked PF Agent
                     </label>
                     <select name="pf_agent_id" x-model="editingUser.pf_agent_id"
+                            @change="updateAgentName($event)"
                             class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
                         <option value="">No restriction (all agents)</option>
                         {% for user in pf_users %}
                         <option value="{{ user.id }}">{{ user.firstName }} {{ user.lastName }} ({{ user.email }})</option>
                         {% endfor %}
                     </select>
-                    <input type="hidden" name="pf_agent_name" x-model="editingUser.pf_agent_name">
+                    <input type="hidden" name="pf_agent_name" :value="editingUser.pf_agent_name">
                     <p class="text-xs text-gray-500 mt-1">User will only see listings/leads for this agent</p>
                 </div>
                 
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
-                    <select name="is_active" :value="editingUser.is_active ? 'true' : 'false'"
+                    <select name="is_active" x-model="editingUser.is_active_str"
                             class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
                         <option value="true">Active</option>
                         <option value="false">Inactive</option>
@@ -317,9 +326,18 @@ function usersPage() {
         useCustomPermissions: false,
         
         editUser(user) {
-            this.editingUser = { ...user };
+            this.editingUser = { 
+                ...user,
+                is_active_str: user.is_active ? 'true' : 'false'
+            };
             this.useCustomPermissions = user.has_custom_permissions || false;
             this.showEditModal = true;
+        },
+        
+        updateAgentName(event) {
+            const select = event.target;
+            const selectedOption = select.options[select.selectedIndex];
+            this.editingUser.pf_agent_name = select.value ? selectedOption.text : '';
         }
     };
 }
