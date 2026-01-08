@@ -4064,7 +4064,12 @@ def api_create_board():
         db.session.add(board)
         db.session.commit()
         
-        return jsonify({'success': True, 'board': board.to_dict()})
+        # Return board with permissions for creator (owner)
+        board_dict = board.to_dict()
+        board_dict['my_role'] = 'owner'
+        board_dict['my_permissions'] = BOARD_PERMISSIONS.get('owner', {})
+        
+        return jsonify({'success': True, 'board': board_dict})
     except Exception as e:
         import traceback
         print(f"Error in api_create_board: {e}")

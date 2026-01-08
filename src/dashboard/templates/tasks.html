@@ -643,6 +643,7 @@ function tasksManager() {
                 if (data.success) {
                     this.currentBoard = data.board;
                     this.tasks = data.board.tasks || [];
+                    console.log('Board loaded:', this.currentBoard.name, 'Role:', this.currentBoard.my_role, 'Permissions:', this.currentBoard.my_permissions);
                     await this.loadLabels(boardId);
                 }
             } catch (e) { console.error('Failed to load board:', e); }
