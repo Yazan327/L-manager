@@ -63,6 +63,10 @@
                     <i class="fas fa-user-plus w-8"></i>
                     <span x-show="sidebarOpen">Leads</span>
                 </a>
+                <a href="{{ url_for('tasks_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'tasks_page' %}bg-indigo-700{% endif %}">
+                    <i class="fas fa-tasks w-8"></i>
+                    <span x-show="sidebarOpen">Tasks</span>
+                </a>
                 
                 <div class="border-t border-indigo-700 my-2"></div>
                 

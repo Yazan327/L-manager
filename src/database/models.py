@@ -1330,3 +1330,203 @@ class LoopExecutionLog(db.Model):
             'executed_at': self.executed_at.isoformat() if self.executed_at else None,
             'duration_ms': self.duration_ms
         }
+
+
+# ===== TASK MANAGEMENT (Trello-like) =====
+
+class TaskBoard(db.Model):
+    """Task boards for organizing tasks (like Trello boards)"""
+    __tablename__ = 'task_boards'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    color = db.Column(db.String(20), default='#3b82f6')  # Board color
+    icon = db.Column(db.String(50), default='clipboard')  # Icon name
+    
+    # Columns configuration stored as JSON
+    # Format: [{"id": "uuid", "name": "To Do", "color": "#gray"}, ...]
+    columns_config = db.Column(db.Text, default='[]')
+    
+    # Board settings
+    is_archived = db.Column(db.Boolean, default=False)
+    is_favorite = db.Column(db.Boolean, default=False)
+    
+    # Ownership
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    tasks = db.relationship('Task', backref='board', lazy='dynamic', cascade='all, delete-orphan')
+    
+    def get_columns(self):
+        """Parse columns_config JSON"""
+        import json
+        try:
+            return json.loads(self.columns_config or '[]')
+        except:
+            return []
+    
+    def set_columns(self, columns):
+        """Set columns_config from list"""
+        import json
+        self.columns_config = json.dumps(columns)
+    
+    def to_dict(self, include_tasks=False):
+        data = {
+            'id': self.id,
+            'name': self.name,
+            'description': self.description,
+            'color': self.color,
+            'icon': self.icon,
+            'columns': self.get_columns(),
+            'is_archived': self.is_archived,
+            'is_favorite': self.is_favorite,
+            'created_by_id': self.created_by_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'task_count': self.tasks.count() if self.tasks else 0
+        }
+        if include_tasks:
+            data['tasks'] = [t.to_dict() for t in self.tasks.all()]
+        return data
+
+
+class TaskLabel(db.Model):
+    """Labels for tasks (like Trello labels)"""
+    __tablename__ = 'task_labels'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    color = db.Column(db.String(20), default='#6b7280')  # Tailwind gray-500
+    board_id = db.Column(db.Integer, db.ForeignKey('task_boards.id'), nullable=True)  # Board-specific or global
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'color': self.color,
+            'board_id': self.board_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+# Association table for Task <-> TaskLabel many-to-many
+task_label_association = db.Table('task_label_association',
+    db.Column('task_id', db.Integer, db.ForeignKey('tasks.id'), primary_key=True),
+    db.Column('label_id', db.Integer, db.ForeignKey('task_labels.id'), primary_key=True)
+)
+
+
+class Task(db.Model):
+    """Individual tasks within a board"""
+    __tablename__ = 'tasks'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(500), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    
+    # Board and column
+    board_id = db.Column(db.Integer, db.ForeignKey('task_boards.id'), nullable=False)
+    column_id = db.Column(db.String(100), nullable=False)  # References columns_config id
+    position = db.Column(db.Integer, default=0)  # Order within column
+    
+    # Task details
+    priority = db.Column(db.String(20), default='medium')  # low, medium, high, urgent
+    due_date = db.Column(db.DateTime, nullable=True)
+    start_date = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+    is_completed = db.Column(db.Boolean, default=False)
+    
+    # Assignment
+    assignee_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    
+    # Additional data
+    cover_color = db.Column(db.String(20), nullable=True)  # Card cover color
+    cover_image = db.Column(db.String(500), nullable=True)  # Card cover image URL
+    checklist = db.Column(db.Text, default='[]')  # JSON: [{"id": "", "text": "", "checked": false}]
+    attachments = db.Column(db.Text, default='[]')  # JSON: [{"id": "", "name": "", "url": "", "type": ""}]
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    labels = db.relationship('TaskLabel', secondary=task_label_association, backref='tasks')
+    comments = db.relationship('TaskComment', backref='task', lazy='dynamic', cascade='all, delete-orphan')
+    
+    def get_checklist(self):
+        import json
+        try:
+            return json.loads(self.checklist or '[]')
+        except:
+            return []
+    
+    def set_checklist(self, items):
+        import json
+        self.checklist = json.dumps(items)
+    
+    def get_attachments(self):
+        import json
+        try:
+            return json.loads(self.attachments or '[]')
+        except:
+            return []
+    
+    def set_attachments(self, items):
+        import json
+        self.attachments = json.dumps(items)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'title': self.title,
+            'description': self.description,
+            'board_id': self.board_id,
+            'column_id': self.column_id,
+            'position': self.position,
+            'priority': self.priority,
+            'due_date': self.due_date.isoformat() if self.due_date else None,
+            'start_date': self.start_date.isoformat() if self.start_date else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+            'is_completed': self.is_completed,
+            'assignee_id': self.assignee_id,
+            'created_by_id': self.created_by_id,
+            'cover_color': self.cover_color,
+            'cover_image': self.cover_image,
+            'checklist': self.get_checklist(),
+            'attachments': self.get_attachments(),
+            'labels': [l.to_dict() for l in self.labels],
+            'comment_count': self.comments.count() if self.comments else 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+class TaskComment(db.Model):
+    """Comments on tasks"""
+    __tablename__ = 'task_comments'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.Integer, db.ForeignKey('tasks.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    content = db.Column(db.Text, nullable=False)
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'task_id': self.task_id,
+            'user_id': self.user_id,
+            'content': self.content,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }

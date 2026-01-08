@@ -1,0 +1,697 @@
+{% extends "base.html" %}
+{% block title %}Tasks - L-Manager{% endblock %}
+{% block content %}
+<div x-data="tasksManager()" x-init="init()" class="h-full flex flex-col">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-4 flex-shrink-0">
+        <div class="flex items-center gap-4">
+            <h1 class="text-2xl font-bold text-gray-900">Tasks</h1>
+            <!-- Board Selector -->
+            <div class="relative" x-data="{open:false}">
+                <button @click="open=!open" class="flex items-center gap-2 px-3 py-2 bg-white border rounded-lg hover:bg-gray-50">
+                    <span x-text="currentBoard?.name || 'Select Board'" class="font-medium"></span>
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </button>
+                <div x-show="open" @click.away="open=false" x-cloak class="absolute left-0 mt-1 w-64 bg-white border rounded-lg shadow-lg z-50">
+                    <div class="p-2">
+                        <template x-for="board in boards" :key="board.id">
+                            <button @click="selectBoard(board.id); open=false" 
+                                :class="currentBoard?.id === board.id ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50'"
+                                class="w-full flex items-center gap-2 px-3 py-2 rounded text-left">
+                                <span class="w-3 h-3 rounded" :style="'background:'+board.color"></span>
+                                <span x-text="board.name"></span>
+                                <span class="ml-auto text-xs text-gray-400" x-text="board.task_count+' tasks'"></span>
+                            </button>
+                        </template>
+                        <div class="border-t mt-2 pt-2">
+                            <button @click="showCreateBoard=true; open=false" class="w-full flex items-center gap-2 px-3 py-2 rounded text-blue-600 hover:bg-blue-50">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                                Create New Board
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="flex gap-2">
+            <button @click="showBoardSettings=true" x-show="currentBoard" class="p-2 text-gray-500 hover:bg-gray-100 rounded-lg" title="Board Settings">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- No Board Selected -->
+    <template x-if="!currentBoard && !loading">
+        <div class="flex-1 flex items-center justify-center">
+            <div class="text-center">
+                <svg class="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>
+                <h3 class="text-lg font-medium text-gray-700 mb-2">No Board Selected</h3>
+                <p class="text-gray-500 mb-4">Create a board to start organizing your tasks</p>
+                <button @click="showCreateBoard=true" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">Create Your First Board</button>
+            </div>
+        </div>
+    </template>
+
+    <!-- Loading -->
+    <div x-show="loading" class="flex-1 flex items-center justify-center">
+        <svg class="w-8 h-8 animate-spin text-blue-600" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+    </div>
+
+    <!-- Kanban Board -->
+    <template x-if="currentBoard && !loading">
+        <div class="flex-1 overflow-x-auto overflow-y-hidden" 
+             @mousedown="startDragScroll($event)" @mousemove="moveDragScroll($event)" @mouseup="endDragScroll()" @mouseleave="endDragScroll()">
+            <div class="flex gap-4 h-full pb-4 min-w-max px-1">
+                <template x-for="column in currentBoard.columns" :key="column.id">
+                    <div class="w-72 flex-shrink-0 bg-gray-100 rounded-lg flex flex-col max-h-full"
+                         @dragover.prevent="dragOverColumn($event, column.id)" @drop="dropTask($event, column.id)">
+                        <!-- Column Header -->
+                        <div class="p-3 flex items-center justify-between flex-shrink-0">
+                            <div class="flex items-center gap-2">
+                                <span class="w-2 h-2 rounded-full" :style="'background:'+column.color"></span>
+                                <span class="font-medium text-gray-700" x-text="column.name"></span>
+                                <span class="text-xs text-gray-400 bg-gray-200 px-1.5 rounded" x-text="getColumnTasks(column.id).length"></span>
+                            </div>
+                            <button @click="openAddTask(column.id)" class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                            </button>
+                        </div>
+                        <!-- Tasks -->
+                        <div class="flex-1 overflow-y-auto p-2 pt-0 space-y-2">
+                            <template x-for="task in getColumnTasks(column.id)" :key="task.id">
+                                <div draggable="true" @dragstart="dragStart($event, task)" @dragend="dragEnd($event)"
+                                     @click="openTaskDetail(task)"
+                                     class="bg-white rounded-lg shadow-sm p-3 cursor-pointer hover:shadow-md transition-shadow border border-gray-200">
+                                    <!-- Cover Color -->
+                                    <div x-show="task.cover_color" class="h-2 -mx-3 -mt-3 mb-2 rounded-t-lg" :style="'background:'+task.cover_color"></div>
+                                    <!-- Labels -->
+                                    <div x-show="task.labels?.length" class="flex flex-wrap gap-1 mb-2">
+                                        <template x-for="label in task.labels" :key="label.id">
+                                            <span class="text-xs px-2 py-0.5 rounded text-white" :style="'background:'+label.color" x-text="label.name"></span>
+                                        </template>
+                                    </div>
+                                    <!-- Title -->
+                                    <p class="text-sm text-gray-800 font-medium" x-text="task.title"></p>
+                                    <!-- Meta -->
+                                    <div class="flex items-center gap-2 mt-2 text-xs text-gray-400">
+                                        <span x-show="task.due_date" class="flex items-center gap-1" :class="isOverdue(task.due_date) ? 'text-red-500' : ''">
+                                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                                            <span x-text="formatDate(task.due_date)"></span>
+                                        </span>
+                                        <span x-show="task.checklist?.length" class="flex items-center gap-1">
+                                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                                            <span x-text="task.checklist.filter(c=>c.checked).length+'/'+task.checklist.length"></span>
+                                        </span>
+                                        <span x-show="task.comment_count" class="flex items-center gap-1">
+                                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+                                            <span x-text="task.comment_count"></span>
+                                        </span>
+                                    </div>
+                                </div>
+                            </template>
+                            <!-- Add Task Button at bottom -->
+                            <button @click="openAddTask(column.id)" class="w-full p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-lg text-sm flex items-center justify-center gap-1">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                                Add Task
+                            </button>
+                        </div>
+                    </div>
+                </template>
+                <!-- Add Column Button -->
+                <div class="w-72 flex-shrink-0">
+                    <button @click="showAddColumn=true" class="w-full p-3 bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-500 flex items-center justify-center gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                        Add Column
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- Create Board Modal -->
+    <div x-show="showCreateBoard" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showCreateBoard=false">
+        <div class="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h3 class="text-lg font-semibold mb-4">Create New Board</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Board Name</label>
+                    <input x-model="newBoard.name" type="text" class="w-full border rounded-lg px-3 py-2" placeholder="e.g., Marketing Tasks">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                    <textarea x-model="newBoard.description" class="w-full border rounded-lg px-3 py-2" rows="2" placeholder="Optional description"></textarea>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Color</label>
+                    <div class="flex gap-2">
+                        <template x-for="color in boardColors" :key="color">
+                            <button @click="newBoard.color=color" :style="'background:'+color" 
+                                :class="newBoard.color===color ? 'ring-2 ring-offset-2 ring-gray-400' : ''"
+                                class="w-8 h-8 rounded-full"></button>
+                        </template>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+                <button @click="showCreateBoard=false" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+                <button @click="createBoard()" :disabled="!newBoard.name" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">Create Board</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Task Modal -->
+    <div x-show="showAddTask" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showAddTask=false">
+        <div class="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h3 class="text-lg font-semibold mb-4">Add Task</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Title</label>
+                    <input x-model="newTask.title" type="text" class="w-full border rounded-lg px-3 py-2" placeholder="Task title" @keyup.enter="createTask()">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                    <textarea x-model="newTask.description" class="w-full border rounded-lg px-3 py-2" rows="2" placeholder="Optional description"></textarea>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Priority</label>
+                        <select x-model="newTask.priority" class="w-full border rounded-lg px-3 py-2">
+                            <option value="low">Low</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
+                            <option value="urgent">Urgent</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Due Date</label>
+                        <input x-model="newTask.due_date" type="date" class="w-full border rounded-lg px-3 py-2">
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+                <button @click="showAddTask=false" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+                <button @click="createTask()" :disabled="!newTask.title" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">Add Task</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Task Detail Modal -->
+    <div x-show="showTaskDetail" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showTaskDetail=false">
+        <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <template x-if="selectedTask">
+                <div>
+                    <!-- Cover -->
+                    <div x-show="selectedTask.cover_color" class="h-24 rounded-t-xl" :style="'background:'+selectedTask.cover_color"></div>
+                    <div class="p-6">
+                        <!-- Header -->
+                        <div class="flex items-start justify-between mb-4">
+                            <div class="flex-1">
+                                <input x-model="selectedTask.title" @blur="updateTask()" class="text-xl font-semibold w-full border-0 border-b border-transparent hover:border-gray-300 focus:border-blue-500 focus:ring-0 px-0 py-1">
+                                <p class="text-sm text-gray-500 mt-1">in column <span class="font-medium" x-text="getColumnName(selectedTask.column_id)"></span></p>
+                            </div>
+                            <button @click="showTaskDetail=false" class="p-2 text-gray-400 hover:text-gray-600">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                            </button>
+                        </div>
+                        
+                        <div class="grid grid-cols-3 gap-6">
+                            <!-- Main Content -->
+                            <div class="col-span-2 space-y-4">
+                                <!-- Labels -->
+                                <div>
+                                    <h4 class="text-sm font-medium text-gray-700 mb-2">Labels</h4>
+                                    <div class="flex flex-wrap gap-1">
+                                        <template x-for="label in selectedTask.labels" :key="label.id">
+                                            <span class="text-xs px-2 py-1 rounded text-white" :style="'background:'+label.color" x-text="label.name"></span>
+                                        </template>
+                                        <button @click="showLabelPicker=!showLabelPicker" class="text-xs px-2 py-1 rounded bg-gray-100 text-gray-600 hover:bg-gray-200">+ Add</button>
+                                    </div>
+                                </div>
+                                
+                                <!-- Description -->
+                                <div>
+                                    <h4 class="text-sm font-medium text-gray-700 mb-2">Description</h4>
+                                    <textarea x-model="selectedTask.description" @blur="updateTask()" rows="3" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Add a description..."></textarea>
+                                </div>
+                                
+                                <!-- Checklist -->
+                                <div>
+                                    <h4 class="text-sm font-medium text-gray-700 mb-2">Checklist</h4>
+                                    <div class="space-y-1">
+                                        <template x-for="(item, idx) in selectedTask.checklist" :key="'check-'+idx">
+                                            <div class="flex items-center gap-2">
+                                                <input type="checkbox" x-model="item.checked" @change="updateTask()" class="rounded">
+                                                <input x-model="item.text" @blur="updateTask()" class="flex-1 text-sm border-0 border-b border-transparent hover:border-gray-300 focus:border-blue-500 px-0 py-1" :class="item.checked && 'line-through text-gray-400'">
+                                                <button @click="selectedTask.checklist.splice(idx,1); updateTask()" class="text-gray-400 hover:text-red-500">
+                                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                                </button>
+                                            </div>
+                                        </template>
+                                        <button @click="selectedTask.checklist.push({text:'',checked:false})" class="text-sm text-blue-600 hover:text-blue-800">+ Add item</button>
+                                    </div>
+                                </div>
+                                
+                                <!-- Comments -->
+                                <div>
+                                    <h4 class="text-sm font-medium text-gray-700 mb-2">Comments</h4>
+                                    <div class="flex gap-2 mb-2">
+                                        <input x-model="newComment" type="text" class="flex-1 border rounded-lg px-3 py-2 text-sm" placeholder="Add a comment..." @keyup.enter="addComment()">
+                                        <button @click="addComment()" class="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">Post</button>
+                                    </div>
+                                    <div class="space-y-2 max-h-40 overflow-y-auto">
+                                        <template x-for="comment in taskComments" :key="comment.id">
+                                            <div class="bg-gray-50 rounded-lg p-2 text-sm">
+                                                <p x-text="comment.content"></p>
+                                                <p class="text-xs text-gray-400 mt-1" x-text="formatDate(comment.created_at)"></p>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Sidebar -->
+                            <div class="space-y-4">
+                                <div>
+                                    <h4 class="text-xs font-medium text-gray-500 uppercase mb-2">Move to</h4>
+                                    <select x-model="selectedTask.column_id" @change="moveTask()" class="w-full border rounded-lg px-3 py-2 text-sm">
+                                        <template x-for="col in currentBoard.columns" :key="col.id">
+                                            <option :value="col.id" x-text="col.name"></option>
+                                        </template>
+                                    </select>
+                                </div>
+                                <div>
+                                    <h4 class="text-xs font-medium text-gray-500 uppercase mb-2">Priority</h4>
+                                    <select x-model="selectedTask.priority" @change="updateTask()" class="w-full border rounded-lg px-3 py-2 text-sm">
+                                        <option value="low">Low</option>
+                                        <option value="medium">Medium</option>
+                                        <option value="high">High</option>
+                                        <option value="urgent">Urgent</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <h4 class="text-xs font-medium text-gray-500 uppercase mb-2">Due Date</h4>
+                                    <input type="date" x-model="selectedTask.due_date" @change="updateTask()" class="w-full border rounded-lg px-3 py-2 text-sm">
+                                </div>
+                                <div>
+                                    <h4 class="text-xs font-medium text-gray-500 uppercase mb-2">Cover Color</h4>
+                                    <div class="flex flex-wrap gap-1">
+                                        <button @click="selectedTask.cover_color=null; updateTask()" class="w-6 h-6 rounded border-2 border-gray-300 flex items-center justify-center text-gray-400 text-xs">✕</button>
+                                        <template x-for="color in coverColors" :key="color">
+                                            <button @click="selectedTask.cover_color=color; updateTask()" :style="'background:'+color" class="w-6 h-6 rounded" :class="selectedTask.cover_color===color && 'ring-2 ring-offset-1 ring-gray-400'"></button>
+                                        </template>
+                                    </div>
+                                </div>
+                                <div class="pt-4 border-t">
+                                    <button @click="deleteTask()" class="w-full px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg text-sm flex items-center justify-center gap-2">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                                        Delete Task
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- Add Column Modal -->
+    <div x-show="showAddColumn" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showAddColumn=false">
+        <div class="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h3 class="text-lg font-semibold mb-4">Add Column</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Column Name</label>
+                    <input x-model="newColumn.name" type="text" class="w-full border rounded-lg px-3 py-2" placeholder="e.g., In Review" @keyup.enter="addColumn()">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Color</label>
+                    <div class="flex gap-2 flex-wrap">
+                        <template x-for="color in columnColors" :key="color">
+                            <button @click="newColumn.color=color" :style="'background:'+color" 
+                                :class="newColumn.color===color ? 'ring-2 ring-offset-2 ring-gray-400' : ''"
+                                class="w-6 h-6 rounded-full"></button>
+                        </template>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+                <button @click="showAddColumn=false" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+                <button @click="addColumn()" :disabled="!newColumn.name" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">Add Column</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Board Settings Modal -->
+    <div x-show="showBoardSettings" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showBoardSettings=false">
+        <div class="bg-white rounded-xl shadow-xl w-full max-w-lg p-6" x-show="currentBoard">
+            <h3 class="text-lg font-semibold mb-4">Board Settings</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Board Name</label>
+                    <input x-model="currentBoard.name" type="text" class="w-full border rounded-lg px-3 py-2">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                    <textarea x-model="currentBoard.description" class="w-full border rounded-lg px-3 py-2" rows="2"></textarea>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Columns</label>
+                    <div class="space-y-2">
+                        <template x-for="(col, idx) in currentBoard.columns" :key="'col-'+idx">
+                            <div class="flex items-center gap-2">
+                                <span class="w-3 h-3 rounded-full cursor-pointer" :style="'background:'+col.color"></span>
+                                <input x-model="col.name" class="flex-1 border rounded px-2 py-1 text-sm">
+                                <button @click="currentBoard.columns.splice(idx,1)" class="text-gray-400 hover:text-red-500">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                </button>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-between mt-6">
+                <button @click="deleteBoard()" class="px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg">Delete Board</button>
+                <div class="flex gap-2">
+                    <button @click="showBoardSettings=false" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+                    <button @click="saveBoardSettings()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function tasksManager() {
+    return {
+        loading: true,
+        boards: [],
+        currentBoard: null,
+        tasks: [],
+        labels: [],
+        
+        // Modals
+        showCreateBoard: false,
+        showAddTask: false,
+        showTaskDetail: false,
+        showAddColumn: false,
+        showBoardSettings: false,
+        showLabelPicker: false,
+        
+        // Form data
+        newBoard: { name: '', description: '', color: '#3b82f6' },
+        newTask: { title: '', description: '', priority: 'medium', due_date: '', column_id: '' },
+        newColumn: { name: '', color: '#6b7280' },
+        newComment: '',
+        
+        selectedTask: null,
+        taskComments: [],
+        
+        // Colors
+        boardColors: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'],
+        columnColors: ['#6b7280', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'],
+        coverColors: ['#fecaca', '#fed7aa', '#fef08a', '#bbf7d0', '#bfdbfe', '#ddd6fe', '#fbcfe8'],
+        
+        // Drag scroll
+        isDraggingScroll: false,
+        scrollStartX: 0,
+        scrollLeft: 0,
+        
+        // Drag task
+        draggedTask: null,
+        
+        async init() {
+            await this.loadBoards();
+            this.loading = false;
+        },
+        
+        async loadBoards() {
+            try {
+                const res = await fetch('/api/boards');
+                const data = await res.json();
+                if (data.success) {
+                    this.boards = data.boards;
+                    if (this.boards.length && !this.currentBoard) {
+                        await this.selectBoard(this.boards[0].id);
+                    }
+                }
+            } catch (e) { console.error('Failed to load boards:', e); }
+        },
+        
+        async selectBoard(boardId) {
+            this.loading = true;
+            try {
+                const res = await fetch(`/api/boards/${boardId}`);
+                const data = await res.json();
+                if (data.success) {
+                    this.currentBoard = data.board;
+                    this.tasks = data.board.tasks || [];
+                    await this.loadLabels(boardId);
+                }
+            } catch (e) { console.error('Failed to load board:', e); }
+            this.loading = false;
+        },
+        
+        async loadLabels(boardId) {
+            try {
+                const res = await fetch(`/api/boards/${boardId}/labels`);
+                const data = await res.json();
+                if (data.success) this.labels = data.labels;
+            } catch (e) { console.error('Failed to load labels:', e); }
+        },
+        
+        getColumnTasks(columnId) {
+            return this.tasks.filter(t => t.column_id === columnId).sort((a,b) => a.position - b.position);
+        },
+        
+        getColumnName(columnId) {
+            const col = this.currentBoard?.columns?.find(c => c.id === columnId);
+            return col?.name || 'Unknown';
+        },
+        
+        async createBoard() {
+            if (!this.newBoard.name) return;
+            try {
+                const res = await fetch('/api/boards', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.newBoard)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    this.boards.push(data.board);
+                    await this.selectBoard(data.board.id);
+                    this.showCreateBoard = false;
+                    this.newBoard = { name: '', description: '', color: '#3b82f6' };
+                }
+            } catch (e) { console.error('Failed to create board:', e); }
+        },
+        
+        openAddTask(columnId) {
+            this.newTask = { title: '', description: '', priority: 'medium', due_date: '', column_id: columnId };
+            this.showAddTask = true;
+        },
+        
+        async createTask() {
+            if (!this.newTask.title || !this.currentBoard) return;
+            try {
+                const res = await fetch(`/api/boards/${this.currentBoard.id}/tasks`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.newTask)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    this.tasks.push(data.task);
+                    this.showAddTask = false;
+                    this.newTask = { title: '', description: '', priority: 'medium', due_date: '', column_id: '' };
+                }
+            } catch (e) { console.error('Failed to create task:', e); }
+        },
+        
+        async openTaskDetail(task) {
+            this.selectedTask = { ...task, checklist: task.checklist || [] };
+            this.taskComments = [];
+            this.showTaskDetail = true;
+            try {
+                const res = await fetch(`/api/tasks/${task.id}`);
+                const data = await res.json();
+                if (data.success) {
+                    this.selectedTask = { ...data.task, due_date: data.task.due_date?.split('T')[0] || '' };
+                    this.taskComments = data.comments || [];
+                }
+            } catch (e) { console.error('Failed to load task:', e); }
+        },
+        
+        async updateTask() {
+            if (!this.selectedTask) return;
+            try {
+                const payload = {
+                    title: this.selectedTask.title,
+                    description: this.selectedTask.description,
+                    priority: this.selectedTask.priority,
+                    due_date: this.selectedTask.due_date || null,
+                    cover_color: this.selectedTask.cover_color,
+                    checklist: this.selectedTask.checklist
+                };
+                const res = await fetch(`/api/tasks/${this.selectedTask.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    const idx = this.tasks.findIndex(t => t.id === data.task.id);
+                    if (idx >= 0) this.tasks[idx] = data.task;
+                }
+            } catch (e) { console.error('Failed to update task:', e); }
+        },
+        
+        async moveTask() {
+            if (!this.selectedTask) return;
+            try {
+                const res = await fetch(`/api/tasks/${this.selectedTask.id}/move`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ column_id: this.selectedTask.column_id })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    const idx = this.tasks.findIndex(t => t.id === data.task.id);
+                    if (idx >= 0) this.tasks[idx] = data.task;
+                }
+            } catch (e) { console.error('Failed to move task:', e); }
+        },
+        
+        async deleteTask() {
+            if (!this.selectedTask || !confirm('Delete this task?')) return;
+            try {
+                await fetch(`/api/tasks/${this.selectedTask.id}`, { method: 'DELETE' });
+                this.tasks = this.tasks.filter(t => t.id !== this.selectedTask.id);
+                this.showTaskDetail = false;
+                this.selectedTask = null;
+            } catch (e) { console.error('Failed to delete task:', e); }
+        },
+        
+        async addComment() {
+            if (!this.newComment || !this.selectedTask) return;
+            try {
+                const res = await fetch(`/api/tasks/${this.selectedTask.id}/comments`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: this.newComment })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    this.taskComments.unshift(data.comment);
+                    this.newComment = '';
+                }
+            } catch (e) { console.error('Failed to add comment:', e); }
+        },
+        
+        async addColumn() {
+            if (!this.newColumn.name || !this.currentBoard) return;
+            const newCol = { id: crypto.randomUUID(), name: this.newColumn.name, color: this.newColumn.color };
+            this.currentBoard.columns.push(newCol);
+            await this.saveBoardSettings();
+            this.showAddColumn = false;
+            this.newColumn = { name: '', color: '#6b7280' };
+        },
+        
+        async saveBoardSettings() {
+            if (!this.currentBoard) return;
+            try {
+                const res = await fetch(`/api/boards/${this.currentBoard.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: this.currentBoard.name,
+                        description: this.currentBoard.description,
+                        columns: this.currentBoard.columns
+                    })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    const idx = this.boards.findIndex(b => b.id === data.board.id);
+                    if (idx >= 0) this.boards[idx] = data.board;
+                    this.showBoardSettings = false;
+                }
+            } catch (e) { console.error('Failed to save board:', e); }
+        },
+        
+        async deleteBoard() {
+            if (!this.currentBoard || !confirm('Delete this board and all its tasks?')) return;
+            try {
+                await fetch(`/api/boards/${this.currentBoard.id}`, { method: 'DELETE' });
+                this.boards = this.boards.filter(b => b.id !== this.currentBoard.id);
+                this.currentBoard = null;
+                this.tasks = [];
+                this.showBoardSettings = false;
+                if (this.boards.length) await this.selectBoard(this.boards[0].id);
+            } catch (e) { console.error('Failed to delete board:', e); }
+        },
+        
+        // Drag & Drop
+        dragStart(e, task) {
+            this.draggedTask = task;
+            e.dataTransfer.effectAllowed = 'move';
+            e.target.classList.add('opacity-50');
+        },
+        dragEnd(e) {
+            e.target.classList.remove('opacity-50');
+            this.draggedTask = null;
+        },
+        dragOverColumn(e, columnId) {
+            e.preventDefault();
+        },
+        async dropTask(e, columnId) {
+            e.preventDefault();
+            if (!this.draggedTask || this.draggedTask.column_id === columnId) return;
+            try {
+                const res = await fetch(`/api/tasks/${this.draggedTask.id}/move`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ column_id: columnId })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    const idx = this.tasks.findIndex(t => t.id === data.task.id);
+                    if (idx >= 0) this.tasks[idx] = data.task;
+                }
+            } catch (e) { console.error('Failed to move task:', e); }
+        },
+        
+        // Drag scroll
+        startDragScroll(e) {
+            if (e.target.closest('[draggable]')) return;
+            this.isDraggingScroll = true;
+            this.scrollStartX = e.pageX - e.currentTarget.offsetLeft;
+            this.scrollLeft = e.currentTarget.scrollLeft;
+            e.currentTarget.style.cursor = 'grabbing';
+        },
+        moveDragScroll(e) {
+            if (!this.isDraggingScroll) return;
+            e.preventDefault();
+            const x = e.pageX - e.currentTarget.offsetLeft;
+            const walk = (x - this.scrollStartX) * 1.5;
+            e.currentTarget.scrollLeft = this.scrollLeft - walk;
+        },
+        endDragScroll() {
+            this.isDraggingScroll = false;
+            document.querySelectorAll('.overflow-x-auto').forEach(el => el.style.cursor = '');
+        },
+        
+        // Helpers
+        formatDate(date) {
+            if (!date) return '';
+            const d = new Date(date);
+            return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        },
+        isOverdue(date) {
+            if (!date) return false;
+            return new Date(date) < new Date();
+        }
+    };
+}
+</script>
+{% endblock %}

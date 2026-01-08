@@ -22,7 +22,7 @@ from werkzeug.utils import secure_filename
 from api import PropertyFinderClient, PropertyFinderAPIError, Config
 from models import PropertyListing, PropertyType, OfferingType, Location, Price
 from utils import BulkListingManager
-from database import db, LocalListing, PFSession, User, PFCache, AppSettings, ListingFolder, LoopConfig, LoopListing, DuplicatedListing, LoopExecutionLog, Lead, LeadComment
+from database import db, LocalListing, PFSession, User, PFCache, AppSettings, ListingFolder, LoopConfig, LoopListing, DuplicatedListing, LoopExecutionLog, Lead, LeadComment, TaskBoard, TaskLabel, Task, TaskComment
 from images import ImageProcessor
 
 # APScheduler for background loop execution
@@ -3917,6 +3917,413 @@ def api_create_contact_from_lead(lead_id):
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==================== TASK MANAGEMENT (Trello-like) ====================
+
+@app.route('/tasks')
+@login_required
+def tasks_page():
+    """Tasks management page - Trello-like boards"""
+    return render_template('tasks.html')
+
+
+# ---- Task Boards API ----
+
+@app.route('/api/boards', methods=['GET'])
+@login_required
+def api_get_boards():
+    """Get all task boards"""
+    include_archived = request.args.get('include_archived', 'false') == 'true'
+    
+    query = TaskBoard.query
+    if not include_archived:
+        query = query.filter(TaskBoard.is_archived == False)
+    
+    boards = query.order_by(TaskBoard.is_favorite.desc(), TaskBoard.updated_at.desc()).all()
+    return jsonify({'success': True, 'boards': [b.to_dict() for b in boards]})
+
+
+@app.route('/api/boards', methods=['POST'])
+@login_required
+def api_create_board():
+    """Create a new task board"""
+    import uuid
+    data = request.get_json()
+    
+    if not data.get('name'):
+        return jsonify({'success': False, 'error': 'Board name is required'}), 400
+    
+    # Create default columns
+    default_columns = [
+        {'id': str(uuid.uuid4()), 'name': 'To Do', 'color': '#6b7280'},
+        {'id': str(uuid.uuid4()), 'name': 'In Progress', 'color': '#3b82f6'},
+        {'id': str(uuid.uuid4()), 'name': 'Review', 'color': '#f59e0b'},
+        {'id': str(uuid.uuid4()), 'name': 'Done', 'color': '#10b981'}
+    ]
+    
+    board = TaskBoard(
+        name=data['name'],
+        description=data.get('description', ''),
+        color=data.get('color', '#3b82f6'),
+        icon=data.get('icon', 'clipboard'),
+        created_by_id=session.get('user_id')
+    )
+    board.set_columns(data.get('columns', default_columns))
+    
+    db.session.add(board)
+    db.session.commit()
+    
+    return jsonify({'success': True, 'board': board.to_dict()})
+
+
+@app.route('/api/boards/<int:board_id>', methods=['GET'])
+@login_required
+def api_get_board(board_id):
+    """Get a single board with tasks"""
+    board = TaskBoard.query.get_or_404(board_id)
+    return jsonify({'success': True, 'board': board.to_dict(include_tasks=True)})
+
+
+@app.route('/api/boards/<int:board_id>', methods=['PUT'])
+@login_required
+def api_update_board(board_id):
+    """Update a board"""
+    board = TaskBoard.query.get_or_404(board_id)
+    data = request.get_json()
+    
+    if 'name' in data:
+        board.name = data['name']
+    if 'description' in data:
+        board.description = data['description']
+    if 'color' in data:
+        board.color = data['color']
+    if 'icon' in data:
+        board.icon = data['icon']
+    if 'columns' in data:
+        board.set_columns(data['columns'])
+    if 'is_archived' in data:
+        board.is_archived = data['is_archived']
+    if 'is_favorite' in data:
+        board.is_favorite = data['is_favorite']
+    
+    db.session.commit()
+    return jsonify({'success': True, 'board': board.to_dict()})
+
+
+@app.route('/api/boards/<int:board_id>', methods=['DELETE'])
+@login_required
+def api_delete_board(board_id):
+    """Delete a board and all its tasks"""
+    board = TaskBoard.query.get_or_404(board_id)
+    db.session.delete(board)
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+# ---- Task Labels API ----
+
+@app.route('/api/boards/<int:board_id>/labels', methods=['GET'])
+@login_required
+def api_get_board_labels(board_id):
+    """Get labels for a board"""
+    labels = TaskLabel.query.filter(
+        (TaskLabel.board_id == board_id) | (TaskLabel.board_id == None)
+    ).all()
+    return jsonify({'success': True, 'labels': [l.to_dict() for l in labels]})
+
+
+@app.route('/api/boards/<int:board_id>/labels', methods=['POST'])
+@login_required
+def api_create_label(board_id):
+    """Create a new label"""
+    data = request.get_json()
+    
+    label = TaskLabel(
+        name=data.get('name', 'New Label'),
+        color=data.get('color', '#6b7280'),
+        board_id=board_id if data.get('board_specific', True) else None
+    )
+    
+    db.session.add(label)
+    db.session.commit()
+    return jsonify({'success': True, 'label': label.to_dict()})
+
+
+@app.route('/api/labels/<int:label_id>', methods=['PUT'])
+@login_required
+def api_update_label(label_id):
+    """Update a label"""
+    label = TaskLabel.query.get_or_404(label_id)
+    data = request.get_json()
+    
+    if 'name' in data:
+        label.name = data['name']
+    if 'color' in data:
+        label.color = data['color']
+    
+    db.session.commit()
+    return jsonify({'success': True, 'label': label.to_dict()})
+
+
+@app.route('/api/labels/<int:label_id>', methods=['DELETE'])
+@login_required
+def api_delete_label(label_id):
+    """Delete a label"""
+    label = TaskLabel.query.get_or_404(label_id)
+    db.session.delete(label)
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+# ---- Tasks API ----
+
+@app.route('/api/boards/<int:board_id>/tasks', methods=['GET'])
+@login_required
+def api_get_board_tasks(board_id):
+    """Get all tasks for a board"""
+    board = TaskBoard.query.get_or_404(board_id)
+    tasks = Task.query.filter_by(board_id=board_id).order_by(Task.position).all()
+    return jsonify({'success': True, 'tasks': [t.to_dict() for t in tasks]})
+
+
+@app.route('/api/boards/<int:board_id>/tasks', methods=['POST'])
+@login_required
+def api_create_task(board_id):
+    """Create a new task"""
+    board = TaskBoard.query.get_or_404(board_id)
+    data = request.get_json()
+    
+    if not data.get('title'):
+        return jsonify({'success': False, 'error': 'Task title is required'}), 400
+    
+    # Get next position in column
+    column_id = data.get('column_id')
+    if not column_id:
+        columns = board.get_columns()
+        column_id = columns[0]['id'] if columns else 'default'
+    
+    max_position = db.session.query(db.func.max(Task.position)).filter(
+        Task.board_id == board_id,
+        Task.column_id == column_id
+    ).scalar() or 0
+    
+    task = Task(
+        title=data['title'],
+        description=data.get('description', ''),
+        board_id=board_id,
+        column_id=column_id,
+        position=max_position + 1,
+        priority=data.get('priority', 'medium'),
+        created_by_id=session.get('user_id')
+    )
+    
+    if data.get('due_date'):
+        try:
+            task.due_date = datetime.fromisoformat(data['due_date'].replace('Z', '+00:00'))
+        except:
+            pass
+    
+    if data.get('assignee_id'):
+        task.assignee_id = data['assignee_id']
+    
+    if data.get('cover_color'):
+        task.cover_color = data['cover_color']
+    
+    # Handle labels
+    if data.get('label_ids'):
+        labels = TaskLabel.query.filter(TaskLabel.id.in_(data['label_ids'])).all()
+        task.labels = labels
+    
+    db.session.add(task)
+    db.session.commit()
+    
+    return jsonify({'success': True, 'task': task.to_dict()})
+
+
+@app.route('/api/tasks/<int:task_id>', methods=['GET'])
+@login_required
+def api_get_task(task_id):
+    """Get a single task with all details"""
+    task = Task.query.get_or_404(task_id)
+    task_dict = task.to_dict()
+    task_dict['comments'] = [c.to_dict() for c in task.comments.order_by(TaskComment.created_at.desc()).all()]
+    return jsonify({'success': True, 'task': task_dict})
+
+
+@app.route('/api/tasks/<int:task_id>', methods=['PUT'])
+@login_required
+def api_update_task(task_id):
+    """Update a task"""
+    task = Task.query.get_or_404(task_id)
+    data = request.get_json()
+    
+    if 'title' in data:
+        task.title = data['title']
+    if 'description' in data:
+        task.description = data['description']
+    if 'priority' in data:
+        task.priority = data['priority']
+    if 'cover_color' in data:
+        task.cover_color = data['cover_color']
+    if 'cover_image' in data:
+        task.cover_image = data['cover_image']
+    if 'assignee_id' in data:
+        task.assignee_id = data['assignee_id']
+    
+    if 'due_date' in data:
+        if data['due_date']:
+            try:
+                task.due_date = datetime.fromisoformat(data['due_date'].replace('Z', '+00:00'))
+            except:
+                pass
+        else:
+            task.due_date = None
+    
+    if 'start_date' in data:
+        if data['start_date']:
+            try:
+                task.start_date = datetime.fromisoformat(data['start_date'].replace('Z', '+00:00'))
+            except:
+                pass
+        else:
+            task.start_date = None
+    
+    if 'is_completed' in data:
+        task.is_completed = data['is_completed']
+        if data['is_completed']:
+            task.completed_at = datetime.utcnow()
+        else:
+            task.completed_at = None
+    
+    if 'checklist' in data:
+        task.set_checklist(data['checklist'])
+    
+    if 'label_ids' in data:
+        labels = TaskLabel.query.filter(TaskLabel.id.in_(data['label_ids'])).all()
+        task.labels = labels
+    
+    db.session.commit()
+    return jsonify({'success': True, 'task': task.to_dict()})
+
+
+@app.route('/api/tasks/<int:task_id>/move', methods=['PATCH'])
+@login_required
+def api_move_task(task_id):
+    """Move a task to a different column or position"""
+    task = Task.query.get_or_404(task_id)
+    data = request.get_json()
+    
+    new_column_id = data.get('column_id', task.column_id)
+    new_position = data.get('position', task.position)
+    new_board_id = data.get('board_id', task.board_id)
+    
+    # If moving to a different column, update positions
+    if new_column_id != task.column_id or new_board_id != task.board_id:
+        # Decrease positions in old column
+        Task.query.filter(
+            Task.board_id == task.board_id,
+            Task.column_id == task.column_id,
+            Task.position > task.position
+        ).update({Task.position: Task.position - 1})
+        
+        # Increase positions in new column from target position
+        Task.query.filter(
+            Task.board_id == new_board_id,
+            Task.column_id == new_column_id,
+            Task.position >= new_position
+        ).update({Task.position: Task.position + 1})
+    else:
+        # Same column, just reorder
+        if new_position > task.position:
+            Task.query.filter(
+                Task.board_id == task.board_id,
+                Task.column_id == task.column_id,
+                Task.position > task.position,
+                Task.position <= new_position
+            ).update({Task.position: Task.position - 1})
+        elif new_position < task.position:
+            Task.query.filter(
+                Task.board_id == task.board_id,
+                Task.column_id == task.column_id,
+                Task.position >= new_position,
+                Task.position < task.position
+            ).update({Task.position: Task.position + 1})
+    
+    task.board_id = new_board_id
+    task.column_id = new_column_id
+    task.position = new_position
+    
+    db.session.commit()
+    return jsonify({'success': True, 'task': task.to_dict()})
+
+
+@app.route('/api/tasks/<int:task_id>', methods=['DELETE'])
+@login_required
+def api_delete_task(task_id):
+    """Delete a task"""
+    task = Task.query.get_or_404(task_id)
+    
+    # Update positions of tasks below this one
+    Task.query.filter(
+        Task.board_id == task.board_id,
+        Task.column_id == task.column_id,
+        Task.position > task.position
+    ).update({Task.position: Task.position - 1})
+    
+    db.session.delete(task)
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+# ---- Task Comments API ----
+
+@app.route('/api/tasks/<int:task_id>/comments', methods=['GET'])
+@login_required
+def api_get_task_comments(task_id):
+    """Get comments for a task"""
+    task = Task.query.get_or_404(task_id)
+    comments = task.comments.order_by(TaskComment.created_at.desc()).all()
+    return jsonify({'success': True, 'comments': [c.to_dict() for c in comments]})
+
+
+@app.route('/api/tasks/<int:task_id>/comments', methods=['POST'])
+@login_required
+def api_create_task_comment(task_id):
+    """Add a comment to a task"""
+    task = Task.query.get_or_404(task_id)
+    data = request.get_json()
+    
+    if not data.get('content'):
+        return jsonify({'success': False, 'error': 'Comment content is required'}), 400
+    
+    comment = TaskComment(
+        task_id=task_id,
+        user_id=session.get('user_id'),
+        content=data['content']
+    )
+    
+    db.session.add(comment)
+    db.session.commit()
+    
+    return jsonify({'success': True, 'comment': comment.to_dict()})
+
+
+@app.route('/api/comments/<int:comment_id>', methods=['DELETE'])
+@login_required
+def api_delete_task_comment(comment_id):
+    """Delete a comment"""
+    comment = TaskComment.query.get_or_404(comment_id)
+    
+    # Only allow delete by author or admin
+    if comment.user_id != session.get('user_id'):
+        user = User.query.get(session.get('user_id'))
+        if not user or user.role != 'admin':
+            return jsonify({'success': False, 'error': 'Not authorized'}), 403
+    
+    db.session.delete(comment)
+    db.session.commit()
+    return jsonify({'success': True})
 
 
 # ==================== WEBHOOKS ====================
