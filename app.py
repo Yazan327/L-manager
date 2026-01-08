@@ -663,9 +663,13 @@ except Exception as e:
 def handle_exception(e):
     """Log all unhandled exceptions"""
     import traceback
-    print(f"[ERROR] Unhandled exception: {e}")
+    error_msg = str(e)
+    print(f"[ERROR] Unhandled exception: {error_msg}")
     traceback.print_exc()
-    return jsonify({'error': str(e)}), 500
+    # Return JSON for API requests
+    if request.path.startswith('/api/'):
+        return jsonify({'success': False, 'error': error_msg, 'type': type(e).__name__}), 500
+    return jsonify({'error': error_msg}), 500
 
 
 # ==================== AUTHENTICATION ====================
