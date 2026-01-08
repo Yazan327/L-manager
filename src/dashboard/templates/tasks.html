@@ -221,9 +221,9 @@
     </div>
 
     <!-- Task Detail Modal -->
-    <div x-show="showTaskDetail && selectedTask" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showTaskDetail=false">
+    <div x-show="showTaskDetail && selectedTask?.id" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showTaskDetail=false">
         <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <template x-if="selectedTask">
+            <template x-if="selectedTask?.id">
                 <div>
                     <!-- Cover -->
                     <div x-show="selectedTask?.cover_color" class="h-24 rounded-t-xl" :style="'background:'+(selectedTask?.cover_color || '')"></div>
@@ -337,7 +337,7 @@
                                 <div>
                                     <h4 class="text-xs font-medium text-gray-500 uppercase mb-2">Move to</h4>
                                     <select x-model="selectedTask.column_id" @change="moveTask()" class="w-full border rounded-lg px-3 py-2 text-sm">
-                                        <template x-for="col in currentBoard.columns" :key="col.id">
+                                        <template x-for="col in (currentBoard?.columns || [])" :key="col.id">
                                             <option :value="col.id" x-text="col.name"></option>
                                         </template>
                                     </select>
@@ -599,7 +599,8 @@ function tasksManager() {
         newColumn: { name: '', color: '#6b7280' },
         newComment: '',
         
-        selectedTask: null,
+        // Initialize with empty object to prevent null reference errors in x-model
+        selectedTask: { id: null, title: '', description: '', column_id: '', priority: 'medium', due_date: '', cover_color: null, labels: [], checklist: [], assignee_ids: [], assignees: [] },
         taskComments: [],
         
         // Colors
