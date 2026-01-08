@@ -32,7 +32,7 @@
                     Kanban
                 </button>
             </div>
-            <button @click="showAddModal = true" 
+            <button @click="openAddModalWithStatus('new')" 
                     class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
@@ -472,21 +472,104 @@
                 <h3 class="text-lg font-semibold mb-4">Add New Lead</h3>
                 <form @submit.prevent="addLead()">
                     <div class="grid grid-cols-2 gap-4">
-                        <div class="col-span-2">
+                        <!-- Contact Selection Toggle -->
+                        <div class="col-span-2 mb-2">
+                            <div class="flex items-center gap-4 p-3 bg-gray-50 rounded-lg">
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="radio" x-model="contactMode" value="new" class="text-blue-600">
+                                    <span class="text-sm font-medium">New Contact</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="radio" x-model="contactMode" value="existing" class="text-blue-600">
+                                    <span class="text-sm font-medium">Existing Contact</span>
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <!-- Existing Contact Search (shown when contactMode === 'existing') -->
+                        <div x-show="contactMode === 'existing'" class="col-span-2">
+                            <label class="block text-sm font-medium text-gray-700">Select Contact</label>
+                            <div class="relative mt-1">
+                                <input type="text" x-model="leadContactSearch" 
+                                       @input="filterLeadContacts()"
+                                       @focus="showLeadContactDropdown = true"
+                                       placeholder="Search contacts by name or phone..."
+                                       class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                                <!-- Contact Dropdown -->
+                                <div x-show="showLeadContactDropdown && filteredLeadContacts.length > 0" 
+                                     @click.away="showLeadContactDropdown = false"
+                                     class="absolute z-10 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                                    <template x-for="contact in filteredLeadContacts" :key="contact.id">
+                                        <div @click="selectContactForLead(contact)" 
+                                             class="px-3 py-2 hover:bg-blue-50 cursor-pointer border-b last:border-b-0">
+                                            <div class="font-medium" x-text="contact.name"></div>
+                                            <div class="text-sm text-gray-500" x-text="(contact.country_code || '') + contact.phone"></div>
+                                        </div>
+                                    </template>
+                                </div>
+                                <!-- No contacts message -->
+                                <div x-show="showLeadContactDropdown && leadContactSearch && filteredLeadContacts.length === 0" 
+                                     class="absolute z-10 w-full mt-1 bg-white border rounded-lg shadow-lg p-3 text-center text-gray-500 text-sm">
+                                    No contacts found
+                                </div>
+                            </div>
+                            <!-- Selected contact display -->
+                            <div x-show="selectedContactForLead" class="mt-2 p-2 bg-blue-50 rounded-lg flex items-center justify-between">
+                                <div>
+                                    <span class="font-medium text-blue-800" x-text="selectedContactForLead?.name"></span>
+                                    <span class="text-blue-600 text-sm ml-2" x-text="(selectedContactForLead?.country_code || '') + selectedContactForLead?.phone"></span>
+                                </div>
+                                <button type="button" @click="clearSelectedContact()" class="text-blue-600 hover:text-blue-800">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Name (always shown but readonly when contact selected) -->
+                        <div class="col-span-2" x-show="contactMode === 'new' || !selectedContactForLead">
                             <label class="block text-sm font-medium text-gray-700">Name *</label>
-                            <input type="text" x-model="newLead.name" required
+                            <input type="text" x-model="newLead.name" :required="contactMode === 'new'"
                                    class="mt-1 w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
                         </div>
-                        <div>
+                        
+                        <!-- Email & Phone (shown for new contact mode) -->
+                        <div x-show="contactMode === 'new'">
                             <label class="block text-sm font-medium text-gray-700">Email</label>
                             <input type="email" x-model="newLead.email"
                                    class="mt-1 w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
                         </div>
-                        <div>
+                        <div x-show="contactMode === 'new'">
                             <label class="block text-sm font-medium text-gray-700">Phone</label>
-                            <input type="text" x-model="newLead.phone"
-                                   class="mt-1 w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                            <div class="flex gap-1 mt-1">
+                                <select x-model="newLeadCountryCode" class="w-24 px-2 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 text-sm">
+                                    <option value="+971">🇦🇪 +971</option>
+                                    <option value="+966">🇸🇦 +966</option>
+                                    <option value="+973">🇧🇭 +973</option>
+                                    <option value="+974">🇶🇦 +974</option>
+                                    <option value="+965">🇰🇼 +965</option>
+                                    <option value="+968">🇴🇲 +968</option>
+                                    <option value="+20">🇪🇬 +20</option>
+                                    <option value="+962">🇯🇴 +962</option>
+                                    <option value="+91">🇮🇳 +91</option>
+                                    <option value="+92">🇵🇰 +92</option>
+                                    <option value="+44">🇬🇧 +44</option>
+                                    <option value="+1">🇺🇸 +1</option>
+                                </select>
+                                <input type="text" x-model="newLead.phone" placeholder="Phone number"
+                                       class="flex-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                            </div>
                         </div>
+                        
+                        <!-- Save as contact checkbox (for new contacts) -->
+                        <div x-show="contactMode === 'new'" class="col-span-2">
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" x-model="saveAsContact" class="rounded text-blue-600">
+                                <span class="text-sm text-gray-600">Also save as a contact</span>
+                            </label>
+                        </div>
+                        
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Source</label>
                             <select x-model="newLead.source"
@@ -1115,6 +1198,15 @@ function leadsManager() {
         countryCodes: [],
         newContact: { name: '', phone: '', country_code: '+971', email: '', company: '', notes: '' },
         editingContactId: null,
+        
+        // Contact selection for Add Lead modal
+        contactMode: 'new',  // 'new' or 'existing'
+        leadContactSearch: '',
+        filteredLeadContacts: [],
+        showLeadContactDropdown: false,
+        selectedContactForLead: null,
+        saveAsContact: false,
+        newLeadCountryCode: '+971',
         savingContact: false,
         
         // Kanban columns (derived from customStatuses)
@@ -1381,19 +1473,87 @@ function leadsManager() {
                 listing_reference: '', 
                 assigned_to_id: '' 
             };
+            this.contactMode = 'new';
+            this.selectedContactForLead = null;
+            this.leadContactSearch = '';
+            this.saveAsContact = false;
+            this.newLeadCountryCode = '+971';
+            // Load contacts for selection
+            if (this.contacts.length === 0) this.loadContacts();
             this.showAddModal = true;
+        },
+        
+        // Contact selection helpers for Add Lead modal
+        filterLeadContacts() {
+            if (!this.leadContactSearch) {
+                this.filteredLeadContacts = this.contacts.slice(0, 10);
+            } else {
+                const search = this.leadContactSearch.toLowerCase();
+                this.filteredLeadContacts = this.contacts.filter(c => 
+                    c.name?.toLowerCase().includes(search) || 
+                    c.phone?.includes(search)
+                ).slice(0, 10);
+            }
+            this.showLeadContactDropdown = true;
+        },
+        
+        selectContactForLead(contact) {
+            this.selectedContactForLead = contact;
+            this.newLead.name = contact.name;
+            this.newLead.email = contact.email || '';
+            this.newLead.phone = (contact.country_code || '') + contact.phone;
+            this.showLeadContactDropdown = false;
+            this.leadContactSearch = '';
+        },
+        
+        clearSelectedContact() {
+            this.selectedContactForLead = null;
+            this.newLead.name = '';
+            this.newLead.email = '';
+            this.newLead.phone = '';
+            this.leadContactSearch = '';
         },
         
         async addLead() {
             try {
+                // If using existing contact, ensure data is set
+                if (this.contactMode === 'existing' && !this.selectedContactForLead) {
+                    alert('Please select a contact');
+                    return;
+                }
+                
+                // For new contact mode, prepend country code to phone
+                if (this.contactMode === 'new' && this.newLead.phone && !this.newLead.phone.startsWith('+')) {
+                    this.newLead.phone = this.newLeadCountryCode + this.newLead.phone;
+                }
+                
                 const resp = await fetch('/api/leads', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(this.newLead)
                 });
                 if (resp.ok) {
+                    // Also save as contact if checkbox is checked
+                    if (this.contactMode === 'new' && this.saveAsContact && this.newLead.name) {
+                        await fetch('/api/contacts', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                name: this.newLead.name,
+                                phone: this.newLead.phone?.replace(this.newLeadCountryCode, '') || '',
+                                country_code: this.newLeadCountryCode,
+                                email: this.newLead.email
+                            })
+                        });
+                        // Reload contacts
+                        await this.loadContacts();
+                    }
+                    
                     this.showAddModal = false;
                     this.newLead = { name: '', email: '', phone: '', source: this.customSources[0]?.id || '', priority: 'medium', lead_type: 'for_sale', status: 'new', message: '', listing_reference: '', assigned_to_id: '' };
+                    this.contactMode = 'new';
+                    this.selectedContactForLead = null;
+                    this.saveAsContact = false;
                     await this.loadLeads();
                 }
             } catch (e) {
