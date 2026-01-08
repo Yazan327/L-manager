@@ -70,17 +70,23 @@
                 
                 <div class="border-t border-indigo-700 my-2"></div>
                 
-                {% if current_user and current_user.has_permission('manage_users') %}
+                {% if current_user and (current_user.role == 'admin' or current_user.has_section_access('users')) %}
                 <a href="{{ url_for('users_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'users_page' %}bg-indigo-700{% endif %}">
                     <i class="fas fa-users w-8"></i>
                     <span x-show="sidebarOpen">Users</span>
+                </a>
+                {% endif %}
+                {% if current_user and current_user.role == 'admin' %}
+                <a href="{{ url_for('permissions_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'permissions_page' %}bg-indigo-700{% endif %}">
+                    <i class="fas fa-shield-alt w-8"></i>
+                    <span x-show="sidebarOpen">Permissions</span>
                 </a>
                 {% endif %}
                 <a href="{{ url_for('auth_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'auth_page' %}bg-indigo-700{% endif %}">
                     <i class="fas fa-plug w-8"></i>
                     <span x-show="sidebarOpen">PF Connect</span>
                 </a>
-                {% if current_user and current_user.has_permission('settings') %}
+                {% if current_user and (current_user.role == 'admin' or current_user.has_section_access('settings')) %}
                 <a href="{{ url_for('storage_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'storage_page' %}bg-indigo-700{% endif %}">
                     <i class="fas fa-hdd w-8"></i>
                     <span x-show="sidebarOpen">Storage</span>

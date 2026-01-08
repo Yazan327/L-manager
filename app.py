@@ -301,6 +301,21 @@ with app.app_context():
         except Exception as e:
             print(f"[MIGRATION] task_assignees table creation skipped or failed: {e}")
         
+        # Migration: Add section_permissions column to users table
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='users' AND column_name='section_permissions'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Adding section_permissions column to users table...")
+                    conn.execute(text("ALTER TABLE users ADD COLUMN section_permissions TEXT DEFAULT '{}'"))
+                    conn.commit()
+                    print("[MIGRATION] section_permissions column added successfully")
+                    # Give existing admins all permissions
+                    conn.execute(text("UPDATE users SET role = 'admin' WHERE role = 'admin'"))
+                    conn.commit()
+        except Exception as e:
+            print(f"[MIGRATION] section_permissions column migration skipped or failed: {e}")
+        
         # Initialize default settings
         AppSettings.init_defaults()
         
@@ -1496,6 +1511,58 @@ def delete_user(user_id):
     
     flash(f'User "{user.name}" deleted.', 'success')
     return redirect(url_for('users_page'))
+
+
+@app.route('/permissions')
+@permission_required('manage_users')
+def permissions_page():
+    """Permission Center - manage user permissions"""
+    users = User.query.filter(User.role != 'admin').order_by(User.name).all()
+    pf_users = PFCache.get_cache('users') or []
+    return render_template('permissions.html',
+                           users=[u.to_dict() for u in users],
+                           sections=User.SECTIONS,
+                           action_labels=User.ACTION_LABELS,
+                           pf_users=pf_users)
+
+
+@app.route('/api/users/<int:user_id>/permissions', methods=['GET'])
+@permission_required('manage_users')
+def api_get_user_permissions(user_id):
+    """Get a user's permissions"""
+    user = User.query.get_or_404(user_id)
+    return jsonify({
+        'success': True,
+        'user': user.to_dict(),
+        'section_permissions': user.get_section_permissions()
+    })
+
+
+@app.route('/api/users/<int:user_id>/permissions', methods=['PUT'])
+@permission_required('manage_users')
+def api_update_user_permissions(user_id):
+    """Update a user's permissions"""
+    user = User.query.get_or_404(user_id)
+    data = request.get_json()
+    
+    if user.role == 'admin':
+        return jsonify({'success': False, 'error': 'Cannot modify admin permissions'}), 400
+    
+    section_permissions = data.get('section_permissions', {})
+    user.set_section_permissions(section_permissions)
+    
+    # Update PF agent restriction if provided
+    if 'pf_agent_id' in data:
+        user.pf_agent_id = data.get('pf_agent_id') or None
+        user.pf_agent_name = data.get('pf_agent_name') or None
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'user': user.to_dict(),
+        'message': f'Permissions updated for {user.name}'
+    })
 
 
 @app.route('/profile', methods=['GET', 'POST'])

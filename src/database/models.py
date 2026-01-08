@@ -57,7 +57,7 @@ def convert_google_drive_url(url):
 # ==================== USER & AUTHENTICATION ====================
 
 class User(db.Model):
-    """Dashboard user with role-based permissions"""
+    """Dashboard user with granular section-based permissions"""
     __tablename__ = 'users'
     __table_args__ = (
         db.Index('idx_users_role', 'role'),
@@ -70,50 +70,99 @@ class User(db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(256), nullable=False)
     name = db.Column(db.String(100), nullable=False, index=True)
-    role = db.Column(db.String(20), default='viewer')  # admin, manager, agent, viewer
+    role = db.Column(db.String(20), default='user')  # admin, user (admin has all permissions)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_login = db.Column(db.DateTime)
     
-    # Custom permissions (JSON array of permission strings, overrides role if set)
-    custom_permissions = db.Column(db.Text, nullable=True)  # JSON array like '["view","create"]'
+    # Section-based permissions stored as JSON
+    # Format: {"listings": {"view": true, "create": true, "edit": false, ...}, "leads": {...}, ...}
+    section_permissions = db.Column(db.Text, nullable=True, default='{}')
     
     # Locked PF Agent ID - user can only see/manage listings for this agent
-    pf_agent_id = db.Column(db.String(100), nullable=True)  # PropertyFinder public profile ID
-    pf_agent_name = db.Column(db.String(100), nullable=True)  # Display name for the agent
+    pf_agent_id = db.Column(db.String(100), nullable=True)
+    pf_agent_name = db.Column(db.String(100), nullable=True)
     
-    # All available permissions
-    ALL_PERMISSIONS = [
-        'view',           # View listings and insights
-        'create',         # Create new listings
-        'edit',           # Edit existing listings
-        'delete',         # Delete listings
-        'publish',        # Publish/unpublish listings
-        'bulk_upload',    # Bulk upload listings
-        'manage_leads',   # View and manage leads
-        'manage_users',   # Manage users (admin only typically)
-        'settings'        # Access app settings
-    ]
+    # Section definitions with their available actions
+    SECTIONS = {
+        'dashboard': {
+            'name': 'Dashboard',
+            'icon': 'fa-home',
+            'description': 'Main dashboard and overview',
+            'actions': ['view']
+        },
+        'listings': {
+            'name': 'Listings',
+            'icon': 'fa-building',
+            'description': 'Property listings management',
+            'actions': ['view', 'create', 'edit', 'delete', 'publish', 'bulk_upload']
+        },
+        'leads': {
+            'name': 'Leads',
+            'icon': 'fa-phone',
+            'description': 'Lead management and CRM',
+            'actions': ['view', 'create', 'edit', 'delete', 'assign']
+        },
+        'insights': {
+            'name': 'Insights',
+            'icon': 'fa-chart-line',
+            'description': 'Analytics and statistics',
+            'actions': ['view']
+        },
+        'tasks': {
+            'name': 'Tasks',
+            'icon': 'fa-tasks',
+            'description': 'Task boards and project management',
+            'actions': ['view', 'create', 'edit', 'delete']
+        },
+        'contacts': {
+            'name': 'Contacts',
+            'icon': 'fa-address-book',
+            'description': 'Contact management',
+            'actions': ['view', 'create', 'edit', 'delete']
+        },
+        'users': {
+            'name': 'Users',
+            'icon': 'fa-users',
+            'description': 'User management',
+            'actions': ['view', 'create', 'edit', 'delete']
+        },
+        'settings': {
+            'name': 'Settings',
+            'icon': 'fa-cog',
+            'description': 'Application settings',
+            'actions': ['view', 'edit']
+        }
+    }
     
-    # Role-based permissions (used as defaults)
+    # Action descriptions
+    ACTION_LABELS = {
+        'view': 'View',
+        'create': 'Create',
+        'edit': 'Edit',
+        'delete': 'Delete',
+        'publish': 'Publish/Unpublish',
+        'bulk_upload': 'Bulk Upload',
+        'assign': 'Assign to Others'
+    }
+    
+    # Legacy role definitions (for backward compatibility)
     ROLES = {
         'admin': {
             'name': 'Administrator',
-            'permissions': ['view', 'create', 'edit', 'delete', 'publish', 'bulk_upload', 'manage_leads', 'manage_users', 'settings']
+            'permissions': []  # Admin has all permissions by default
         },
-        'manager': {
-            'name': 'Manager',
-            'permissions': ['view', 'create', 'edit', 'delete', 'publish', 'bulk_upload', 'manage_leads']
-        },
-        'agent': {
-            'name': 'Agent',
-            'permissions': ['view', 'create', 'edit', 'manage_leads']
-        },
-        'viewer': {
-            'name': 'Viewer',
-            'permissions': ['view']
+        'user': {
+            'name': 'User',
+            'permissions': []  # Custom permissions only
         }
     }
+    
+    # Legacy permission list (for backward compatibility)
+    ALL_PERMISSIONS = [
+        'view', 'create', 'edit', 'delete', 'publish', 
+        'bulk_upload', 'manage_leads', 'manage_users', 'settings'
+    ]
     
     def set_password(self, password):
         """Hash and set the user's password"""
@@ -123,38 +172,139 @@ class User(db.Model):
         """Verify the user's password"""
         return check_password_hash(self.password_hash, password)
     
+    def get_section_permissions(self):
+        """Get section permissions as a dictionary"""
+        import json
+        if self.section_permissions:
+            try:
+                return json.loads(self.section_permissions)
+            except:
+                return {}
+        return {}
+    
+    def set_section_permissions(self, permissions_dict):
+        """Set section permissions from a dictionary"""
+        import json
+        if permissions_dict:
+            self.section_permissions = json.dumps(permissions_dict)
+        else:
+            self.section_permissions = '{}'
+    
+    def has_section_access(self, section):
+        """Check if user has any access to a section"""
+        if self.role == 'admin':
+            return True
+        perms = self.get_section_permissions()
+        section_perms = perms.get(section, {})
+        return any(section_perms.values())
+    
+    def has_section_permission(self, section, action):
+        """Check if user has a specific permission in a section"""
+        if self.role == 'admin':
+            return True
+        perms = self.get_section_permissions()
+        section_perms = perms.get(section, {})
+        return section_perms.get(action, False)
+    
+    def get_accessible_sections(self):
+        """Get list of sections the user can access"""
+        if self.role == 'admin':
+            return list(self.SECTIONS.keys())
+        accessible = []
+        perms = self.get_section_permissions()
+        for section in self.SECTIONS.keys():
+            section_perms = perms.get(section, {})
+            if any(section_perms.values()):
+                accessible.append(section)
+        return accessible
+    
+    # Legacy methods for backward compatibility
     def set_custom_permissions(self, permissions_list):
-        """Set custom permissions from a list"""
+        """Set custom permissions from a list (legacy)"""
         import json
         if permissions_list:
-            self.custom_permissions = json.dumps(permissions_list)
+            # Convert old format to new section-based format
+            perms = {}
+            for perm in permissions_list:
+                if perm == 'view':
+                    perms.setdefault('listings', {})['view'] = True
+                    perms.setdefault('dashboard', {})['view'] = True
+                elif perm == 'create':
+                    perms.setdefault('listings', {})['create'] = True
+                elif perm == 'edit':
+                    perms.setdefault('listings', {})['edit'] = True
+                elif perm == 'delete':
+                    perms.setdefault('listings', {})['delete'] = True
+                elif perm == 'publish':
+                    perms.setdefault('listings', {})['publish'] = True
+                elif perm == 'bulk_upload':
+                    perms.setdefault('listings', {})['bulk_upload'] = True
+                elif perm == 'manage_leads':
+                    perms.setdefault('leads', {})['view'] = True
+                    perms.setdefault('leads', {})['create'] = True
+                    perms.setdefault('leads', {})['edit'] = True
+                elif perm == 'manage_users':
+                    perms.setdefault('users', {})['view'] = True
+                    perms.setdefault('users', {})['create'] = True
+                    perms.setdefault('users', {})['edit'] = True
+                    perms.setdefault('users', {})['delete'] = True
+                elif perm == 'settings':
+                    perms.setdefault('settings', {})['view'] = True
+                    perms.setdefault('settings', {})['edit'] = True
+            self.set_section_permissions(perms)
         else:
-            self.custom_permissions = None
+            self.section_permissions = '{}'
     
     def get_custom_permissions(self):
-        """Get custom permissions as a list"""
-        import json
-        if self.custom_permissions:
-            try:
-                return json.loads(self.custom_permissions)
-            except:
-                return None
-        return None
+        """Get custom permissions as a list (legacy)"""
+        return None  # Deprecated
     
     def has_permission(self, permission):
-        """Check if user has a specific permission (custom permissions override role)"""
-        custom = self.get_custom_permissions()
-        if custom is not None:
-            return permission in custom
-        role_perms = self.ROLES.get(self.role, {}).get('permissions', [])
-        return permission in role_perms
+        """Check if user has a specific permission (legacy compatibility)"""
+        if self.role == 'admin':
+            return True
+        # Map old permissions to new section-based
+        mapping = {
+            'view': ('listings', 'view'),
+            'create': ('listings', 'create'),
+            'edit': ('listings', 'edit'),
+            'delete': ('listings', 'delete'),
+            'publish': ('listings', 'publish'),
+            'bulk_upload': ('listings', 'bulk_upload'),
+            'manage_leads': ('leads', 'view'),
+            'manage_users': ('users', 'view'),
+            'settings': ('settings', 'view')
+        }
+        if permission in mapping:
+            section, action = mapping[permission]
+            return self.has_section_permission(section, action)
+        return False
     
     def get_permissions(self):
-        """Get all permissions for the user (custom or role-based)"""
-        custom = self.get_custom_permissions()
-        if custom is not None:
-            return custom
-        return self.ROLES.get(self.role, {}).get('permissions', [])
+        """Get all permissions for the user (legacy format)"""
+        if self.role == 'admin':
+            return self.ALL_PERMISSIONS
+        perms = []
+        section_perms = self.get_section_permissions()
+        if section_perms.get('listings', {}).get('view'):
+            perms.append('view')
+        if section_perms.get('listings', {}).get('create'):
+            perms.append('create')
+        if section_perms.get('listings', {}).get('edit'):
+            perms.append('edit')
+        if section_perms.get('listings', {}).get('delete'):
+            perms.append('delete')
+        if section_perms.get('listings', {}).get('publish'):
+            perms.append('publish')
+        if section_perms.get('listings', {}).get('bulk_upload'):
+            perms.append('bulk_upload')
+        if section_perms.get('leads', {}).get('view'):
+            perms.append('manage_leads')
+        if section_perms.get('users', {}).get('view'):
+            perms.append('manage_users')
+        if section_perms.get('settings', {}).get('view'):
+            perms.append('settings')
+        return perms
     
     def to_dict(self):
         """Convert to dictionary (without password)"""
@@ -163,10 +313,11 @@ class User(db.Model):
             'email': self.email,
             'name': self.name,
             'role': self.role,
-            'role_name': self.ROLES.get(self.role, {}).get('name', 'Unknown'),
+            'role_name': self.ROLES.get(self.role, {}).get('name', 'User'),
             'permissions': self.get_permissions(),
-            'custom_permissions': self.get_custom_permissions(),
-            'has_custom_permissions': self.custom_permissions is not None,
+            'section_permissions': self.get_section_permissions(),
+            'accessible_sections': self.get_accessible_sections(),
+            'has_custom_permissions': self.section_permissions not in [None, '{}', ''],
             'pf_agent_id': self.pf_agent_id,
             'pf_agent_name': self.pf_agent_name,
             'is_active': self.is_active,
