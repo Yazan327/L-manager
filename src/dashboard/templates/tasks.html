@@ -221,12 +221,12 @@
     </div>
 
     <!-- Task Detail Modal -->
-    <div x-show="showTaskDetail" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showTaskDetail=false">
+    <div x-show="showTaskDetail && selectedTask" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showTaskDetail=false">
         <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <template x-if="selectedTask">
                 <div>
                     <!-- Cover -->
-                    <div x-show="selectedTask.cover_color" class="h-24 rounded-t-xl" :style="'background:'+selectedTask.cover_color"></div>
+                    <div x-show="selectedTask?.cover_color" class="h-24 rounded-t-xl" :style="'background:'+(selectedTask?.cover_color || '')"></div>
                     <div class="p-6">
                         <!-- Header -->
                         <div class="flex items-start justify-between mb-4">
@@ -360,7 +360,7 @@
                                     <div class="flex flex-wrap gap-1">
                                         <button @click="selectedTask.cover_color=null; updateTask()" class="w-6 h-6 rounded border-2 border-gray-300 flex items-center justify-center text-gray-400 text-xs">✕</button>
                                         <template x-for="color in coverColors" :key="color">
-                                            <button @click="selectedTask.cover_color=color; updateTask()" :style="'background:'+color" class="w-6 h-6 rounded" :class="selectedTask.cover_color===color && 'ring-2 ring-offset-1 ring-gray-400'"></button>
+                                            <button @click="selectedTask.cover_color=color; updateTask()" :style="'background:'+color" class="w-6 h-6 rounded" :class="selectedTask?.cover_color===color ? 'ring-2 ring-offset-1 ring-gray-400' : ''"></button>
                                         </template>
                                     </div>
                                 </div>
