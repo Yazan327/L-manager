@@ -214,6 +214,36 @@ with app.app_context():
         except Exception as e:
             print(f"[MIGRATION] lead_type column migration skipped or failed: {e}")
         
+        # Migration: Add contacts table columns if missing
+        try:
+            with db.engine.connect() as conn:
+                # Check and add lead_id column
+                result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='contacts' AND column_name='lead_id'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Adding lead_id column to contacts table...")
+                    conn.execute(text("ALTER TABLE contacts ADD COLUMN lead_id INTEGER REFERENCES crm_leads(id)"))
+                    conn.commit()
+                # Check and add created_by_id column
+                result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='contacts' AND column_name='created_by_id'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Adding created_by_id column to contacts table...")
+                    conn.execute(text("ALTER TABLE contacts ADD COLUMN created_by_id INTEGER REFERENCES users(id)"))
+                    conn.commit()
+                # Check and add company column
+                result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='contacts' AND column_name='company'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Adding company column to contacts table...")
+                    conn.execute(text("ALTER TABLE contacts ADD COLUMN company VARCHAR(200)"))
+                    conn.commit()
+                # Check and add tags column
+                result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='contacts' AND column_name='tags'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Adding tags column to contacts table...")
+                    conn.execute(text("ALTER TABLE contacts ADD COLUMN tags VARCHAR(500)"))
+                    conn.commit()
+        except Exception as e:
+            print(f"[MIGRATION] contacts table migration skipped or failed: {e}")
+        
         # Initialize default settings
         AppSettings.init_defaults()
         
@@ -3841,31 +3871,41 @@ def api_create_contact_from_lead(lead_id):
     """Create a contact from an existing lead"""
     lead = Lead.query.get_or_404(lead_id)
     
-    # Check if contact already exists for this lead
-    existing = Contact.query.filter_by(lead_id=lead_id).first()
-    if existing:
-        return jsonify({'success': True, 'contact': existing.to_dict(), 'existing': True})
-    
-    # Create contact from lead
+    # Check if contact already exists with same phone
     phone = lead.phone or lead.whatsapp or ''
-    country_code = '+971'
+    if phone:
+        existing = Contact.query.filter(
+            (Contact.phone == phone) | 
+            (Contact.phone == phone.lstrip('+').lstrip('0'))
+        ).first()
+        if existing:
+            return jsonify({'success': True, 'contact': existing.to_dict(), 'existing': True})
     
-    # Try to extract country code from phone
+    # Extract country code from phone if present
+    country_code = '+971'  # Default UAE
+    phone_number = phone
+    
     if phone.startswith('+'):
         for code, _ in Contact.COUNTRY_CODES:
             if phone.startswith(code):
                 country_code = code
+                phone_number = phone[len(code):]
                 break
     
     contact = Contact(
         name=lead.name,
-        phone=phone,
+        phone=phone_number,
         country_code=country_code,
         email=lead.email,
-        notes=lead.message,
-        lead_id=lead.id,
-        created_by_id=current_user.id
+        notes=lead.message
     )
+    
+    # Set optional fields if columns exist
+    try:
+        contact.lead_id = lead.id
+        contact.created_by_id = current_user.id
+    except:
+        pass
     
     db.session.add(contact)
     db.session.commit()
