@@ -244,6 +244,63 @@ with app.app_context():
         except Exception as e:
             print(f"[MIGRATION] contacts table migration skipped or failed: {e}")
         
+        # Migration: Add is_private column to task_boards if it doesn't exist
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='task_boards' AND column_name='is_private'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Adding is_private column to task_boards table...")
+                    conn.execute(text("ALTER TABLE task_boards ADD COLUMN is_private BOOLEAN DEFAULT TRUE"))
+                    conn.commit()
+                    print("[MIGRATION] is_private column added successfully")
+        except Exception as e:
+            print(f"[MIGRATION] task_boards is_private migration skipped or failed: {e}")
+        
+        # Migration: Create board_members table if it doesn't exist
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='board_members'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating board_members table...")
+                    conn.execute(text("""
+                        CREATE TABLE board_members (
+                            id SERIAL PRIMARY KEY,
+                            board_id INTEGER NOT NULL REFERENCES task_boards(id),
+                            user_id INTEGER NOT NULL REFERENCES users(id),
+                            role VARCHAR(20) DEFAULT 'member',
+                            notify_on_assign BOOLEAN DEFAULT TRUE,
+                            notify_on_comment BOOLEAN DEFAULT TRUE,
+                            notify_on_due BOOLEAN DEFAULT TRUE,
+                            joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            invited_by_id INTEGER REFERENCES users(id),
+                            UNIQUE(board_id, user_id)
+                        )
+                    """))
+                    conn.commit()
+                    print("[MIGRATION] board_members table created successfully")
+        except Exception as e:
+            print(f"[MIGRATION] board_members table creation skipped or failed: {e}")
+        
+        # Migration: Create task_assignees table if it doesn't exist
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='task_assignees'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating task_assignees table...")
+                    conn.execute(text("""
+                        CREATE TABLE task_assignees (
+                            task_id INTEGER NOT NULL REFERENCES tasks(id),
+                            user_id INTEGER NOT NULL REFERENCES users(id),
+                            assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            assigned_by_id INTEGER REFERENCES users(id),
+                            PRIMARY KEY(task_id, user_id)
+                        )
+                    """))
+                    conn.commit()
+                    print("[MIGRATION] task_assignees table created successfully")
+        except Exception as e:
+            print(f"[MIGRATION] task_assignees table creation skipped or failed: {e}")
+        
         # Initialize default settings
         AppSettings.init_defaults()
         
