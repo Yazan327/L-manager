@@ -1631,10 +1631,11 @@ class Task(db.Model):
     comments = db.relationship('TaskComment', backref='task', lazy='dynamic', cascade='all, delete-orphan')
     assignees = db.relationship(
         'User', 
-        secondary=task_assignee_association,
-        primaryjoin='Task.id == task_assignee_association.c.task_id',
-        secondaryjoin='User.id == task_assignee_association.c.user_id',
-        backref='assigned_tasks'
+        secondary='task_assignees',
+        primaryjoin='Task.id == foreign(task_assignees.c.task_id)',
+        secondaryjoin='User.id == foreign(task_assignees.c.user_id)',
+        backref='assigned_tasks',
+        lazy='dynamic'
     )
     assignee = db.relationship('User', foreign_keys=[assignee_id], backref='primary_tasks')
     creator = db.relationship('User', foreign_keys=[created_by_id], backref='created_tasks')
