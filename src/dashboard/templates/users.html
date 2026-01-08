@@ -180,7 +180,7 @@
                         <td class="px-6 py-4">
                             <div class="flex items-center space-x-2">
                                 <!-- Edit Button -->
-                                <button @click="editUser({{ user|tojson }})" 
+                                <button @click="editUser({{ user.id }})" 
                                         class="text-indigo-600 hover:text-indigo-900" title="Edit">
                                     <i class="fas fa-edit"></i>
                                 </button>
@@ -324,8 +324,11 @@ function usersPage() {
         showEditModal: false,
         editingUser: {},
         useCustomPermissions: false,
+        users: {{ users|tojson|safe }},
         
-        editUser(user) {
+        editUser(userId) {
+            const user = this.users.find(u => u.id === userId);
+            if (!user) return;
             this.editingUser = { 
                 ...user,
                 is_active_str: user.is_active ? 'true' : 'false'
