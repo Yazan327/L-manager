@@ -3934,69 +3934,82 @@ def tasks_page():
 @login_required
 def api_get_boards():
     """Get all task boards the user has access to"""
-    include_archived = request.args.get('include_archived', 'false') == 'true'
-    user_id = session.get('user_id')
-    
-    # Get boards where user is creator or member
-    created_boards = TaskBoard.query.filter(TaskBoard.created_by_id == user_id)
-    member_board_ids = db.session.query(BoardMember.board_id).filter(BoardMember.user_id == user_id).subquery()
-    member_boards = TaskBoard.query.filter(TaskBoard.id.in_(member_board_ids))
-    # Also include public boards
-    public_boards = TaskBoard.query.filter(TaskBoard.is_private == False)
-    
-    query = created_boards.union(member_boards).union(public_boards)
-    
-    if not include_archived:
-        # Re-filter for archived (union loses filters)
-        boards = [b for b in query.all() if not b.is_archived]
-    else:
-        boards = query.all()
-    
-    # Sort by favorite then updated
-    boards.sort(key=lambda b: (not b.is_favorite, b.updated_at or b.created_at), reverse=True)
-    
-    # Add user's role to each board
-    result = []
-    for board in boards:
-        board_dict = board.to_dict()
-        board_dict['my_role'] = board.get_user_role(user_id) or ('viewer' if not board.is_private else None)
-        result.append(board_dict)
-    
-    return jsonify({'success': True, 'boards': result})
+    try:
+        include_archived = request.args.get('include_archived', 'false') == 'true'
+        user_id = session.get('user_id')
+        
+        # Get boards where user is creator or member
+        created_boards = TaskBoard.query.filter(TaskBoard.created_by_id == user_id)
+        member_board_ids = db.session.query(BoardMember.board_id).filter(BoardMember.user_id == user_id).subquery()
+        member_boards = TaskBoard.query.filter(TaskBoard.id.in_(member_board_ids))
+        # Also include public boards
+        public_boards = TaskBoard.query.filter(TaskBoard.is_private == False)
+        
+        query = created_boards.union(member_boards).union(public_boards)
+        
+        if not include_archived:
+            # Re-filter for archived (union loses filters)
+            boards = [b for b in query.all() if not b.is_archived]
+        else:
+            boards = query.all()
+        
+        # Sort by favorite then updated
+        boards.sort(key=lambda b: (not b.is_favorite, b.updated_at or b.created_at), reverse=True)
+        
+        # Add user's role to each board
+        result = []
+        for board in boards:
+            board_dict = board.to_dict()
+            board_dict['my_role'] = board.get_user_role(user_id) or ('viewer' if not board.is_private else None)
+            result.append(board_dict)
+        
+        return jsonify({'success': True, 'boards': result})
+    except Exception as e:
+        import traceback
+        print(f"Error in api_get_boards: {e}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/boards', methods=['POST'])
 @login_required
 def api_create_board():
     """Create a new task board"""
-    import uuid
-    data = request.get_json()
-    
-    if not data.get('name'):
-        return jsonify({'success': False, 'error': 'Board name is required'}), 400
-    
-    # Create default columns
-    default_columns = [
-        {'id': str(uuid.uuid4()), 'name': 'To Do', 'color': '#6b7280'},
-        {'id': str(uuid.uuid4()), 'name': 'In Progress', 'color': '#3b82f6'},
-        {'id': str(uuid.uuid4()), 'name': 'Review', 'color': '#f59e0b'},
-        {'id': str(uuid.uuid4()), 'name': 'Done', 'color': '#10b981'}
-    ]
-    
-    board = TaskBoard(
-        name=data['name'],
-        description=data.get('description', ''),
-        color=data.get('color', '#3b82f6'),
-        icon=data.get('icon', 'clipboard'),
-        is_private=data.get('is_private', True),
-        created_by_id=session.get('user_id')
-    )
-    board.set_columns(data.get('columns', default_columns))
-    
-    db.session.add(board)
-    db.session.commit()
-    
-    return jsonify({'success': True, 'board': board.to_dict()})
+    try:
+        import uuid
+        data = request.get_json()
+        
+        if not data.get('name'):
+            return jsonify({'success': False, 'error': 'Board name is required'}), 400
+        
+        # Create default columns
+        default_columns = [
+            {'id': str(uuid.uuid4()), 'name': 'To Do', 'color': '#6b7280'},
+            {'id': str(uuid.uuid4()), 'name': 'In Progress', 'color': '#3b82f6'},
+            {'id': str(uuid.uuid4()), 'name': 'Review', 'color': '#f59e0b'},
+            {'id': str(uuid.uuid4()), 'name': 'Done', 'color': '#10b981'}
+        ]
+        
+        board = TaskBoard(
+            name=data['name'],
+            description=data.get('description', ''),
+            color=data.get('color', '#3b82f6'),
+            icon=data.get('icon', 'clipboard'),
+            is_private=data.get('is_private', True),
+            created_by_id=session.get('user_id')
+        )
+        board.set_columns(data.get('columns', default_columns))
+        
+        db.session.add(board)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'board': board.to_dict()})
+    except Exception as e:
+        import traceback
+        print(f"Error in api_create_board: {e}")
+        traceback.print_exc()
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/boards/<int:board_id>', methods=['GET'])
