@@ -145,6 +145,12 @@
                     <option value="medium">Medium</option>
                     <option value="low">Low</option>
                 </select>
+                <select x-model="filters.lead_type" @change="filterLeads()"
+                        class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                    <option value="">All Types</option>
+                    <option value="for_sale">For Sale</option>
+                    <option value="for_rent">For Rent</option>
+                </select>
                 <!-- Settings Button -->
                 <button @click="showSettingsModal = true" class="px-3 py-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg" title="Configure Statuses & Sources">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -241,6 +247,9 @@
                                 <div class="font-medium text-gray-900" x-text="lead.name"></div>
                                 <div class="text-sm text-gray-500" x-text="lead.email"></div>
                                 <div class="text-sm text-gray-500" x-text="lead.phone || lead.whatsapp"></div>
+                                <span class="inline-block mt-1 px-1.5 py-0.5 text-xs rounded font-medium"
+                                      :class="lead.lead_type === 'for_rent' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'"
+                                      x-text="lead.lead_type === 'for_rent' ? 'Rent' : 'Sale'"></span>
                             </td>
                             <td class="px-4 py-3">
                                 <span class="px-2 py-1 text-xs rounded-full"
@@ -344,8 +353,17 @@
                                     <div class="w-3 h-3 rounded-full" :class="column.color"></div>
                                     <span class="font-medium text-gray-900" x-text="column.label"></span>
                                 </div>
-                                <span class="bg-gray-200 text-gray-600 text-xs px-2 py-0.5 rounded-full" 
-                                      x-text="getLeadsByStatus(column.status).length"></span>
+                                <div class="flex items-center gap-2">
+                                    <button @click.stop="openAddModalWithStatus(column.status)" 
+                                            class="text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded p-1 transition-colors"
+                                            title="Add lead to this column">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                                        </svg>
+                                    </button>
+                                    <span class="bg-gray-200 text-gray-600 text-xs px-2 py-0.5 rounded-full" 
+                                          x-text="getLeadsByStatus(column.status).length"></span>
+                                </div>
                             </div>
                         </div>
                     
@@ -381,6 +399,13 @@
                                     <!-- Listing -->
                                     <div x-show="lead.listing_reference || lead.pf_listing_id" class="text-xs text-gray-400 mb-2">
                                         <span class="bg-gray-100 px-1.5 py-0.5 rounded" x-text="lead.listing_reference || lead.pf_listing_id"></span>
+                                    </div>
+                                    
+                                    <!-- Type Badge -->
+                                    <div class="mb-2">
+                                        <span class="px-1.5 py-0.5 text-xs rounded font-medium"
+                                              :class="lead.lead_type === 'for_rent' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'"
+                                              x-text="lead.lead_type === 'for_rent' ? 'Rent' : 'Sale'"></span>
                                     </div>
                                     
                                     <!-- Footer: Responsible & Date -->
@@ -472,6 +497,14 @@
                                 <option value="medium">Medium</option>
                                 <option value="high">High</option>
                                 <option value="urgent">Urgent</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Type</label>
+                            <select x-model="newLead.lead_type"
+                                    class="mt-1 w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                                <option value="for_sale">For Sale</option>
+                                <option value="for_rent">For Rent</option>
                             </select>
                         </div>
                         <div>
@@ -1026,11 +1059,11 @@ function leadsManager() {
         showAddModal: false,
         showViewModal: false,
         selectedLead: null,
-        filters: { search: '', status: '', source: '', priority: '', assigned: '' },
+        filters: { search: '', status: '', source: '', priority: '', assigned: '', lead_type: '' },
         sortColumn: 'created_at',
         sortDirection: 'desc',
         stats: { total: 0, new: 0, contacted: 0, qualified: 0, won: 0 },
-        newLead: { name: '', email: '', phone: '', source: '', priority: 'medium', message: '', listing_reference: '', assigned_to_id: '' },
+        newLead: { name: '', email: '', phone: '', source: '', priority: 'medium', lead_type: 'for_sale', status: 'new', message: '', listing_reference: '', assigned_to_id: '' },
         viewMode: localStorage.getItem('leads_view_mode') || 'list',
         
         // Custom configuration (loaded from API)
@@ -1292,6 +1325,7 @@ function leadsManager() {
             if (this.filters.status) filtered = filtered.filter(l => l.status === this.filters.status);
             if (this.filters.source) filtered = filtered.filter(l => l.source === this.filters.source);
             if (this.filters.priority) filtered = filtered.filter(l => l.priority === this.filters.priority);
+            if (this.filters.lead_type) filtered = filtered.filter(l => l.lead_type === this.filters.lead_type);
             if (this.filters.assigned) filtered = filtered.filter(l => l.pf_agent_name === this.filters.assigned || l.assigned_to_name === this.filters.assigned);
             
             // Apply sorting
@@ -1324,6 +1358,20 @@ function leadsManager() {
             this.stats.won = this.leads.filter(l => l.status === 'won').length;
         },
         
+        openAddModalWithStatus(status) {
+            this.newLead = { 
+                name: '', email: '', phone: '', 
+                source: this.customSources[0]?.id || '', 
+                priority: 'medium', 
+                lead_type: 'for_sale', 
+                status: status, 
+                message: '', 
+                listing_reference: '', 
+                assigned_to_id: '' 
+            };
+            this.showAddModal = true;
+        },
+        
         async addLead() {
             try {
                 const resp = await fetch('/api/leads', {
@@ -1333,7 +1381,7 @@ function leadsManager() {
                 });
                 if (resp.ok) {
                     this.showAddModal = false;
-                    this.newLead = { name: '', email: '', phone: '', source: this.customSources[0]?.id || '', priority: 'medium', message: '', listing_reference: '', assigned_to_id: '' };
+                    this.newLead = { name: '', email: '', phone: '', source: this.customSources[0]?.id || '', priority: 'medium', lead_type: 'for_sale', status: 'new', message: '', listing_reference: '', assigned_to_id: '' };
                     await this.loadLeads();
                 }
             } catch (e) {

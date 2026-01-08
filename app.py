@@ -3346,7 +3346,8 @@ def api_create_lead():
         message=data.get('message'),
         listing_reference=data.get('listing_reference'),
         priority=data.get('priority', 'medium'),
-        status='new',
+        lead_type=data.get('lead_type', 'for_sale'),
+        status=data.get('status', 'new'),
         assigned_to_id=data.get('assigned_to_id') or None
     )
     
@@ -3372,7 +3373,7 @@ def api_update_lead(lead_id):
     data = request.get_json()
     
     for field in ['name', 'email', 'phone', 'whatsapp', 'source', 'message', 
-                  'listing_reference', 'status', 'priority', 'notes', 'assigned_to_id']:
+                  'listing_reference', 'status', 'priority', 'lead_type', 'notes', 'assigned_to_id']:
         if field in data:
             setattr(lead, field, data[field])
     

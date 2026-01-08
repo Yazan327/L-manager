@@ -838,6 +838,7 @@ class Lead(db.Model):
     status = db.Column(db.String(30), default='new')
     pf_status = db.Column(db.String(30))  # Original PF status: sent, delivered, read, replied
     priority = db.Column(db.String(20), default='medium')  # low, medium, high, urgent
+    lead_type = db.Column(db.String(20), default='for_sale')  # for_sale, for_rent
     
     # Assignment - from PropertyFinder (publicProfile)
     pf_agent_id = db.Column(db.String(50))  # PropertyFinder public profile ID
@@ -879,6 +880,7 @@ class Lead(db.Model):
             'status': self.status,
             'pf_status': self.pf_status,
             'priority': self.priority,
+            'lead_type': self.lead_type,
             'pf_agent_id': self.pf_agent_id,
             'pf_agent_name': self.pf_agent_name,
             'assigned_to_id': self.assigned_to_id,
