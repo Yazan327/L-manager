@@ -328,8 +328,15 @@
         </div>
     </div>
 
-    <!-- Kanban View (isolated scrollable area) -->
-    <div x-show="viewMode === 'kanban'" class="w-full overflow-x-auto">
+    <!-- Kanban View (isolated scrollable area with drag-to-scroll) -->
+    <div x-show="viewMode === 'kanban'" 
+         x-ref="kanbanScroll"
+         @mousedown="startDragScroll($event)"
+         @mousemove="doDragScroll($event)"
+         @mouseup="stopDragScroll()"
+         @mouseleave="stopDragScroll()"
+         :class="isDraggingScroll && 'cursor-grabbing select-none'"
+         class="w-full overflow-x-auto cursor-grab">
         <div class="pb-4">
             <div class="inline-flex gap-4 min-w-max">
                 <!-- Kanban Columns -->
@@ -1095,6 +1102,11 @@ function leadsManager() {
         draggingColumnIndex: null,
         dragOverColumnIndex: null,
         
+        // Drag-to-scroll for Kanban
+        isDraggingScroll: false,
+        scrollStartX: 0,
+        scrollLeft: 0,
+        
         // Contacts
         showContactsModal: false,
         contacts: [],
@@ -1551,6 +1563,36 @@ function leadsManager() {
         endColumnDrag(event) {
             this.draggingColumnIndex = null;
             this.dragOverColumnIndex = null;
+        },
+        
+        // Drag-to-scroll functions for Kanban horizontal scrolling
+        startDragScroll(event) {
+            // Don't start scroll if clicking on a card or interactive element
+            if (event.target.closest('[draggable="true"]') || 
+                event.target.closest('button') || 
+                event.target.closest('input') ||
+                event.target.closest('select')) {
+                return;
+            }
+            const container = this.$refs.kanbanScroll;
+            if (!container) return;
+            this.isDraggingScroll = true;
+            this.scrollStartX = event.pageX - container.offsetLeft;
+            this.scrollLeft = container.scrollLeft;
+        },
+        
+        doDragScroll(event) {
+            if (!this.isDraggingScroll) return;
+            event.preventDefault();
+            const container = this.$refs.kanbanScroll;
+            if (!container) return;
+            const x = event.pageX - container.offsetLeft;
+            const walk = (x - this.scrollStartX) * 1.5; // Scroll speed multiplier
+            container.scrollLeft = this.scrollLeft - walk;
+        },
+        
+        stopDragScroll() {
+            this.isDraggingScroll = false;
         },
         
         handleColumnDragOver(event, status, colIndex) {
