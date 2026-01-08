@@ -22,7 +22,7 @@ from werkzeug.utils import secure_filename
 from api import PropertyFinderClient, PropertyFinderAPIError, Config
 from models import PropertyListing, PropertyType, OfferingType, Location, Price
 from utils import BulkListingManager
-from database import db, LocalListing, PFSession, User, PFCache, AppSettings, ListingFolder, LoopConfig, LoopListing, DuplicatedListing, LoopExecutionLog, Lead, LeadComment, TaskBoard, TaskLabel, Task, TaskComment
+from database import db, LocalListing, PFSession, User, PFCache, AppSettings, ListingFolder, LoopConfig, LoopListing, DuplicatedListing, LoopExecutionLog, Lead, LeadComment, TaskBoard, TaskLabel, Task, TaskComment, BoardMember, BOARD_PERMISSIONS, task_assignee_association
 from images import ImageProcessor
 
 # APScheduler for background loop execution
@@ -3933,15 +3933,36 @@ def tasks_page():
 @app.route('/api/boards', methods=['GET'])
 @login_required
 def api_get_boards():
-    """Get all task boards"""
+    """Get all task boards the user has access to"""
     include_archived = request.args.get('include_archived', 'false') == 'true'
+    user_id = session.get('user_id')
     
-    query = TaskBoard.query
+    # Get boards where user is creator or member
+    created_boards = TaskBoard.query.filter(TaskBoard.created_by_id == user_id)
+    member_board_ids = db.session.query(BoardMember.board_id).filter(BoardMember.user_id == user_id).subquery()
+    member_boards = TaskBoard.query.filter(TaskBoard.id.in_(member_board_ids))
+    # Also include public boards
+    public_boards = TaskBoard.query.filter(TaskBoard.is_private == False)
+    
+    query = created_boards.union(member_boards).union(public_boards)
+    
     if not include_archived:
-        query = query.filter(TaskBoard.is_archived == False)
+        # Re-filter for archived (union loses filters)
+        boards = [b for b in query.all() if not b.is_archived]
+    else:
+        boards = query.all()
     
-    boards = query.order_by(TaskBoard.is_favorite.desc(), TaskBoard.updated_at.desc()).all()
-    return jsonify({'success': True, 'boards': [b.to_dict() for b in boards]})
+    # Sort by favorite then updated
+    boards.sort(key=lambda b: (not b.is_favorite, b.updated_at or b.created_at), reverse=True)
+    
+    # Add user's role to each board
+    result = []
+    for board in boards:
+        board_dict = board.to_dict()
+        board_dict['my_role'] = board.get_user_role(user_id) or ('viewer' if not board.is_private else None)
+        result.append(board_dict)
+    
+    return jsonify({'success': True, 'boards': result})
 
 
 @app.route('/api/boards', methods=['POST'])
@@ -3967,6 +3988,7 @@ def api_create_board():
         description=data.get('description', ''),
         color=data.get('color', '#3b82f6'),
         icon=data.get('icon', 'clipboard'),
+        is_private=data.get('is_private', True),
         created_by_id=session.get('user_id')
     )
     board.set_columns(data.get('columns', default_columns))
@@ -3982,7 +4004,17 @@ def api_create_board():
 def api_get_board(board_id):
     """Get a single board with tasks"""
     board = TaskBoard.query.get_or_404(board_id)
-    return jsonify({'success': True, 'board': board.to_dict(include_tasks=True)})
+    user_id = session.get('user_id')
+    
+    # Check access
+    if board.is_private and not board.user_can(user_id, 'can_view'):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    board_dict = board.to_dict(include_tasks=True, include_members=True)
+    board_dict['my_role'] = board.get_user_role(user_id) or 'viewer'
+    board_dict['my_permissions'] = BOARD_PERMISSIONS.get(board_dict['my_role'], {})
+    
+    return jsonify({'success': True, 'board': board_dict})
 
 
 @app.route('/api/boards/<int:board_id>', methods=['PUT'])
@@ -3990,6 +4022,12 @@ def api_get_board(board_id):
 def api_update_board(board_id):
     """Update a board"""
     board = TaskBoard.query.get_or_404(board_id)
+    user_id = session.get('user_id')
+    
+    # Check permission
+    if not board.user_can(user_id, 'can_edit_board'):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
     data = request.get_json()
     
     if 'name' in data:
@@ -4006,6 +4044,8 @@ def api_update_board(board_id):
         board.is_archived = data['is_archived']
     if 'is_favorite' in data:
         board.is_favorite = data['is_favorite']
+    if 'is_private' in data:
+        board.is_private = data['is_private']
     
     db.session.commit()
     return jsonify({'success': True, 'board': board.to_dict()})
@@ -4016,9 +4056,166 @@ def api_update_board(board_id):
 def api_delete_board(board_id):
     """Delete a board and all its tasks"""
     board = TaskBoard.query.get_or_404(board_id)
+    user_id = session.get('user_id')
+    
+    # Only owner can delete
+    if not board.user_can(user_id, 'can_delete_board'):
+        return jsonify({'success': False, 'error': 'Only the owner can delete this board'}), 403
+    
     db.session.delete(board)
     db.session.commit()
     return jsonify({'success': True})
+
+
+# ---- Board Members API ----
+
+@app.route('/api/boards/<int:board_id>/members', methods=['GET'])
+@login_required
+def api_get_board_members(board_id):
+    """Get all members of a board"""
+    board = TaskBoard.query.get_or_404(board_id)
+    user_id = session.get('user_id')
+    
+    if not board.user_can(user_id, 'can_view'):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    return jsonify({
+        'success': True, 
+        'members': board.get_all_members_with_creator(),
+        'available_roles': BOARD_PERMISSIONS
+    })
+
+
+@app.route('/api/boards/<int:board_id>/members', methods=['POST'])
+@login_required
+def api_add_board_member(board_id):
+    """Add a member to the board"""
+    board = TaskBoard.query.get_or_404(board_id)
+    user_id = session.get('user_id')
+    
+    if not board.user_can(user_id, 'can_manage_members'):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    data = request.get_json()
+    member_user_id = data.get('user_id')
+    member_email = data.get('email')
+    role = data.get('role', 'member')
+    
+    # Find user by ID or email
+    if member_user_id:
+        target_user = User.query.get(member_user_id)
+    elif member_email:
+        target_user = User.query.filter_by(email=member_email).first()
+    else:
+        return jsonify({'success': False, 'error': 'User ID or email required'}), 400
+    
+    if not target_user:
+        return jsonify({'success': False, 'error': 'User not found'}), 404
+    
+    # Check if already a member
+    existing = BoardMember.query.filter_by(board_id=board_id, user_id=target_user.id).first()
+    if existing:
+        return jsonify({'success': False, 'error': 'User is already a member'}), 400
+    
+    # Can't add creator as member (they're already owner)
+    if target_user.id == board.created_by_id:
+        return jsonify({'success': False, 'error': 'Cannot add the board owner as a member'}), 400
+    
+    # Validate role
+    if role not in BOARD_PERMISSIONS:
+        return jsonify({'success': False, 'error': 'Invalid role'}), 400
+    
+    # Can't make someone owner
+    if role == 'owner':
+        return jsonify({'success': False, 'error': 'Cannot assign owner role'}), 400
+    
+    member = BoardMember(
+        board_id=board_id,
+        user_id=target_user.id,
+        role=role,
+        invited_by_id=user_id
+    )
+    
+    db.session.add(member)
+    db.session.commit()
+    
+    return jsonify({'success': True, 'member': member.to_dict()})
+
+
+@app.route('/api/boards/<int:board_id>/members/<int:member_user_id>', methods=['PUT'])
+@login_required
+def api_update_board_member(board_id, member_user_id):
+    """Update a member's role"""
+    board = TaskBoard.query.get_or_404(board_id)
+    user_id = session.get('user_id')
+    
+    if not board.user_can(user_id, 'can_manage_members'):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    member = BoardMember.query.filter_by(board_id=board_id, user_id=member_user_id).first()
+    if not member:
+        return jsonify({'success': False, 'error': 'Member not found'}), 404
+    
+    data = request.get_json()
+    new_role = data.get('role')
+    
+    if new_role:
+        if new_role not in BOARD_PERMISSIONS or new_role == 'owner':
+            return jsonify({'success': False, 'error': 'Invalid role'}), 400
+        member.role = new_role
+    
+    if 'notify_on_assign' in data:
+        member.notify_on_assign = data['notify_on_assign']
+    if 'notify_on_comment' in data:
+        member.notify_on_comment = data['notify_on_comment']
+    if 'notify_on_due' in data:
+        member.notify_on_due = data['notify_on_due']
+    
+    db.session.commit()
+    return jsonify({'success': True, 'member': member.to_dict()})
+
+
+@app.route('/api/boards/<int:board_id>/members/<int:member_user_id>', methods=['DELETE'])
+@login_required
+def api_remove_board_member(board_id, member_user_id):
+    """Remove a member from the board"""
+    board = TaskBoard.query.get_or_404(board_id)
+    user_id = session.get('user_id')
+    
+    # Can remove self or if have permission
+    if member_user_id != user_id and not board.user_can(user_id, 'can_manage_members'):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    member = BoardMember.query.filter_by(board_id=board_id, user_id=member_user_id).first()
+    if not member:
+        return jsonify({'success': False, 'error': 'Member not found'}), 404
+    
+    db.session.delete(member)
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+@app.route('/api/boards/<int:board_id>/available-users', methods=['GET'])
+@login_required
+def api_get_available_users_for_board(board_id):
+    """Get users that can be added to the board"""
+    board = TaskBoard.query.get_or_404(board_id)
+    user_id = session.get('user_id')
+    
+    if not board.user_can(user_id, 'can_manage_members'):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    # Get all active users except those already on the board
+    existing_member_ids = [board.created_by_id] + [m.user_id for m in board.members.all()]
+    available_users = User.query.filter(
+        User.is_active == True,
+        ~User.id.in_(existing_member_ids)
+    ).order_by(User.name).all()
+    
+    return jsonify({
+        'success': True,
+        'users': [{'id': u.id, 'name': u.name, 'email': u.email} for u in available_users]
+    })
 
 
 # ---- Task Labels API ----
@@ -4083,6 +4280,12 @@ def api_delete_label(label_id):
 def api_get_board_tasks(board_id):
     """Get all tasks for a board"""
     board = TaskBoard.query.get_or_404(board_id)
+    user_id = session.get('user_id')
+    
+    # Check access
+    if board.is_private and not board.user_can(user_id, 'can_view'):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
     tasks = Task.query.filter_by(board_id=board_id).order_by(Task.position).all()
     return jsonify({'success': True, 'tasks': [t.to_dict() for t in tasks]})
 
@@ -4092,6 +4295,12 @@ def api_get_board_tasks(board_id):
 def api_create_task(board_id):
     """Create a new task"""
     board = TaskBoard.query.get_or_404(board_id)
+    user_id = session.get('user_id')
+    
+    # Check permission
+    if not board.user_can(user_id, 'can_create_tasks'):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
     data = request.get_json()
     
     if not data.get('title'):
@@ -4115,7 +4324,7 @@ def api_create_task(board_id):
         column_id=column_id,
         position=max_position + 1,
         priority=data.get('priority', 'medium'),
-        created_by_id=session.get('user_id')
+        created_by_id=user_id
     )
     
     if data.get('due_date'):
@@ -4124,6 +4333,7 @@ def api_create_task(board_id):
         except:
             pass
     
+    # Handle primary assignee
     if data.get('assignee_id'):
         task.assignee_id = data['assignee_id']
     
@@ -4136,6 +4346,19 @@ def api_create_task(board_id):
         task.labels = labels
     
     db.session.add(task)
+    db.session.flush()  # Get task ID
+    
+    # Handle multiple assignees
+    if data.get('assignee_ids'):
+        assignee_ids = data['assignee_ids']
+        if assignee_ids:
+            # First one is primary assignee
+            task.assignee_id = assignee_ids[0]
+            # Rest go to secondary assignees
+            if len(assignee_ids) > 1:
+                secondary_assignees = User.query.filter(User.id.in_(assignee_ids[1:])).all()
+                task.assignees = secondary_assignees
+    
     db.session.commit()
     
     return jsonify({'success': True, 'task': task.to_dict()})
@@ -4146,8 +4369,19 @@ def api_create_task(board_id):
 def api_get_task(task_id):
     """Get a single task with all details"""
     task = Task.query.get_or_404(task_id)
+    user_id = session.get('user_id')
+    board = task.board
+    
+    # Check access
+    if board.is_private and not board.user_can(user_id, 'can_view'):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
     task_dict = task.to_dict()
     task_dict['comments'] = [c.to_dict() for c in task.comments.order_by(TaskComment.created_at.desc()).all()]
+    
+    # Add board members for assignee picker
+    task_dict['available_assignees'] = board.get_all_members_with_creator()
+    
     return jsonify({'success': True, 'task': task_dict})
 
 
@@ -4156,6 +4390,17 @@ def api_get_task(task_id):
 def api_update_task(task_id):
     """Update a task"""
     task = Task.query.get_or_404(task_id)
+    user_id = session.get('user_id')
+    board = task.board
+    
+    # Check permission - editors can edit, members can only edit if assigned to them
+    can_edit = board.user_can(user_id, 'can_edit')
+    is_assigned = task.is_assigned_to(user_id)
+    is_creator = task.created_by_id == user_id
+    
+    if not can_edit and not is_assigned and not is_creator:
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
     data = request.get_json()
     
     if 'title' in data:
@@ -4168,8 +4413,26 @@ def api_update_task(task_id):
         task.cover_color = data['cover_color']
     if 'cover_image' in data:
         task.cover_image = data['cover_image']
+    
+    # Handle primary assignee
     if 'assignee_id' in data:
         task.assignee_id = data['assignee_id']
+    
+    # Handle multiple assignees (includes primary)
+    if 'assignee_ids' in data:
+        assignee_ids = data['assignee_ids']
+        if assignee_ids:
+            # First one is primary assignee
+            task.assignee_id = assignee_ids[0]
+            # Rest go to secondary assignees
+            if len(assignee_ids) > 1:
+                secondary_assignees = User.query.filter(User.id.in_(assignee_ids[1:])).all()
+                task.assignees = secondary_assignees
+            else:
+                task.assignees = []
+        else:
+            task.assignee_id = None
+            task.assignees = []
     
     if 'due_date' in data:
         if data['due_date']:
@@ -4263,6 +4526,15 @@ def api_move_task(task_id):
 def api_delete_task(task_id):
     """Delete a task"""
     task = Task.query.get_or_404(task_id)
+    user_id = session.get('user_id')
+    board = task.board
+    
+    # Check permission - need delete permission, or be creator
+    can_delete = board.user_can(user_id, 'can_delete_tasks')
+    is_creator = task.created_by_id == user_id
+    
+    if not can_delete and not is_creator:
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     # Update positions of tasks below this one
     Task.query.filter(
@@ -4274,6 +4546,101 @@ def api_delete_task(task_id):
     db.session.delete(task)
     db.session.commit()
     return jsonify({'success': True})
+
+
+# ---- My Tasks API ----
+
+@app.route('/api/my-tasks', methods=['GET'])
+@login_required
+def api_get_my_tasks():
+    """Get all tasks assigned to the current user across all boards"""
+    user_id = session.get('user_id')
+    
+    # Get tasks where user is primary assignee or in assignees list
+    primary_tasks = Task.query.filter(Task.assignee_id == user_id)
+    
+    # Get task IDs from task_assignees association
+    assigned_task_ids = db.session.query(task_assignee_association.c.task_id).filter(
+        task_assignee_association.c.user_id == user_id
+    ).subquery()
+    secondary_tasks = Task.query.filter(Task.id.in_(assigned_task_ids))
+    
+    all_tasks = primary_tasks.union(secondary_tasks).order_by(Task.due_date.asc().nullslast(), Task.priority.desc()).all()
+    
+    # Group by board
+    tasks_by_board = {}
+    for task in all_tasks:
+        board_id = task.board_id
+        if board_id not in tasks_by_board:
+            tasks_by_board[board_id] = {
+                'board': task.board.to_dict() if task.board else None,
+                'tasks': []
+            }
+        tasks_by_board[board_id]['tasks'].append(task.to_dict())
+    
+    return jsonify({
+        'success': True,
+        'tasks': [task.to_dict() for task in all_tasks],
+        'tasks_by_board': list(tasks_by_board.values()),
+        'total': len(all_tasks)
+    })
+
+
+@app.route('/api/tasks/<int:task_id>/assign', methods=['POST'])
+@login_required
+def api_assign_task(task_id):
+    """Assign users to a task"""
+    task = Task.query.get_or_404(task_id)
+    user_id = session.get('user_id')
+    board = task.board
+    
+    # Check permission
+    if not board.user_can(user_id, 'can_edit'):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    data = request.get_json()
+    assignee_ids = data.get('assignee_ids', [])
+    
+    # Set primary assignee (first in list)
+    if assignee_ids:
+        task.assignee_id = assignee_ids[0]
+        # Set additional assignees
+        if len(assignee_ids) > 1:
+            additional_assignees = User.query.filter(User.id.in_(assignee_ids[1:])).all()
+            task.assignees = additional_assignees
+        else:
+            task.assignees = []
+    else:
+        task.assignee_id = None
+        task.assignees = []
+    
+    db.session.commit()
+    return jsonify({'success': True, 'task': task.to_dict()})
+
+
+@app.route('/api/tasks/<int:task_id>/unassign', methods=['POST'])
+@login_required
+def api_unassign_task(task_id):
+    """Remove assignment from a task"""
+    task = Task.query.get_or_404(task_id)
+    user_id = session.get('user_id')
+    board = task.board
+    
+    # Can unassign self or have edit permission
+    target_user_id = request.get_json().get('user_id', user_id)
+    
+    if target_user_id != user_id and not board.user_can(user_id, 'can_edit'):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    # Remove from primary assignee
+    if task.assignee_id == target_user_id:
+        task.assignee_id = None
+    
+    # Remove from additional assignees
+    task.assignees = [u for u in task.assignees if u.id != target_user_id]
+    
+    db.session.commit()
+    return jsonify({'success': True, 'task': task.to_dict()})
 
 
 # ---- Task Comments API ----

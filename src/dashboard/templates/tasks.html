@@ -14,13 +14,23 @@
                 </button>
                 <div x-show="open" @click.away="open=false" x-cloak class="absolute left-0 mt-1 w-64 bg-white border rounded-lg shadow-lg z-50">
                     <div class="p-2">
+                        <!-- My Tasks -->
+                        <button @click="showMyTasks(); open=false" 
+                            class="w-full flex items-center gap-2 px-3 py-2 rounded text-left hover:bg-blue-50 text-blue-600 mb-2 border-b pb-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+                            <span>My Tasks</span>
+                            <span class="ml-auto text-xs bg-blue-100 text-blue-600 px-1.5 rounded" x-text="myTasksCount"></span>
+                        </button>
                         <template x-for="board in boards" :key="board.id">
                             <button @click="selectBoard(board.id); open=false" 
                                 :class="currentBoard?.id === board.id ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50'"
                                 class="w-full flex items-center gap-2 px-3 py-2 rounded text-left">
                                 <span class="w-3 h-3 rounded" :style="'background:'+board.color"></span>
-                                <span x-text="board.name"></span>
+                                <span x-text="board.name" class="truncate"></span>
                                 <span class="ml-auto text-xs text-gray-400" x-text="board.task_count+' tasks'"></span>
+                                <span x-show="board.my_role" class="text-xs px-1 rounded" 
+                                    :class="board.my_role === 'owner' ? 'bg-purple-100 text-purple-600' : 'bg-gray-100 text-gray-500'"
+                                    x-text="board.my_role"></span>
                             </button>
                         </template>
                         <div class="border-t mt-2 pt-2">
@@ -34,7 +44,13 @@
             </div>
         </div>
         <div class="flex gap-2">
-            <button @click="showBoardSettings=true" x-show="currentBoard" class="p-2 text-gray-500 hover:bg-gray-100 rounded-lg" title="Board Settings">
+            <!-- Members Button -->
+            <button @click="showMembersModal=true; loadBoardMembers()" x-show="currentBoard && currentBoard.my_permissions?.can_manage_members" 
+                class="flex items-center gap-1 px-3 py-2 text-gray-600 hover:bg-gray-100 rounded-lg" title="Board Members">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                <span class="text-sm" x-text="currentBoard?.member_count || 1"></span>
+            </button>
+            <button @click="showBoardSettings=true" x-show="currentBoard && currentBoard.my_permissions?.can_edit_board" class="p-2 text-gray-500 hover:bg-gray-100 rounded-lg" title="Board Settings">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
             </button>
         </div>
@@ -106,6 +122,15 @@
                                             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
                                             <span x-text="task.comment_count"></span>
                                         </span>
+                                        <!-- Assignees -->
+                                        <div x-show="task.assignees?.length" class="flex -space-x-1 ml-auto">
+                                            <template x-for="(assignee, idx) in task.assignees.slice(0,3)" :key="'assignee-'+idx">
+                                                <div class="w-5 h-5 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center ring-2 ring-white" 
+                                                    :title="assignee.name" x-text="assignee.name?.charAt(0)?.toUpperCase() || '?'"></div>
+                                            </template>
+                                            <div x-show="task.assignees?.length > 3" class="w-5 h-5 rounded-full bg-gray-400 text-white text-xs flex items-center justify-center ring-2 ring-white"
+                                                x-text="'+' + (task.assignees.length - 3)"></div>
+                                        </div>
                                     </div>
                                 </div>
                             </template>
@@ -272,6 +297,44 @@
                             <!-- Sidebar -->
                             <div class="space-y-4">
                                 <div>
+                                    <h4 class="text-xs font-medium text-gray-500 uppercase mb-2">Assignees</h4>
+                                    <div class="space-y-1">
+                                        <template x-for="assignee in selectedTask.assignees" :key="'sa-'+assignee.id">
+                                            <div class="flex items-center gap-2 p-1 rounded hover:bg-gray-50">
+                                                <div class="w-6 h-6 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center"
+                                                    x-text="assignee.name?.charAt(0)?.toUpperCase() || '?'"></div>
+                                                <span class="text-sm flex-1 truncate" x-text="assignee.name"></span>
+                                                <button @click="toggleAssignee(assignee.id)" class="text-gray-400 hover:text-red-500">
+                                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                                </button>
+                                            </div>
+                                        </template>
+                                        <div class="relative" x-data="{showPicker:false}">
+                                            <button @click="showPicker=!showPicker" class="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                                </button>
+                                            </div>
+                                        </template>
+                                        <div class="relative" x-data="{showPicker:false}">
+                                            <button @click="showPicker=!showPicker; if(showPicker) loadMembers()" class="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                                                Add assignee
+                                            </button>
+                                            <div x-show="showPicker" @click.away="showPicker=false" class="absolute left-0 mt-1 w-48 bg-white border rounded-lg shadow-lg z-10 max-h-40 overflow-y-auto">
+                                                <template x-for="user in getAssignableUsers().filter(u => !(selectedTask.assignee_ids || []).includes(u.id))" :key="'am-'+user.id">
+                                                    <button @click="toggleAssignee(user.id); showPicker=false"
+                                                        class="w-full flex items-center gap-2 px-3 py-2 hover:bg-gray-50 text-left text-sm">
+                                                        <div class="w-5 h-5 rounded-full bg-gray-400 text-white text-xs flex items-center justify-center"
+                                                            x-text="user.name?.charAt(0)?.toUpperCase() || '?'"></div>
+                                                        <span x-text="user.name || user.email"></span>
+                                                    </button>
+                                                </template>
+                                                <div x-show="getAssignableUsers().filter(u => !(selectedTask.assignee_ids || []).includes(u.id)).length === 0" class="px-3 py-2 text-sm text-gray-500">No more members</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div>
                                     <h4 class="text-xs font-medium text-gray-500 uppercase mb-2">Move to</h4>
                                     <select x-model="selectedTask.column_id" @change="moveTask()" class="w-full border rounded-lg px-3 py-2 text-sm">
                                         <template x-for="col in currentBoard.columns" :key="col.id">
@@ -379,6 +442,130 @@
             </div>
         </div>
     </div>
+
+    <!-- Members Modal -->
+    <div x-show="showMembersModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showMembersModal=false">
+        <div class="bg-white rounded-xl shadow-xl w-full max-w-lg p-6">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-lg font-semibold">Board Members</h3>
+                <button @click="showMembersModal=false" class="text-gray-400 hover:text-gray-600">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+            
+            <!-- Add Member -->
+            <div class="mb-4 p-3 bg-gray-50 rounded-lg">
+                <h4 class="text-sm font-medium text-gray-700 mb-2">Add Member</h4>
+                <div class="flex gap-2">
+                    <select x-model="newMember.user_id" class="flex-1 border rounded-lg px-3 py-2 text-sm">
+                        <option value="">Select user...</option>
+                        <template x-for="user in availableUsers" :key="user.id">
+                            <option :value="user.id" x-text="user.name + ' (' + user.email + ')'"></option>
+                        </template>
+                    </select>
+                    <select x-model="newMember.role" class="border rounded-lg px-3 py-2 text-sm">
+                        <option value="member">Member</option>
+                        <option value="editor">Editor</option>
+                        <option value="admin">Admin</option>
+                        <option value="viewer">Viewer</option>
+                    </select>
+                    <button @click="addMember()" :disabled="!newMember.user_id" class="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50">Add</button>
+                </div>
+            </div>
+            
+            <!-- Member List -->
+            <div class="space-y-2 max-h-64 overflow-y-auto">
+                <template x-for="member in boardMembers" :key="'bm-'+(member.user_id || member.id)">
+                    <div class="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50">
+                        <div class="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center"
+                            :class="member.is_creator ? 'bg-purple-500' : 'bg-blue-500'"
+                            x-text="member.user?.name?.charAt(0)?.toUpperCase() || '?'"></div>
+                        <div class="flex-1 min-w-0">
+                            <p class="text-sm font-medium truncate" x-text="member.user?.name"></p>
+                            <p class="text-xs text-gray-500 truncate" x-text="member.user?.email"></p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <template x-if="!member.is_creator">
+                                <select x-model="member.role" @change="updateMemberRole(member)" class="border rounded px-2 py-1 text-xs">
+                                    <option value="viewer">Viewer</option>
+                                    <option value="member">Member</option>
+                                    <option value="editor">Editor</option>
+                                    <option value="admin">Admin</option>
+                                </select>
+                            </template>
+                            <span x-show="member.is_creator" class="text-xs px-2 py-1 bg-purple-100 text-purple-600 rounded">Owner</span>
+                            <button x-show="!member.is_creator" @click="removeMember(member)" class="text-gray-400 hover:text-red-500">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                </template>
+            </div>
+            
+            <!-- Permissions Legend -->
+            <div class="mt-4 p-3 bg-gray-50 rounded-lg">
+                <h4 class="text-xs font-medium text-gray-700 mb-2">Role Permissions</h4>
+                <div class="grid grid-cols-2 gap-2 text-xs text-gray-600">
+                    <div><span class="font-medium">Owner:</span> Full access, can delete board</div>
+                    <div><span class="font-medium">Admin:</span> Manage members & board settings</div>
+                    <div><span class="font-medium">Editor:</span> Create, edit & delete tasks</div>
+                    <div><span class="font-medium">Member:</span> Create tasks, edit assigned tasks</div>
+                    <div><span class="font-medium">Viewer:</span> View only</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- My Tasks Modal -->
+    <div x-show="showMyTasksModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showMyTasksModal=false">
+        <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+            <div class="flex items-center justify-between p-4 border-b">
+                <h3 class="text-lg font-semibold">My Tasks</h3>
+                <button @click="showMyTasksModal=false" class="text-gray-400 hover:text-gray-600">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-4">
+                <template x-if="myTasks.length === 0">
+                    <div class="text-center py-8 text-gray-500">
+                        <svg class="w-12 h-12 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+                        <p>No tasks assigned to you</p>
+                    </div>
+                </template>
+                <template x-for="group in myTasksByBoard" :key="'mtb-'+group.board?.id">
+                    <div class="mb-4">
+                        <h4 class="text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
+                            <span class="w-2 h-2 rounded" :style="'background:'+group.board?.color"></span>
+                            <span x-text="group.board?.name"></span>
+                            <span class="text-xs text-gray-400" x-text="'(' + group.tasks?.length + ')'"></span>
+                        </h4>
+                        <div class="space-y-2">
+                            <template x-for="task in group.tasks" :key="'mt-'+task.id">
+                                <div @click="goToTask(task)" class="p-3 border rounded-lg hover:border-blue-300 cursor-pointer">
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-sm font-medium" x-text="task.title"></span>
+                                        <span class="text-xs px-1.5 py-0.5 rounded" 
+                                            :class="{
+                                                'bg-gray-100 text-gray-600': task.priority === 'low',
+                                                'bg-blue-100 text-blue-600': task.priority === 'medium',
+                                                'bg-orange-100 text-orange-600': task.priority === 'high',
+                                                'bg-red-100 text-red-600': task.priority === 'urgent'
+                                            }"
+                                            x-text="task.priority"></span>
+                                    </div>
+                                    <div class="flex items-center gap-2 mt-1 text-xs text-gray-500">
+                                        <span x-show="task.due_date" :class="isOverdue(task.due_date) ? 'text-red-500' : ''">
+                                            Due: <span x-text="formatDate(task.due_date)"></span>
+                                        </span>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -397,6 +584,14 @@ function tasksManager() {
         showAddColumn: false,
         showBoardSettings: false,
         showLabelPicker: false,
+        showMembersModal: false,
+        showMyTasksModal: false,
+        
+        // Members & Assignees
+        boardMembers: [],
+        allUsers: [],
+        myTasks: [],
+        newMember: { user_id: '', role: 'viewer' },
         
         // Form data
         newBoard: { name: '', description: '', color: '#3b82f6' },
@@ -422,6 +617,7 @@ function tasksManager() {
         
         async init() {
             await this.loadBoards();
+            await this.loadMyTasks();  // Load my tasks count
             this.loading = false;
         },
         
@@ -690,6 +886,171 @@ function tasksManager() {
         isOverdue(date) {
             if (!date) return false;
             return new Date(date) < new Date();
+        },
+        
+        // Members management
+        async loadBoardMembers() {
+            if (!this.currentBoard) return;
+            try {
+                const res = await fetch(`/api/boards/${this.currentBoard.id}/members`);
+                const data = await res.json();
+                if (data.success) this.boardMembers = data.members;
+            } catch (e) { console.error('Failed to load members:', e); }
+            await this.loadAllUsers();
+        },
+        
+        async loadAllUsers() {
+            try {
+                const res = await fetch('/api/users');
+                const data = await res.json();
+                if (data.success) this.allUsers = data.users;
+            } catch (e) { console.error('Failed to load users:', e); }
+        },
+        
+        get availableUsers() {
+            const memberIds = this.boardMembers.map(m => m.user_id);
+            return this.allUsers.filter(u => !memberIds.includes(u.id) && u.id !== this.currentBoard?.created_by_id);
+        },
+        
+        async addMember() {
+            if (!this.currentBoard || !this.newMember.user_id) return;
+            try {
+                const res = await fetch(`/api/boards/${this.currentBoard.id}/members`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: parseInt(this.newMember.user_id), role: this.newMember.role })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    await this.loadBoardMembers();
+                    this.newMember = { user_id: '', role: 'viewer' };
+                }
+            } catch (e) { console.error('Failed to add member:', e); }
+        },
+        
+        async updateMemberRole(member) {
+            if (!this.currentBoard) return;
+            try {
+                const res = await fetch(`/api/boards/${this.currentBoard.id}/members/${member.user_id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ role: member.role })
+                });
+                const data = await res.json();
+                if (data.success) await this.loadBoardMembers();
+            } catch (e) { console.error('Failed to update member role:', e); }
+        },
+        
+        async removeMember(member) {
+            if (!this.currentBoard || !confirm('Remove this member from the board?')) return;
+            try {
+                const res = await fetch(`/api/boards/${this.currentBoard.id}/members/${member.user_id}`, {
+                    method: 'DELETE'
+                });
+                const data = await res.json();
+                if (data.success) await this.loadBoardMembers();
+            } catch (e) { console.error('Failed to remove member:', e); }
+        },
+        
+        // Task assignments
+        async toggleAssignee(userId) {
+            if (!this.selectedTask) return;
+            const assigneeIds = [...(this.selectedTask.assignee_ids || [])];
+            const idx = assigneeIds.indexOf(userId);
+            if (idx >= 0) assigneeIds.splice(idx, 1);
+            else assigneeIds.push(userId);
+            
+            try {
+                const res = await fetch(`/api/tasks/${this.selectedTask.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ assignee_ids: assigneeIds })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    const idx = this.tasks.findIndex(t => t.id === data.task.id);
+                    if (idx >= 0) this.tasks[idx] = data.task;
+                    this.selectedTask = data.task;
+                }
+            } catch (e) { console.error('Failed to update assignees:', e); }
+        },
+        
+        isAssigned(userId) {
+            return (this.selectedTask?.assignee_ids || []).includes(userId);
+        },
+        
+        getAssignableUsers() {
+            // Board owner + board members
+            const users = [];
+            
+            // Use board members from currentBoard (populated by API with include_members=True)
+            const members = this.currentBoard?.members || this.boardMembers || [];
+            
+            members.forEach(m => {
+                if (m.user && !users.find(u => u.id === m.user.id)) {
+                    users.push(m.user);
+                }
+            });
+            
+            // Add board creator if not in list
+            if (this.currentBoard?.created_by && !users.find(u => u.id === this.currentBoard.created_by.id)) {
+                users.unshift(this.currentBoard.created_by);
+            }
+            
+            return users;
+        },
+        
+        // My Tasks
+        async showMyTasks() {
+            this.showMyTasksModal = true;
+            await this.loadMyTasks();
+        },
+        
+        async loadMyTasks() {
+            try {
+                const res = await fetch('/api/my-tasks');
+                const data = await res.json();
+                if (data.success) this.myTasks = data.tasks;
+            } catch (e) { console.error('Failed to load my tasks:', e); }
+        },
+        
+        get myTasksCount() {
+            return this.myTasks?.length || 0;
+        },
+        
+        get myTasksByBoard() {
+            const grouped = {};
+            this.myTasks.forEach(t => {
+                const boardId = t.board_id || 'unknown';
+                if (!grouped[boardId]) {
+                    grouped[boardId] = {
+                        board: this.boards.find(b => b.id === boardId) || { id: boardId, name: 'Unknown Board', color: '#6b7280' },
+                        tasks: []
+                    };
+                }
+                grouped[boardId].tasks.push(t);
+            });
+            return Object.values(grouped);
+        },
+        
+        async goToTask(task) {
+            this.showMyTasksModal = false;
+            // Switch to board if needed
+            if (!this.currentBoard || this.currentBoard.id !== task.board_id) {
+                await this.selectBoard(task.board_id);
+            }
+            // Open task detail
+            await this.openTaskDetail(task);
+        },
+        
+        canManageMembers() {
+            if (!this.currentBoard) return false;
+            // Board owner or admin can manage members
+            const currentUserId = {{ current_user.id if current_user else 'null' }};
+            if (this.currentBoard.created_by_id === currentUserId) return true;
+            const members = this.currentBoard?.members || this.boardMembers || [];
+            const member = members.find(m => m.user_id === currentUserId);
+            return member && ['admin', 'owner'].includes(member.role);
         }
     };
 }

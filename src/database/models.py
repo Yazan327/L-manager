@@ -1334,6 +1334,117 @@ class LoopExecutionLog(db.Model):
 
 # ===== TASK MANAGEMENT (Trello-like) =====
 
+# Board member permissions
+BOARD_PERMISSIONS = {
+    'owner': {
+        'name': 'Owner',
+        'can_view': True,
+        'can_edit': True,
+        'can_create_tasks': True,
+        'can_delete_tasks': True,
+        'can_manage_members': True,
+        'can_edit_board': True,
+        'can_delete_board': True
+    },
+    'admin': {
+        'name': 'Admin',
+        'can_view': True,
+        'can_edit': True,
+        'can_create_tasks': True,
+        'can_delete_tasks': True,
+        'can_manage_members': True,
+        'can_edit_board': True,
+        'can_delete_board': False
+    },
+    'editor': {
+        'name': 'Editor',
+        'can_view': True,
+        'can_edit': True,
+        'can_create_tasks': True,
+        'can_delete_tasks': False,
+        'can_manage_members': False,
+        'can_edit_board': False,
+        'can_delete_board': False
+    },
+    'member': {
+        'name': 'Member',
+        'can_view': True,
+        'can_edit': True,  # Can edit tasks assigned to them
+        'can_create_tasks': True,
+        'can_delete_tasks': False,
+        'can_manage_members': False,
+        'can_edit_board': False,
+        'can_delete_board': False
+    },
+    'viewer': {
+        'name': 'Viewer',
+        'can_view': True,
+        'can_edit': False,
+        'can_create_tasks': False,
+        'can_delete_tasks': False,
+        'can_manage_members': False,
+        'can_edit_board': False,
+        'can_delete_board': False
+    }
+}
+
+
+class BoardMember(db.Model):
+    """Board membership with role-based permissions"""
+    __tablename__ = 'board_members'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    board_id = db.Column(db.Integer, db.ForeignKey('task_boards.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    role = db.Column(db.String(20), default='member')  # owner, admin, editor, member, viewer
+    
+    # Notification preferences
+    notify_on_assign = db.Column(db.Boolean, default=True)
+    notify_on_comment = db.Column(db.Boolean, default=True)
+    notify_on_due = db.Column(db.Boolean, default=True)
+    
+    # Timestamps
+    joined_at = db.Column(db.DateTime, default=datetime.utcnow)
+    invited_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    
+    # Relationships
+    user = db.relationship('User', foreign_keys=[user_id], backref='board_memberships')
+    invited_by = db.relationship('User', foreign_keys=[invited_by_id])
+    
+    # Unique constraint - one membership per user per board
+    __table_args__ = (db.UniqueConstraint('board_id', 'user_id', name='unique_board_member'),)
+    
+    def has_permission(self, permission):
+        """Check if member has a specific permission"""
+        role_perms = BOARD_PERMISSIONS.get(self.role, {})
+        return role_perms.get(permission, False)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'board_id': self.board_id,
+            'user_id': self.user_id,
+            'user': self.user.to_dict() if self.user else None,
+            'role': self.role,
+            'role_name': BOARD_PERMISSIONS.get(self.role, {}).get('name', 'Unknown'),
+            'permissions': BOARD_PERMISSIONS.get(self.role, {}),
+            'notify_on_assign': self.notify_on_assign,
+            'notify_on_comment': self.notify_on_comment,
+            'notify_on_due': self.notify_on_due,
+            'joined_at': self.joined_at.isoformat() if self.joined_at else None,
+            'invited_by_id': self.invited_by_id
+        }
+
+
+# Association table for Task <-> User (multiple assignees)
+task_assignee_association = db.Table('task_assignees',
+    db.Column('task_id', db.Integer, db.ForeignKey('tasks.id'), primary_key=True),
+    db.Column('user_id', db.Integer, db.ForeignKey('users.id'), primary_key=True),
+    db.Column('assigned_at', db.DateTime, default=datetime.utcnow),
+    db.Column('assigned_by_id', db.Integer, db.ForeignKey('users.id'), nullable=True)
+)
+
+
 class TaskBoard(db.Model):
     """Task boards for organizing tasks (like Trello boards)"""
     __tablename__ = 'task_boards'
@@ -1351,6 +1462,7 @@ class TaskBoard(db.Model):
     # Board settings
     is_archived = db.Column(db.Boolean, default=False)
     is_favorite = db.Column(db.Boolean, default=False)
+    is_private = db.Column(db.Boolean, default=True)  # If false, all users can view
     
     # Ownership
     created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
@@ -1361,6 +1473,8 @@ class TaskBoard(db.Model):
     
     # Relationships
     tasks = db.relationship('Task', backref='board', lazy='dynamic', cascade='all, delete-orphan')
+    members = db.relationship('BoardMember', backref='board', lazy='dynamic', cascade='all, delete-orphan')
+    creator = db.relationship('User', foreign_keys=[created_by_id], backref='created_boards')
     
     def get_columns(self):
         """Parse columns_config JSON"""
@@ -1375,7 +1489,56 @@ class TaskBoard(db.Model):
         import json
         self.columns_config = json.dumps(columns)
     
-    def to_dict(self, include_tasks=False):
+    def get_member(self, user_id):
+        """Get membership for a user"""
+        return self.members.filter_by(user_id=user_id).first()
+    
+    def is_member(self, user_id):
+        """Check if user is a member of this board"""
+        return self.get_member(user_id) is not None
+    
+    def get_user_role(self, user_id):
+        """Get user's role on this board"""
+        if self.created_by_id == user_id:
+            return 'owner'
+        member = self.get_member(user_id)
+        return member.role if member else None
+    
+    def user_can(self, user_id, permission):
+        """Check if user has specific permission on this board"""
+        # Creator always has full access
+        if self.created_by_id == user_id:
+            return True
+        # Check membership
+        member = self.get_member(user_id)
+        if member:
+            return member.has_permission(permission)
+        # Public boards allow viewing
+        if not self.is_private and permission == 'can_view':
+            return True
+        return False
+    
+    def get_all_members_with_creator(self):
+        """Get all members including the creator"""
+        members_list = []
+        # Add creator as owner
+        if self.creator:
+            members_list.append({
+                'user_id': self.created_by_id,
+                'user': self.creator.to_dict(),
+                'role': 'owner',
+                'role_name': 'Owner',
+                'is_creator': True
+            })
+        # Add other members
+        for member in self.members.all():
+            if member.user_id != self.created_by_id:
+                member_dict = member.to_dict()
+                member_dict['is_creator'] = False
+                members_list.append(member_dict)
+        return members_list
+    
+    def to_dict(self, include_tasks=False, include_members=False):
         data = {
             'id': self.id,
             'name': self.name,
@@ -1385,13 +1548,19 @@ class TaskBoard(db.Model):
             'columns': self.get_columns(),
             'is_archived': self.is_archived,
             'is_favorite': self.is_favorite,
+            'is_private': getattr(self, 'is_private', True),
             'created_by_id': self.created_by_id,
+            'created_by': self.creator.to_dict() if self.creator else None,
+            'creator': self.creator.to_dict() if self.creator else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
-            'task_count': self.tasks.count() if self.tasks else 0
+            'task_count': self.tasks.count() if self.tasks else 0,
+            'member_count': self.members.count() + 1 if self.members else 1  # +1 for creator
         }
         if include_tasks:
             data['tasks'] = [t.to_dict() for t in self.tasks.all()]
+        if include_members:
+            data['members'] = self.get_all_members_with_creator()
         return data
 
 
@@ -1443,7 +1612,7 @@ class Task(db.Model):
     completed_at = db.Column(db.DateTime, nullable=True)
     is_completed = db.Column(db.Boolean, default=False)
     
-    # Assignment
+    # Assignment - keep single assignee for backward compatibility, but also support multiple
     assignee_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     
@@ -1460,6 +1629,9 @@ class Task(db.Model):
     # Relationships
     labels = db.relationship('TaskLabel', secondary=task_label_association, backref='tasks')
     comments = db.relationship('TaskComment', backref='task', lazy='dynamic', cascade='all, delete-orphan')
+    assignees = db.relationship('User', secondary=task_assignee_association, backref='assigned_tasks')
+    assignee = db.relationship('User', foreign_keys=[assignee_id], backref='primary_tasks')
+    creator = db.relationship('User', foreign_keys=[created_by_id], backref='created_tasks')
     
     def get_checklist(self):
         import json
@@ -1483,7 +1655,31 @@ class Task(db.Model):
         import json
         self.attachments = json.dumps(items)
     
+    def get_all_assignees(self):
+        """Get all assignees including primary assignee"""
+        assignee_list = []
+        if self.assignee:
+            assignee_list.append(self.assignee.to_dict())
+        for user in self.assignees:
+            if user.id != self.assignee_id:
+                assignee_list.append(user.to_dict())
+        return assignee_list
+    
+    def is_assigned_to(self, user_id):
+        """Check if task is assigned to a specific user"""
+        if self.assignee_id == user_id:
+            return True
+        return any(u.id == user_id for u in self.assignees)
+    
     def to_dict(self):
+        # Get all assignee IDs
+        assignee_ids = []
+        if self.assignee_id:
+            assignee_ids.append(self.assignee_id)
+        for user in self.assignees:
+            if user.id not in assignee_ids:
+                assignee_ids.append(user.id)
+        
         return {
             'id': self.id,
             'title': self.title,
@@ -1497,7 +1693,11 @@ class Task(db.Model):
             'completed_at': self.completed_at.isoformat() if self.completed_at else None,
             'is_completed': self.is_completed,
             'assignee_id': self.assignee_id,
+            'assignee': self.assignee.to_dict() if self.assignee else None,
+            'assignee_ids': assignee_ids,
+            'assignees': self.get_all_assignees(),
             'created_by_id': self.created_by_id,
+            'creator': self.creator.to_dict() if self.creator else None,
             'cover_color': self.cover_color,
             'cover_image': self.cover_image,
             'checklist': self.get_checklist(),
