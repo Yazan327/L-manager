@@ -880,7 +880,7 @@ class Lead(db.Model):
             'status': self.status,
             'pf_status': self.pf_status,
             'priority': self.priority,
-            'lead_type': self.lead_type,
+            'lead_type': getattr(self, 'lead_type', None) or 'for_sale',
             'pf_agent_id': self.pf_agent_id,
             'pf_agent_name': self.pf_agent_name,
             'assigned_to_id': self.assigned_to_id,

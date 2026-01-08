@@ -202,6 +202,18 @@ with app.app_context():
         db.create_all()
         print("[STARTUP] Database tables created successfully")
         
+        # Migration: Add lead_type column if it doesn't exist
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='crm_leads' AND column_name='lead_type'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Adding lead_type column to crm_leads table...")
+                    conn.execute(text("ALTER TABLE crm_leads ADD COLUMN lead_type VARCHAR(20) DEFAULT 'for_sale'"))
+                    conn.commit()
+                    print("[MIGRATION] lead_type column added successfully")
+        except Exception as e:
+            print(f"[MIGRATION] lead_type column migration skipped or failed: {e}")
+        
         # Initialize default settings
         AppSettings.init_defaults()
         
@@ -3346,10 +3358,13 @@ def api_create_lead():
         message=data.get('message'),
         listing_reference=data.get('listing_reference'),
         priority=data.get('priority', 'medium'),
-        lead_type=data.get('lead_type', 'for_sale'),
         status=data.get('status', 'new'),
         assigned_to_id=data.get('assigned_to_id') or None
     )
+    
+    # Set lead_type if the column exists
+    if hasattr(Lead, 'lead_type'):
+        lead.lead_type = data.get('lead_type', 'for_sale')
     
     db.session.add(lead)
     db.session.commit()
