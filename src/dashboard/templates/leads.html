@@ -861,7 +861,7 @@
                             <button @click="addStatus()" class="text-blue-600 hover:text-blue-800 text-sm">+ Add Status</button>
                         </div>
                         <div class="space-y-2">
-                            <template x-for="(status, index) in editStatuses" :key="status.id">
+                            <template x-for="(status, index) in editStatuses" :key="index">
                                 <div class="flex items-center gap-2">
                                     <select x-model="status.color" class="w-20 px-2 py-1.5 text-xs border rounded">
                                         <option value="blue">Blue</option>
@@ -896,7 +896,7 @@
                             <button @click="addSource()" class="text-blue-600 hover:text-blue-800 text-sm">+ Add Source</button>
                         </div>
                         <div class="space-y-2">
-                            <template x-for="(source, index) in editSources" :key="source.id">
+                            <template x-for="(source, index) in editSources" :key="index">
                                 <div class="flex items-center gap-2">
                                     <select x-model="source.color" class="w-20 px-2 py-1.5 text-xs border rounded">
                                         <option value="blue">Blue</option>

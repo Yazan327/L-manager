@@ -3869,48 +3869,54 @@ def api_delete_contact(contact_id):
 @login_required
 def api_create_contact_from_lead(lead_id):
     """Create a contact from an existing lead"""
-    lead = Lead.query.get_or_404(lead_id)
-    
-    # Check if contact already exists with same phone
-    phone = lead.phone or lead.whatsapp or ''
-    if phone:
-        existing = Contact.query.filter(
-            (Contact.phone == phone) | 
-            (Contact.phone == phone.lstrip('+').lstrip('0'))
-        ).first()
-        if existing:
-            return jsonify({'success': True, 'contact': existing.to_dict(), 'existing': True})
-    
-    # Extract country code from phone if present
-    country_code = '+971'  # Default UAE
-    phone_number = phone
-    
-    if phone.startswith('+'):
-        for code, _ in Contact.COUNTRY_CODES:
-            if phone.startswith(code):
-                country_code = code
-                phone_number = phone[len(code):]
-                break
-    
-    contact = Contact(
-        name=lead.name,
-        phone=phone_number,
-        country_code=country_code,
-        email=lead.email,
-        notes=lead.message
-    )
-    
-    # Set optional fields if columns exist
     try:
-        contact.lead_id = lead.id
-        contact.created_by_id = current_user.id
-    except:
-        pass
-    
-    db.session.add(contact)
-    db.session.commit()
-    
-    return jsonify({'success': True, 'contact': contact.to_dict()})
+        lead = Lead.query.get_or_404(lead_id)
+        
+        # Check if contact already exists with same phone
+        phone = lead.phone or lead.whatsapp or ''
+        if phone:
+            try:
+                existing = Contact.query.filter(
+                    (Contact.phone == phone) | 
+                    (Contact.phone == phone.lstrip('+').lstrip('0'))
+                ).first()
+                if existing:
+                    return jsonify({'success': True, 'contact': existing.to_dict(), 'existing': True})
+            except Exception as e:
+                print(f"[DEBUG] Error checking existing contact: {e}")
+        
+        # Extract country code from phone if present
+        country_code = '+971'  # Default UAE
+        phone_number = phone
+        
+        if phone and phone.startswith('+'):
+            for code, _ in Contact.COUNTRY_CODES:
+                if phone.startswith(code):
+                    country_code = code
+                    phone_number = phone[len(code):]
+                    break
+        
+        # Create contact with only basic required fields
+        contact = Contact(
+            name=lead.name or 'Unknown',
+            phone=phone_number or '',
+            country_code=country_code,
+            email=lead.email or ''
+        )
+        
+        # Set optional fields safely
+        if hasattr(contact, 'notes'):
+            contact.notes = lead.message or ''
+        
+        db.session.add(contact)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'contact': contact.to_dict()})
+    except Exception as e:
+        print(f"[ERROR] Failed to create contact from lead: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # ==================== WEBHOOKS ====================
