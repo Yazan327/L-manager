@@ -603,6 +603,11 @@ function tasksManager() {
         selectedTask: { id: null, title: '', description: '', column_id: '', priority: 'medium', due_date: '', cover_color: null, labels: [], checklist: [], assignee_ids: [], assignees: [] },
         taskComments: [],
         
+        // Helper to reset selected task
+        resetSelectedTask() {
+            this.selectedTask = { id: null, title: '', description: '', column_id: '', priority: 'medium', due_date: '', cover_color: null, labels: [], checklist: [], assignee_ids: [], assignees: [] };
+        },
+        
         // Colors
         boardColors: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'],
         columnColors: ['#6b7280', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'],
@@ -722,7 +727,7 @@ function tasksManager() {
         },
         
         async updateTask() {
-            if (!this.selectedTask) return;
+            if (!this.selectedTask?.id) return;
             try {
                 const payload = {
                     title: this.selectedTask.title,
@@ -746,7 +751,7 @@ function tasksManager() {
         },
         
         async moveTask() {
-            if (!this.selectedTask) return;
+            if (!this.selectedTask?.id) return;
             try {
                 const res = await fetch(`/api/tasks/${this.selectedTask.id}/move`, {
                     method: 'PATCH',
@@ -762,17 +767,17 @@ function tasksManager() {
         },
         
         async deleteTask() {
-            if (!this.selectedTask || !confirm('Delete this task?')) return;
+            if (!this.selectedTask?.id || !confirm('Delete this task?')) return;
             try {
                 await fetch(`/api/tasks/${this.selectedTask.id}`, { method: 'DELETE' });
                 this.tasks = this.tasks.filter(t => t.id !== this.selectedTask.id);
                 this.showTaskDetail = false;
-                this.selectedTask = null;
+                this.resetSelectedTask();
             } catch (e) { console.error('Failed to delete task:', e); }
         },
         
         async addComment() {
-            if (!this.newComment || !this.selectedTask) return;
+            if (!this.newComment || !this.selectedTask?.id) return;
             try {
                 const res = await fetch(`/api/tasks/${this.selectedTask.id}/comments`, {
                     method: 'POST',
@@ -956,7 +961,7 @@ function tasksManager() {
         
         // Task assignments
         async toggleAssignee(userId) {
-            if (!this.selectedTask) return;
+            if (!this.selectedTask?.id) return;
             const assigneeIds = [...(this.selectedTask.assignee_ids || [])];
             const idx = assigneeIds.indexOf(userId);
             if (idx >= 0) assigneeIds.splice(idx, 1);
