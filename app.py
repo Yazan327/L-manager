@@ -680,6 +680,73 @@ with app.app_context():
             print(f"[BACKFILL] Permission system initialization failed: {e}")
             db.session.rollback()
         
+        # Backfill: Create default workspace if none exist
+        try:
+            if Workspace.query.count() == 0:
+                # Create a default workspace
+                default_workspace = Workspace(
+                    name='Yazan Alyoussef',
+                    slug='yazanalyoussef',
+                    description='Default workspace',
+                    color='indigo',
+                    is_active=True
+                )
+                db.session.add(default_workspace)
+                db.session.commit()
+                print(f"[BACKFILL] Created default workspace: yazanalyoussef")
+                
+                # Add all existing users to this workspace
+                all_users = User.query.all()
+                for user in all_users:
+                    existing = WorkspaceMember.query.filter_by(
+                        workspace_id=default_workspace.id,
+                        user_id=user.id
+                    ).first()
+                    if not existing:
+                        role = 'owner' if user.role == 'admin' else 'member'
+                        member = WorkspaceMember(
+                            workspace_id=default_workspace.id,
+                            user_id=user.id,
+                            role=role
+                        )
+                        db.session.add(member)
+                        print(f"[BACKFILL] Added user {user.email} to workspace as {role}")
+                db.session.commit()
+                
+                # Copy existing PF connection to workspace if exists
+                existing_session = PFSession.get_active_session()
+                if existing_session:
+                    existing_conn = WorkspaceConnection.query.filter_by(
+                        workspace_id=default_workspace.id,
+                        provider='propertyfinder'
+                    ).first()
+                    if not existing_conn:
+                        pf_conn = WorkspaceConnection(
+                            workspace_id=default_workspace.id,
+                            provider='propertyfinder',
+                            name='PropertyFinder',
+                            is_active=True,
+                            connection_status='connected'
+                        )
+                        pf_conn.set_credentials({
+                            'api_key': Config.API_KEY,
+                            'api_secret': Config.API_SECRET
+                        })
+                        db.session.add(pf_conn)
+                        db.session.commit()
+                        print("[BACKFILL] Created PropertyFinder connection for default workspace")
+            else:
+                # Ensure existing workspace has slug
+                for ws in Workspace.query.filter(Workspace.slug == None).all():
+                    ws.slug = Workspace.generate_slug(ws.name)
+                    print(f"[BACKFILL] Generated slug for workspace: {ws.name} -> {ws.slug}")
+                db.session.commit()
+                
+            print("[BACKFILL] Workspace initialization complete")
+        except Exception as e:
+            print(f"[BACKFILL] Workspace initialization failed: {e}")
+            db.session.rollback()
+        
         # Initialize default settings
         AppSettings.init_defaults()
         
@@ -1163,16 +1230,46 @@ def permission_required(permission):
 
 @app.before_request
 def load_user():
-    """Load user before each request"""
+    """Load user and workspace context before each request"""
     g.user = None
+    g.workspace = None
+    g.is_workspace_context = False
+    g.is_admin_context = False
+    
     if 'user_id' in session:
         g.user = User.query.get(session['user_id'])
+    
+    # Check if we're in a workspace context (URL starts with workspace slug)
+    # Skip for static files and API routes
+    if request.path.startswith('/static') or request.path.startswith('/api/'):
+        return
+    
+    # Check for admin context
+    if request.path.startswith('/admin'):
+        g.is_admin_context = True
+        return
+    
+    # Check for workspace context
+    parts = request.path.strip('/').split('/')
+    if parts and parts[0] and not parts[0] in ['login', 'logout', 'register', 'ping', 'favicon.ico']:
+        # Check if first part is a workspace slug
+        workspace = Workspace.query.filter_by(slug=parts[0], is_active=True).first()
+        if workspace:
+            g.workspace = workspace
+            g.is_workspace_context = True
+            # Store in session for API calls
+            session['current_workspace_id'] = workspace.id
 
 
 @app.context_processor
 def inject_user():
-    """Make user available in all templates"""
-    return dict(current_user=g.user)
+    """Make user and workspace available in all templates"""
+    return dict(
+        current_user=g.user,
+        current_workspace=getattr(g, 'workspace', None),
+        is_workspace_context=getattr(g, 'is_workspace_context', False),
+        is_admin_context=getattr(g, 'is_admin_context', False)
+    )
 
 
 # ==================== CACHE ====================
@@ -1953,7 +2050,181 @@ def api_update_user_permissions(user_id):
     })
 
 
-# ==================== WORKSPACES ====================
+# ==================== WORKSPACE-SCOPED ROUTES ====================
+# These routes are for accessing a specific workspace's CRM
+# URL pattern: /<workspace_slug>/...
+
+def require_workspace_access(f):
+    """Decorator to ensure user has access to the workspace"""
+    @wraps(f)
+    def decorated_function(workspace_slug, *args, **kwargs):
+        workspace = Workspace.query.filter_by(slug=workspace_slug, is_active=True).first()
+        if not workspace:
+            flash('Workspace not found.', 'error')
+            return redirect(url_for('login'))
+        
+        if not g.user:
+            return redirect(url_for('login'))
+        
+        # Check if user is member of this workspace
+        membership = WorkspaceMember.query.filter_by(
+            workspace_id=workspace.id,
+            user_id=g.user.id
+        ).first()
+        
+        # System admins can access any workspace
+        is_system_admin = g.user.role == 'admin'
+        
+        if not membership and not is_system_admin:
+            flash('You do not have access to this workspace.', 'error')
+            return redirect(url_for('login'))
+        
+        g.workspace = workspace
+        g.workspace_membership = membership
+        g.is_workspace_context = True
+        
+        return f(workspace_slug, *args, **kwargs)
+    return decorated_function
+
+
+@app.route('/<workspace_slug>')
+@app.route('/<workspace_slug>/')
+@login_required
+@require_workspace_access
+def workspace_dashboard(workspace_slug):
+    """Workspace-scoped dashboard"""
+    try:
+        # Get stats for this workspace (TODO: filter by workspace_id when data is scoped)
+        stats = {
+            'total': LocalListing.query.count(),
+            'published': LocalListing.query.filter_by(status='published').count(),
+            'draft': LocalListing.query.filter_by(status='draft').count(),
+        }
+        recent = LocalListing.query.order_by(LocalListing.updated_at.desc()).limit(5).all()
+        return render_template('index.html', stats=stats, recent_listings=[l.to_dict() for l in recent])
+    except Exception as e:
+        print(f"[ERROR] Workspace dashboard error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+
+@app.route('/<workspace_slug>/listings')
+@login_required
+@require_workspace_access
+def workspace_listings(workspace_slug):
+    """Workspace-scoped listings page"""
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 25, type=int)
+    status = request.args.get('status')
+    sort_by = request.args.get('sort_by', 'updated_at')
+    sort_order = request.args.get('sort_order', 'desc')
+    folder = request.args.get('folder')
+    
+    query = LocalListing.query
+    # TODO: Filter by workspace_id when listings are scoped
+    
+    if status:
+        query = query.filter_by(status=status)
+    if folder:
+        query = query.filter_by(folder_id=int(folder))
+    
+    if sort_order == 'desc':
+        query = query.order_by(getattr(LocalListing, sort_by).desc())
+    else:
+        query = query.order_by(getattr(LocalListing, sort_by).asc())
+    
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    listings = pagination.items
+    
+    folders = ListingFolder.query.order_by(ListingFolder.name).all()
+    
+    return render_template('listings.html',
+                           listings=[l.to_dict() for l in listings],
+                           folders=[f.to_dict() for f in folders],
+                           pagination={
+                               'page': page,
+                               'per_page': per_page,
+                               'total': pagination.total,
+                               'pages': pagination.pages
+                           },
+                           current_status=status,
+                           current_folder=folder)
+
+
+@app.route('/<workspace_slug>/leads')
+@login_required
+@require_workspace_access
+def workspace_leads(workspace_slug):
+    """Workspace-scoped leads page"""
+    return render_template('leads.html')
+
+
+@app.route('/<workspace_slug>/tasks')
+@login_required
+@require_workspace_access
+def workspace_tasks(workspace_slug):
+    """Workspace-scoped tasks page"""
+    return render_template('tasks.html')
+
+
+@app.route('/<workspace_slug>/insights')
+@login_required
+@require_workspace_access
+def workspace_insights(workspace_slug):
+    """Workspace-scoped insights page"""
+    return render_template('insights.html')
+
+
+@app.route('/<workspace_slug>/image-editor')
+@login_required
+@require_workspace_access
+def workspace_image_editor(workspace_slug):
+    """Workspace-scoped image editor"""
+    return render_template('image_editor.html')
+
+
+@app.route('/<workspace_slug>/loops')
+@login_required
+@require_workspace_access
+def workspace_loops(workspace_slug):
+    """Workspace-scoped loops page"""
+    return render_template('loops.html')
+
+
+@app.route('/<workspace_slug>/auth')
+@login_required
+@require_workspace_access
+def workspace_auth(workspace_slug):
+    """Workspace-scoped PF Connect page"""
+    return render_template('auth.html')
+
+
+@app.route('/<workspace_slug>/users')
+@login_required
+@require_workspace_access
+def workspace_users(workspace_slug):
+    """Workspace-scoped users page - only for workspace admins"""
+    if not g.workspace.is_admin(g.user.id) and g.user.role != 'admin':
+        flash('Access denied. Workspace admin only.', 'error')
+        return redirect(url_for('workspace_dashboard', workspace_slug=workspace_slug))
+    
+    return render_template('users.html')
+
+
+@app.route('/<workspace_slug>/settings')
+@login_required
+@require_workspace_access
+def workspace_settings(workspace_slug):
+    """Workspace-scoped settings page"""
+    if not g.workspace.is_admin(g.user.id) and g.user.role != 'admin':
+        flash('Access denied. Workspace admin only.', 'error')
+        return redirect(url_for('workspace_dashboard', workspace_slug=workspace_slug))
+    
+    return render_template('settings.html')
+
+
+# ==================== WORKSPACES MANAGEMENT (ADMIN ONLY) ====================
 
 @app.route('/workspaces')
 @login_required
@@ -3001,21 +3272,33 @@ def profile():
 @app.route('/')
 @login_required
 def index():
-    """Dashboard home page"""
-    try:
-        # Get local stats
-        stats = {
-            'total': LocalListing.query.count(),
-            'published': LocalListing.query.filter_by(status='published').count(),
-            'draft': LocalListing.query.filter_by(status='draft').count(),
-        }
-        recent = LocalListing.query.order_by(LocalListing.updated_at.desc()).limit(5).all()
-        return render_template('index.html', stats=stats, recent_listings=[l.to_dict() for l in recent])
-    except Exception as e:
-        print(f"[ERROR] Index route error: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
+    """Dashboard home page - redirects to workspace if user has one"""
+    # Check if user has a workspace membership
+    membership = WorkspaceMember.query.filter_by(user_id=g.user.id).first()
+    if membership:
+        workspace = Workspace.query.get(membership.workspace_id)
+        if workspace and workspace.is_active:
+            return redirect(url_for('workspace_dashboard', workspace_slug=workspace.slug))
+    
+    # If admin with no workspace, show admin dashboard
+    if g.user.role == 'admin':
+        try:
+            stats = {
+                'total': LocalListing.query.count(),
+                'published': LocalListing.query.filter_by(status='published').count(),
+                'draft': LocalListing.query.filter_by(status='draft').count(),
+            }
+            recent = LocalListing.query.order_by(LocalListing.updated_at.desc()).limit(5).all()
+            return render_template('index.html', stats=stats, recent_listings=[l.to_dict() for l in recent])
+        except Exception as e:
+            print(f"[ERROR] Index route error: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+    
+    # No workspace found - show error or redirect to login
+    flash('You are not assigned to any workspace. Please contact your administrator.', 'warning')
+    return redirect(url_for('logout'))
 
 
 @app.route('/listings')

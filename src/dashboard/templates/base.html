@@ -27,82 +27,149 @@
             </div>
             
             <nav class="mt-6 pb-20">
-                <a href="{{ url_for('index') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'index' %}bg-indigo-700{% endif %}">
-                    <i class="fas fa-home w-8"></i>
-                    <span x-show="sidebarOpen">Dashboard</span>
-                </a>
-                <a href="{{ url_for('listings') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint in ['listings', 'view_listing', 'edit_listing'] %}bg-indigo-700{% endif %}">
-                    <i class="fas fa-list w-8"></i>
-                    <span x-show="sidebarOpen">Listings</span>
-                </a>
-                {% if current_user and current_user.has_permission('create') %}
-                <a href="{{ url_for('new_listing') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'new_listing' %}bg-indigo-700{% endif %}">
-                    <i class="fas fa-plus-circle w-8"></i>
-                    <span x-show="sidebarOpen">New Listing</span>
-                </a>
+                {# Use workspace-scoped URLs when in workspace context #}
+                {% if is_workspace_context and current_workspace %}
+                    {% set ws_slug = current_workspace.slug %}
+                    <a href="{{ url_for('workspace_dashboard', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_dashboard' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-home w-8"></i>
+                        <span x-show="sidebarOpen">Dashboard</span>
+                    </a>
+                    <a href="{{ url_for('workspace_listings', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint in ['workspace_listings'] %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-list w-8"></i>
+                        <span x-show="sidebarOpen">Listings</span>
+                    </a>
+                    {% if current_user and current_user.has_permission('create') %}
+                    <a href="{{ url_for('new_listing') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'new_listing' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-plus-circle w-8"></i>
+                        <span x-show="sidebarOpen">New Listing</span>
+                    </a>
+                    {% endif %}
+                    {% if current_user and current_user.has_permission('bulk_upload') %}
+                    <a href="{{ url_for('bulk_upload') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'bulk_upload' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-upload w-8"></i>
+                        <span x-show="sidebarOpen">Bulk Upload</span>
+                    </a>
+                    {% endif %}
+                    <a href="{{ url_for('workspace_image_editor', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_image_editor' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-image w-8"></i>
+                        <span x-show="sidebarOpen">Image Editor</span>
+                    </a>
+                    <a href="{{ url_for('workspace_loops', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_loops' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-sync-alt w-8"></i>
+                        <span x-show="sidebarOpen">Loops</span>
+                    </a>
+                    <a href="{{ url_for('workspace_insights', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_insights' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-chart-line w-8"></i>
+                        <span x-show="sidebarOpen">Insights</span>
+                    </a>
+                    <a href="{{ url_for('workspace_leads', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_leads' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-user-plus w-8"></i>
+                        <span x-show="sidebarOpen">Leads</span>
+                    </a>
+                    <a href="{{ url_for('workspace_tasks', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_tasks' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-tasks w-8"></i>
+                        <span x-show="sidebarOpen">Tasks</span>
+                    </a>
+                {% else %}
+                    {# Regular non-workspace URLs for admin portal #}
+                    <a href="{{ url_for('index') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'index' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-home w-8"></i>
+                        <span x-show="sidebarOpen">Dashboard</span>
+                    </a>
+                    <a href="{{ url_for('listings') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint in ['listings', 'view_listing', 'edit_listing'] %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-list w-8"></i>
+                        <span x-show="sidebarOpen">Listings</span>
+                    </a>
+                    {% if current_user and current_user.has_permission('create') %}
+                    <a href="{{ url_for('new_listing') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'new_listing' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-plus-circle w-8"></i>
+                        <span x-show="sidebarOpen">New Listing</span>
+                    </a>
+                    {% endif %}
+                    {% if current_user and current_user.has_permission('bulk_upload') %}
+                    <a href="{{ url_for('bulk_upload') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'bulk_upload' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-upload w-8"></i>
+                        <span x-show="sidebarOpen">Bulk Upload</span>
+                    </a>
+                    {% endif %}
+                    <a href="{{ url_for('image_editor') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'image_editor' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-image w-8"></i>
+                        <span x-show="sidebarOpen">Image Editor</span>
+                    </a>
+                    <a href="{{ url_for('loops_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'loops_page' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-sync-alt w-8"></i>
+                        <span x-show="sidebarOpen">Loops</span>
+                    </a>
+                    <a href="{{ url_for('insights') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'insights' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-chart-line w-8"></i>
+                        <span x-show="sidebarOpen">Insights</span>
+                    </a>
+                    <a href="{{ url_for('leads_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'leads_page' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-user-plus w-8"></i>
+                        <span x-show="sidebarOpen">Leads</span>
+                    </a>
+                    <a href="{{ url_for('tasks_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'tasks_page' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-tasks w-8"></i>
+                        <span x-show="sidebarOpen">Tasks</span>
+                    </a>
                 {% endif %}
-                {% if current_user and current_user.has_permission('bulk_upload') %}
-                <a href="{{ url_for('bulk_upload') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'bulk_upload' %}bg-indigo-700{% endif %}">
-                    <i class="fas fa-upload w-8"></i>
-                    <span x-show="sidebarOpen">Bulk Upload</span>
-                </a>
-                {% endif %}
-                <a href="{{ url_for('image_editor') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'image_editor' %}bg-indigo-700{% endif %}">
-                    <i class="fas fa-image w-8"></i>
-                    <span x-show="sidebarOpen">Image Editor</span>
-                </a>
-                <a href="{{ url_for('loops_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'loops_page' %}bg-indigo-700{% endif %}">
-                    <i class="fas fa-sync-alt w-8"></i>
-                    <span x-show="sidebarOpen">Loops</span>
-                </a>
-                <a href="{{ url_for('insights') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'insights' %}bg-indigo-700{% endif %}">`
-                    <i class="fas fa-chart-line w-8"></i>
-                    <span x-show="sidebarOpen">Insights</span>
-                </a>
-                <a href="{{ url_for('leads_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'leads_page' %}bg-indigo-700{% endif %}">
-                    <i class="fas fa-user-plus w-8"></i>
-                    <span x-show="sidebarOpen">Leads</span>
-                </a>
-                <a href="{{ url_for('tasks_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'tasks_page' %}bg-indigo-700{% endif %}">
-                    <i class="fas fa-tasks w-8"></i>
-                    <span x-show="sidebarOpen">Tasks</span>
-                </a>
                 
                 <div class="border-t border-indigo-700 my-2"></div>
                 
-                {% if current_user and (current_user.role == 'admin' or current_user.has_section_access('users')) %}
-                <a href="{{ url_for('users_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'users_page' %}bg-indigo-700{% endif %}">
-                    <i class="fas fa-users w-8"></i>
-                    <span x-show="sidebarOpen">Users</span>
-                </a>
-                {% endif %}
-                {% if current_user and current_user.role == 'admin' %}
-                <a href="{{ url_for('permissions_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'permissions_page' %}bg-indigo-700{% endif %}">
-                    <i class="fas fa-shield-alt w-8"></i>
-                    <span x-show="sidebarOpen">Permissions</span>
-                </a>
-                <a href="{{ url_for('workspaces_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspaces_page' %}bg-indigo-700{% endif %}">
-                    <i class="fas fa-layer-group w-8"></i>
-                    <span x-show="sidebarOpen">Workspaces</span>
-                </a>
-                <a href="{{ url_for('system_admin_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-red-700 {% if request.endpoint == 'system_admin_page' %}bg-red-700{% endif %}">
-                    <i class="fas fa-user-shield w-8"></i>
-                    <span x-show="sidebarOpen">System Admin</span>
-                </a>
-                {% endif %}
-                <a href="{{ url_for('auth_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'auth_page' %}bg-indigo-700{% endif %}">
-                    <i class="fas fa-plug w-8"></i>
-                    <span x-show="sidebarOpen">PF Connect</span>
-                </a>
-                {% if current_user and (current_user.role == 'admin' or current_user.has_section_access('settings')) %}
-                <a href="{{ url_for('storage_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'storage_page' %}bg-indigo-700{% endif %}">
-                    <i class="fas fa-hdd w-8"></i>
-                    <span x-show="sidebarOpen">Storage</span>
-                </a>
-                <a href="{{ url_for('settings') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'settings' %}bg-indigo-700{% endif %}">
-                    <i class="fas fa-cog w-8"></i>
-                    <span x-show="sidebarOpen">Settings</span>
-                </a>
+                {# Users link - workspace-scoped or regular #}
+                {% if is_workspace_context and current_workspace %}
+                    {% set ws_slug = current_workspace.slug %}
+                    <a href="{{ url_for('workspace_users', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_users' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-users w-8"></i>
+                        <span x-show="sidebarOpen">Users</span>
+                    </a>
+                    <a href="{{ url_for('workspace_auth', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_auth' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-plug w-8"></i>
+                        <span x-show="sidebarOpen">PF Connect</span>
+                    </a>
+                    <a href="{{ url_for('workspace_settings', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_settings' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-cog w-8"></i>
+                        <span x-show="sidebarOpen">Settings</span>
+                    </a>
+                {% else %}
+                    {# Regular admin context #}
+                    {% if current_user and (current_user.role == 'admin' or current_user.has_section_access('users')) %}
+                    <a href="{{ url_for('users_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'users_page' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-users w-8"></i>
+                        <span x-show="sidebarOpen">Users</span>
+                    </a>
+                    {% endif %}
+                    
+                    {# System admin links - only in admin portal #}
+                    {% if current_user and current_user.role == 'admin' %}
+                    <a href="{{ url_for('permissions_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'permissions_page' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-shield-alt w-8"></i>
+                        <span x-show="sidebarOpen">Permissions</span>
+                    </a>
+                    <a href="{{ url_for('workspaces_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspaces_page' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-layer-group w-8"></i>
+                        <span x-show="sidebarOpen">Workspaces</span>
+                    </a>
+                    <a href="{{ url_for('system_admin_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-red-700 {% if request.endpoint == 'system_admin_page' %}bg-red-700{% endif %}">
+                        <i class="fas fa-user-shield w-8"></i>
+                        <span x-show="sidebarOpen">System Admin</span>
+                    </a>
+                    {% endif %}
+                    
+                    <a href="{{ url_for('auth_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'auth_page' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-plug w-8"></i>
+                        <span x-show="sidebarOpen">PF Connect</span>
+                    </a>
+                    {% if current_user and (current_user.role == 'admin' or current_user.has_section_access('settings')) %}
+                    <a href="{{ url_for('storage_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'storage_page' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-hdd w-8"></i>
+                        <span x-show="sidebarOpen">Storage</span>
+                    </a>
+                    <a href="{{ url_for('settings') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'settings' %}bg-indigo-700{% endif %}">
+                        <i class="fas fa-cog w-8"></i>
+                        <span x-show="sidebarOpen">Settings</span>
+                    </a>
+                    {% endif %}
                 {% endif %}
             </nav>
         </aside>
