@@ -316,6 +316,95 @@ with app.app_context():
         except Exception as e:
             print(f"[MIGRATION] section_permissions column migration skipped or failed: {e}")
         
+        # Migration: Create workspaces tables
+        try:
+            with db.engine.connect() as conn:
+                # Check if workspaces table exists
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='workspaces'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating workspaces table...")
+                    conn.execute(text("""
+                        CREATE TABLE workspaces (
+                            id SERIAL PRIMARY KEY,
+                            name VARCHAR(100) NOT NULL,
+                            slug VARCHAR(100) UNIQUE NOT NULL,
+                            description TEXT,
+                            logo_url VARCHAR(500),
+                            color VARCHAR(20) DEFAULT 'indigo',
+                            is_active BOOLEAN DEFAULT TRUE,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            created_by_id INTEGER REFERENCES users(id)
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX idx_workspaces_slug ON workspaces(slug)"))
+                    conn.execute(text("CREATE INDEX idx_workspaces_is_active ON workspaces(is_active)"))
+                    conn.commit()
+                    print("[MIGRATION] workspaces table created successfully")
+                
+                # Check if workspace_members table exists
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='workspace_members'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating workspace_members table...")
+                    conn.execute(text("""
+                        CREATE TABLE workspace_members (
+                            id SERIAL PRIMARY KEY,
+                            workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                            user_id INTEGER NOT NULL REFERENCES users(id),
+                            role VARCHAR(20) DEFAULT 'member',
+                            joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            invited_by_id INTEGER REFERENCES users(id),
+                            UNIQUE(workspace_id, user_id)
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX idx_workspace_members_user ON workspace_members(user_id)"))
+                    conn.execute(text("CREATE INDEX idx_workspace_members_workspace ON workspace_members(workspace_id)"))
+                    conn.commit()
+                    print("[MIGRATION] workspace_members table created successfully")
+                
+                # Check if workspace_connections table exists
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='workspace_connections'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating workspace_connections table...")
+                    conn.execute(text("""
+                        CREATE TABLE workspace_connections (
+                            id SERIAL PRIMARY KEY,
+                            workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                            provider VARCHAR(50) NOT NULL,
+                            name VARCHAR(100),
+                            is_active BOOLEAN DEFAULT TRUE,
+                            credentials TEXT,
+                            last_connected_at TIMESTAMP,
+                            last_error TEXT,
+                            connection_status VARCHAR(20) DEFAULT 'pending',
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            created_by_id INTEGER REFERENCES users(id),
+                            UNIQUE(workspace_id, provider)
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX idx_workspace_connections_workspace ON workspace_connections(workspace_id)"))
+                    conn.execute(text("CREATE INDEX idx_workspace_connections_provider ON workspace_connections(provider)"))
+                    conn.commit()
+                    print("[MIGRATION] workspace_connections table created successfully")
+        except Exception as e:
+            print(f"[MIGRATION] workspaces tables creation skipped or failed: {e}")
+        
+        # Migration: Add workspace_id columns to existing tables
+        workspace_tables = ['listing_folders', 'listings', 'crm_leads', 'contacts', 'loop_configs', 'task_boards']
+        for table_name in workspace_tables:
+            try:
+                with db.engine.connect() as conn:
+                    result = conn.execute(text(f"SELECT column_name FROM information_schema.columns WHERE table_name='{table_name}' AND column_name='workspace_id'"))
+                    if not result.fetchone():
+                        print(f"[MIGRATION] Adding workspace_id column to {table_name}...")
+                        conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN workspace_id INTEGER REFERENCES workspaces(id)"))
+                        conn.execute(text(f"CREATE INDEX idx_{table_name}_workspace_id ON {table_name}(workspace_id)"))
+                        conn.commit()
+                        print(f"[MIGRATION] workspace_id column added to {table_name}")
+            except Exception as e:
+                print(f"[MIGRATION] workspace_id column for {table_name} skipped or failed: {e}")
+        
         # Initialize default settings
         AppSettings.init_defaults()
         
@@ -1562,6 +1651,472 @@ def api_update_user_permissions(user_id):
         'success': True,
         'user': user.to_dict(),
         'message': f'Permissions updated for {user.name}'
+    })
+
+
+# ==================== WORKSPACES ====================
+
+@app.route('/workspaces')
+@login_required
+def workspaces_page():
+    """Workspace management page - only for admins"""
+    if g.user.role != 'admin':
+        flash('Access denied. Admin only.', 'error')
+        return redirect(url_for('index'))
+    
+    from src.database.models import Workspace, WorkspaceMember, WorkspaceConnection
+    workspaces = Workspace.query.order_by(Workspace.name).all()
+    users = User.query.filter_by(is_active=True).order_by(User.name).all()
+    return render_template('workspaces.html', 
+                           workspaces=[w.to_dict(include_members=True, include_connections=True) for w in workspaces],
+                           users=[u.to_dict() for u in users],
+                           providers=WorkspaceConnection.PROVIDERS,
+                           colors=Workspace.COLORS)
+
+
+@app.route('/api/workspaces', methods=['GET'])
+@login_required
+def api_list_workspaces():
+    """List workspaces for current user"""
+    from src.database.models import Workspace, WorkspaceMember
+    
+    if g.user.role == 'admin':
+        # Admins see all workspaces
+        workspaces = Workspace.query.filter_by(is_active=True).all()
+    else:
+        # Regular users only see their workspaces
+        memberships = WorkspaceMember.query.filter_by(user_id=g.user.id).all()
+        workspace_ids = [m.workspace_id for m in memberships]
+        workspaces = Workspace.query.filter(
+            Workspace.id.in_(workspace_ids),
+            Workspace.is_active == True
+        ).all()
+    
+    return jsonify({
+        'success': True,
+        'workspaces': [w.to_dict() for w in workspaces]
+    })
+
+
+@app.route('/api/workspaces', methods=['POST'])
+@login_required
+def api_create_workspace():
+    """Create a new workspace"""
+    if g.user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Admin only'}), 403
+    
+    from src.database.models import Workspace, WorkspaceMember
+    data = request.get_json()
+    
+    name = data.get('name', '').strip()
+    if not name:
+        return jsonify({'success': False, 'error': 'Name is required'}), 400
+    
+    slug = Workspace.generate_slug(name)
+    # Ensure unique slug
+    base_slug = slug
+    counter = 1
+    while Workspace.query.filter_by(slug=slug).first():
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+    
+    workspace = Workspace(
+        name=name,
+        slug=slug,
+        description=data.get('description', ''),
+        color=data.get('color', 'indigo'),
+        created_by_id=g.user.id
+    )
+    db.session.add(workspace)
+    db.session.flush()  # Get the ID
+    
+    # Add creator as owner
+    member = WorkspaceMember(
+        workspace_id=workspace.id,
+        user_id=g.user.id,
+        role='owner'
+    )
+    db.session.add(member)
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'workspace': workspace.to_dict(include_members=True)
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>', methods=['PUT'])
+@login_required
+def api_update_workspace(workspace_id):
+    """Update a workspace"""
+    from src.database.models import Workspace
+    workspace = Workspace.query.get_or_404(workspace_id)
+    
+    if not workspace.is_admin(g.user.id) and g.user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    data = request.get_json()
+    
+    if 'name' in data:
+        workspace.name = data['name'].strip()
+    if 'description' in data:
+        workspace.description = data['description']
+    if 'color' in data:
+        workspace.color = data['color']
+    if 'logo_url' in data:
+        workspace.logo_url = data['logo_url']
+    if 'is_active' in data and g.user.role == 'admin':
+        workspace.is_active = data['is_active']
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'workspace': workspace.to_dict()
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>', methods=['DELETE'])
+@login_required
+def api_delete_workspace(workspace_id):
+    """Delete a workspace"""
+    if g.user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Admin only'}), 403
+    
+    from src.database.models import Workspace
+    workspace = Workspace.query.get_or_404(workspace_id)
+    
+    db.session.delete(workspace)
+    db.session.commit()
+    
+    return jsonify({'success': True, 'message': f'Workspace "{workspace.name}" deleted'})
+
+
+@app.route('/api/workspaces/<int:workspace_id>/members', methods=['GET'])
+@login_required
+def api_get_workspace_members(workspace_id):
+    """Get workspace members"""
+    from src.database.models import Workspace
+    workspace = Workspace.query.get_or_404(workspace_id)
+    
+    return jsonify({
+        'success': True,
+        'members': [m.to_dict() for m in workspace.members]
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>/members', methods=['POST'])
+@login_required
+def api_add_workspace_member(workspace_id):
+    """Add a member to workspace"""
+    from src.database.models import Workspace, WorkspaceMember
+    workspace = Workspace.query.get_or_404(workspace_id)
+    
+    if not workspace.is_admin(g.user.id) and g.user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    data = request.get_json()
+    user_id = data.get('user_id')
+    role = data.get('role', 'member')
+    
+    if not user_id:
+        return jsonify({'success': False, 'error': 'User ID required'}), 400
+    
+    # Check if already a member
+    existing = WorkspaceMember.query.filter_by(
+        workspace_id=workspace_id,
+        user_id=user_id
+    ).first()
+    
+    if existing:
+        return jsonify({'success': False, 'error': 'User is already a member'}), 400
+    
+    member = WorkspaceMember(
+        workspace_id=workspace_id,
+        user_id=user_id,
+        role=role,
+        invited_by_id=g.user.id
+    )
+    db.session.add(member)
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'member': member.to_dict()
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>/members/<int:member_id>', methods=['PUT'])
+@login_required
+def api_update_workspace_member(workspace_id, member_id):
+    """Update a workspace member's role"""
+    from src.database.models import Workspace, WorkspaceMember
+    workspace = Workspace.query.get_or_404(workspace_id)
+    member = WorkspaceMember.query.get_or_404(member_id)
+    
+    if member.workspace_id != workspace_id:
+        return jsonify({'success': False, 'error': 'Member not in this workspace'}), 400
+    
+    if not workspace.is_admin(g.user.id) and g.user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    data = request.get_json()
+    if 'role' in data:
+        # Prevent demoting the last owner
+        if member.role == 'owner':
+            owner_count = WorkspaceMember.query.filter_by(
+                workspace_id=workspace_id,
+                role='owner'
+            ).count()
+            if owner_count <= 1 and data['role'] != 'owner':
+                return jsonify({'success': False, 'error': 'Cannot demote the last owner'}), 400
+        member.role = data['role']
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'member': member.to_dict()
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>/members/<int:member_id>', methods=['DELETE'])
+@login_required
+def api_remove_workspace_member(workspace_id, member_id):
+    """Remove a member from workspace"""
+    from src.database.models import Workspace, WorkspaceMember
+    workspace = Workspace.query.get_or_404(workspace_id)
+    member = WorkspaceMember.query.get_or_404(member_id)
+    
+    if member.workspace_id != workspace_id:
+        return jsonify({'success': False, 'error': 'Member not in this workspace'}), 400
+    
+    if not workspace.is_admin(g.user.id) and g.user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    # Prevent removing the last owner
+    if member.role == 'owner':
+        owner_count = WorkspaceMember.query.filter_by(
+            workspace_id=workspace_id,
+            role='owner'
+        ).count()
+        if owner_count <= 1:
+            return jsonify({'success': False, 'error': 'Cannot remove the last owner'}), 400
+    
+    db.session.delete(member)
+    db.session.commit()
+    
+    return jsonify({'success': True})
+
+
+# ==================== WORKSPACE CONNECTIONS ====================
+
+@app.route('/workspaces/<int:workspace_id>/connections')
+@login_required
+def connections_page(workspace_id):
+    """Connection center for a workspace"""
+    from src.database.models import Workspace, WorkspaceConnection
+    workspace = Workspace.query.get_or_404(workspace_id)
+    
+    # Check access
+    if not workspace.get_member(g.user.id) and g.user.role != 'admin':
+        flash('Access denied.', 'error')
+        return redirect(url_for('index'))
+    
+    return render_template('connections.html',
+                           workspace=workspace.to_dict(include_connections=True),
+                           providers=WorkspaceConnection.PROVIDERS)
+
+
+@app.route('/api/workspaces/<int:workspace_id>/connections', methods=['GET'])
+@login_required
+def api_get_connections(workspace_id):
+    """Get workspace connections"""
+    from src.database.models import Workspace
+    workspace = Workspace.query.get_or_404(workspace_id)
+    
+    include_secrets = workspace.is_admin(g.user.id) or g.user.role == 'admin'
+    
+    return jsonify({
+        'success': True,
+        'connections': [c.to_dict(include_secrets=include_secrets) for c in workspace.connections]
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>/connections', methods=['POST'])
+@login_required
+def api_create_connection(workspace_id):
+    """Create a new connection"""
+    from src.database.models import Workspace, WorkspaceConnection
+    workspace = Workspace.query.get_or_404(workspace_id)
+    
+    member = workspace.get_member(g.user.id)
+    if not (member and member.can_manage_connections()) and g.user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    data = request.get_json()
+    provider = data.get('provider')
+    
+    if not provider or provider not in WorkspaceConnection.PROVIDERS:
+        return jsonify({'success': False, 'error': 'Invalid provider'}), 400
+    
+    # Check if connection already exists
+    existing = WorkspaceConnection.query.filter_by(
+        workspace_id=workspace_id,
+        provider=provider
+    ).first()
+    
+    if existing:
+        return jsonify({'success': False, 'error': f'{provider} connection already exists'}), 400
+    
+    connection = WorkspaceConnection(
+        workspace_id=workspace_id,
+        provider=provider,
+        name=data.get('name'),
+        created_by_id=g.user.id
+    )
+    connection.set_credentials(data.get('credentials', {}))
+    
+    db.session.add(connection)
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'connection': connection.to_dict()
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>/connections/<int:connection_id>', methods=['PUT'])
+@login_required
+def api_update_connection(workspace_id, connection_id):
+    """Update a connection"""
+    from src.database.models import Workspace, WorkspaceConnection
+    workspace = Workspace.query.get_or_404(workspace_id)
+    connection = WorkspaceConnection.query.get_or_404(connection_id)
+    
+    if connection.workspace_id != workspace_id:
+        return jsonify({'success': False, 'error': 'Connection not in this workspace'}), 400
+    
+    member = workspace.get_member(g.user.id)
+    if not (member and member.can_manage_connections()) and g.user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    data = request.get_json()
+    
+    if 'name' in data:
+        connection.name = data['name']
+    if 'is_active' in data:
+        connection.is_active = data['is_active']
+    if 'credentials' in data:
+        connection.set_credentials(data['credentials'])
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'connection': connection.to_dict()
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>/connections/<int:connection_id>', methods=['DELETE'])
+@login_required
+def api_delete_connection(workspace_id, connection_id):
+    """Delete a connection"""
+    from src.database.models import Workspace, WorkspaceConnection
+    workspace = Workspace.query.get_or_404(workspace_id)
+    connection = WorkspaceConnection.query.get_or_404(connection_id)
+    
+    if connection.workspace_id != workspace_id:
+        return jsonify({'success': False, 'error': 'Connection not in this workspace'}), 400
+    
+    member = workspace.get_member(g.user.id)
+    if not (member and member.can_manage_connections()) and g.user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    db.session.delete(connection)
+    db.session.commit()
+    
+    return jsonify({'success': True})
+
+
+@app.route('/api/workspaces/<int:workspace_id>/connections/<int:connection_id>/test', methods=['POST'])
+@login_required
+def api_test_connection(workspace_id, connection_id):
+    """Test a connection"""
+    from src.database.models import Workspace, WorkspaceConnection
+    workspace = Workspace.query.get_or_404(workspace_id)
+    connection = WorkspaceConnection.query.get_or_404(connection_id)
+    
+    if connection.workspace_id != workspace_id:
+        return jsonify({'success': False, 'error': 'Connection not in this workspace'}), 400
+    
+    try:
+        if connection.provider == 'propertyfinder':
+            # Test PropertyFinder connection
+            creds = connection.get_credentials()
+            api_key = creds.get('api_key')
+            api_secret = creds.get('api_secret')
+            
+            if not api_key or not api_secret:
+                return jsonify({'success': False, 'error': 'Missing API credentials'}), 400
+            
+            import requests
+            response = requests.post(
+                'https://atlas.propertyfinder.com/v1/auth/token',
+                json={'apiKey': api_key, 'apiSecret': api_secret},
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                connection.connection_status = 'connected'
+                connection.last_connected_at = datetime.utcnow()
+                connection.last_error = None
+            else:
+                connection.connection_status = 'error'
+                connection.last_error = f'HTTP {response.status_code}: {response.text[:200]}'
+        else:
+            # Generic test - just mark as connected
+            connection.connection_status = 'connected'
+            connection.last_connected_at = datetime.utcnow()
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': connection.connection_status == 'connected',
+            'status': connection.connection_status,
+            'error': connection.last_error
+        })
+        
+    except Exception as e:
+        connection.connection_status = 'error'
+        connection.last_error = str(e)
+        db.session.commit()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==================== WORKSPACE SESSION ====================
+
+@app.route('/api/workspace/switch/<int:workspace_id>', methods=['POST'])
+@login_required
+def api_switch_workspace(workspace_id):
+    """Switch to a different workspace"""
+    from src.database.models import Workspace, WorkspaceMember
+    workspace = Workspace.query.get_or_404(workspace_id)
+    
+    # Check access
+    if g.user.role != 'admin':
+        member = WorkspaceMember.query.filter_by(
+            workspace_id=workspace_id,
+            user_id=g.user.id
+        ).first()
+        if not member:
+            return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    session['active_workspace_id'] = workspace_id
+    
+    return jsonify({
+        'success': True,
+        'workspace': workspace.to_dict()
     })
 
 

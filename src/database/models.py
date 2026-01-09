@@ -326,6 +326,278 @@ class User(db.Model):
         }
 
 
+# ==================== WORKSPACES ====================
+
+class Workspace(db.Model):
+    """Workspace - isolated environment with its own API connections and data"""
+    __tablename__ = 'workspaces'
+    __table_args__ = (
+        db.Index('idx_workspaces_slug', 'slug'),
+        db.Index('idx_workspaces_is_active', 'is_active'),
+    )
+    
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    slug = db.Column(db.String(100), unique=True, nullable=False, index=True)
+    description = db.Column(db.Text, nullable=True)
+    logo_url = db.Column(db.String(500), nullable=True)
+    color = db.Column(db.String(20), default='indigo')  # Theme color
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    
+    # Relationships
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+    members = db.relationship('WorkspaceMember', back_populates='workspace', cascade='all, delete-orphan')
+    connections = db.relationship('WorkspaceConnection', back_populates='workspace', cascade='all, delete-orphan')
+    
+    # Available colors
+    COLORS = ['indigo', 'blue', 'green', 'yellow', 'red', 'purple', 'pink', 'gray', 'orange', 'teal', 'cyan', 'emerald']
+    
+    def get_connection(self, provider):
+        """Get connection for a specific provider"""
+        for conn in self.connections:
+            if conn.provider == provider and conn.is_active:
+                return conn
+        return None
+    
+    def get_member(self, user_id):
+        """Get member by user ID"""
+        for member in self.members:
+            if member.user_id == user_id:
+                return member
+        return None
+    
+    def is_owner(self, user_id):
+        """Check if user is owner"""
+        member = self.get_member(user_id)
+        return member and member.role == 'owner'
+    
+    def is_admin(self, user_id):
+        """Check if user is admin or owner"""
+        member = self.get_member(user_id)
+        return member and member.role in ('owner', 'admin')
+    
+    def to_dict(self, include_members=False, include_connections=False):
+        """Convert to dictionary"""
+        data = {
+            'id': self.id,
+            'name': self.name,
+            'slug': self.slug,
+            'description': self.description,
+            'logo_url': self.logo_url,
+            'color': self.color,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'member_count': len(self.members),
+            'connection_count': len([c for c in self.connections if c.is_active])
+        }
+        if include_members:
+            data['members'] = [m.to_dict() for m in self.members]
+        if include_connections:
+            data['connections'] = [c.to_dict(include_secrets=False) for c in self.connections]
+        return data
+    
+    @staticmethod
+    def generate_slug(name):
+        """Generate a URL-safe slug from name"""
+        import re
+        slug = name.lower().strip()
+        slug = re.sub(r'[^\w\s-]', '', slug)
+        slug = re.sub(r'[-\s]+', '-', slug)
+        return slug
+
+
+class WorkspaceMember(db.Model):
+    """Workspace membership - links users to workspaces with roles"""
+    __tablename__ = 'workspace_members'
+    __table_args__ = (
+        db.UniqueConstraint('workspace_id', 'user_id', name='uq_workspace_user'),
+        db.Index('idx_workspace_members_user', 'user_id'),
+        db.Index('idx_workspace_members_workspace', 'workspace_id'),
+    )
+    
+    id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    role = db.Column(db.String(20), default='member')  # owner, admin, member, viewer
+    joined_at = db.Column(db.DateTime, default=datetime.utcnow)
+    invited_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    
+    # Relationships
+    workspace = db.relationship('Workspace', back_populates='members')
+    user = db.relationship('User', foreign_keys=[user_id])
+    invited_by = db.relationship('User', foreign_keys=[invited_by_id])
+    
+    # Role definitions
+    ROLES = {
+        'owner': {'name': 'Owner', 'description': 'Full control, can delete workspace'},
+        'admin': {'name': 'Admin', 'description': 'Manage members and connections'},
+        'member': {'name': 'Member', 'description': 'Full access to workspace data'},
+        'viewer': {'name': 'Viewer', 'description': 'Read-only access'}
+    }
+    
+    def can_manage_members(self):
+        return self.role in ('owner', 'admin')
+    
+    def can_manage_connections(self):
+        return self.role in ('owner', 'admin')
+    
+    def can_edit_data(self):
+        return self.role in ('owner', 'admin', 'member')
+    
+    def can_view_data(self):
+        return True
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'workspace_id': self.workspace_id,
+            'user_id': self.user_id,
+            'user_name': self.user.name if self.user else None,
+            'user_email': self.user.email if self.user else None,
+            'role': self.role,
+            'role_name': self.ROLES.get(self.role, {}).get('name', 'Member'),
+            'joined_at': self.joined_at.isoformat() if self.joined_at else None,
+            'can_manage_members': self.can_manage_members(),
+            'can_manage_connections': self.can_manage_connections(),
+            'can_edit_data': self.can_edit_data()
+        }
+
+
+class WorkspaceConnection(db.Model):
+    """API connection credentials for a workspace"""
+    __tablename__ = 'workspace_connections'
+    __table_args__ = (
+        db.UniqueConstraint('workspace_id', 'provider', name='uq_workspace_provider'),
+        db.Index('idx_workspace_connections_workspace', 'workspace_id'),
+        db.Index('idx_workspace_connections_provider', 'provider'),
+    )
+    
+    id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id'), nullable=False)
+    provider = db.Column(db.String(50), nullable=False)  # propertyfinder, bayut, dubizzle, etc.
+    name = db.Column(db.String(100), nullable=True)  # Display name
+    is_active = db.Column(db.Boolean, default=True)
+    
+    # Encrypted credentials (stored as JSON)
+    credentials = db.Column(db.Text, nullable=True)  # JSON: {api_key, api_secret, ...}
+    
+    # Connection status
+    last_connected_at = db.Column(db.DateTime, nullable=True)
+    last_error = db.Column(db.Text, nullable=True)
+    connection_status = db.Column(db.String(20), default='pending')  # pending, connected, error
+    
+    # Metadata
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    
+    # Relationships
+    workspace = db.relationship('Workspace', back_populates='connections')
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+    
+    # Provider definitions
+    PROVIDERS = {
+        'propertyfinder': {
+            'name': 'PropertyFinder',
+            'icon': 'fa-building',
+            'color': 'blue',
+            'fields': [
+                {'key': 'api_key', 'label': 'API Key', 'type': 'text', 'required': True},
+                {'key': 'api_secret', 'label': 'API Secret', 'type': 'password', 'required': True},
+            ],
+            'base_url': 'https://atlas.propertyfinder.com/v1'
+        },
+        'bayut': {
+            'name': 'Bayut',
+            'icon': 'fa-home',
+            'color': 'red',
+            'fields': [
+                {'key': 'api_key', 'label': 'API Key', 'type': 'text', 'required': True},
+                {'key': 'api_secret', 'label': 'API Secret', 'type': 'password', 'required': True},
+            ],
+            'base_url': 'https://api.bayut.com/v1'
+        },
+        'dubizzle': {
+            'name': 'Dubizzle',
+            'icon': 'fa-map-marker-alt',
+            'color': 'orange',
+            'fields': [
+                {'key': 'api_key', 'label': 'API Key', 'type': 'text', 'required': True},
+                {'key': 'api_secret', 'label': 'API Secret', 'type': 'password', 'required': True},
+            ],
+            'base_url': 'https://api.dubizzle.com/v1'
+        },
+        'google_drive': {
+            'name': 'Google Drive',
+            'icon': 'fab fa-google-drive',
+            'color': 'green',
+            'fields': [
+                {'key': 'folder_id', 'label': 'Folder ID', 'type': 'text', 'required': True},
+                {'key': 'service_account_json', 'label': 'Service Account JSON', 'type': 'textarea', 'required': False},
+            ],
+            'base_url': None
+        }
+    }
+    
+    def get_credentials(self):
+        """Get credentials as dictionary"""
+        import json
+        if self.credentials:
+            try:
+                return json.loads(self.credentials)
+            except:
+                return {}
+        return {}
+    
+    def set_credentials(self, creds_dict):
+        """Set credentials from dictionary"""
+        import json
+        if creds_dict:
+            self.credentials = json.dumps(creds_dict)
+        else:
+            self.credentials = '{}'
+    
+    def get_credential(self, key):
+        """Get a specific credential value"""
+        return self.get_credentials().get(key)
+    
+    def to_dict(self, include_secrets=False):
+        """Convert to dictionary"""
+        provider_info = self.PROVIDERS.get(self.provider, {})
+        data = {
+            'id': self.id,
+            'workspace_id': self.workspace_id,
+            'provider': self.provider,
+            'provider_name': provider_info.get('name', self.provider),
+            'provider_icon': provider_info.get('icon', 'fa-plug'),
+            'provider_color': provider_info.get('color', 'gray'),
+            'name': self.name or provider_info.get('name', self.provider),
+            'is_active': self.is_active,
+            'connection_status': self.connection_status,
+            'last_connected_at': self.last_connected_at.isoformat() if self.last_connected_at else None,
+            'last_error': self.last_error,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+        if include_secrets:
+            data['credentials'] = self.get_credentials()
+        else:
+            # Show masked credentials
+            creds = self.get_credentials()
+            masked = {}
+            for key, value in creds.items():
+                if value and len(str(value)) > 4:
+                    masked[key] = str(value)[:4] + '****'
+                else:
+                    masked[key] = '****' if value else ''
+            data['credentials_masked'] = masked
+        return data
+
+
 # ==================== LISTING FOLDERS ====================
 
 class ListingFolder(db.Model):
@@ -334,9 +606,11 @@ class ListingFolder(db.Model):
     __table_args__ = (
         db.Index('idx_folders_parent_id', 'parent_id'),
         db.Index('idx_folders_name', 'name'),
+        db.Index('idx_folders_workspace_id', 'workspace_id'),
     )
     
     id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id'), nullable=True, index=True)
     name = db.Column(db.String(100), nullable=False)
     color = db.Column(db.String(20), default='indigo')  # CSS color class
     icon = db.Column(db.String(50), default='fa-folder')  # FontAwesome icon
@@ -346,6 +620,7 @@ class ListingFolder(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
+    workspace = db.relationship('Workspace', foreign_keys=[workspace_id])
     parent = db.relationship('ListingFolder', remote_side=[id], backref='subfolders')
     listings = db.relationship('LocalListing', backref='folder', lazy='dynamic')
     
@@ -386,6 +661,7 @@ class LocalListing(db.Model):
     """Local listing storage model"""
     __tablename__ = 'listings'
     __table_args__ = (
+        db.Index('idx_listings_workspace_id', 'workspace_id'),
         db.Index('idx_listings_folder_id', 'folder_id'),
         db.Index('idx_listings_status', 'status'),
         db.Index('idx_listings_offering_type', 'offering_type'),
@@ -403,9 +679,11 @@ class LocalListing(db.Model):
         db.Index('idx_listings_status_offering', 'status', 'offering_type'),
         db.Index('idx_listings_emirate_city', 'emirate', 'city'),
         db.Index('idx_listings_type_beds_price', 'property_type', 'bedrooms', 'price'),
+        db.Index('idx_listings_workspace_status', 'workspace_id', 'status'),
     )
     
     id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id'), nullable=True, index=True)
     reference = db.Column(db.String(50), unique=True, nullable=False, index=True)
     
     # Folder/Group assignment
@@ -998,6 +1276,7 @@ class Lead(db.Model):
     """Incoming leads from all sources: PropertyFinder, Bayut, Zapier, etc."""
     __tablename__ = 'crm_leads'
     __table_args__ = (
+        db.Index('idx_leads_workspace_id', 'workspace_id'),
         db.Index('idx_leads_status', 'status'),
         db.Index('idx_leads_source', 'source'),
         db.Index('idx_leads_priority', 'priority'),
@@ -1014,9 +1293,11 @@ class Lead(db.Model):
         db.Index('idx_leads_status_source', 'status', 'source'),
         db.Index('idx_leads_status_assigned', 'status', 'assigned_to_id'),
         db.Index('idx_leads_agent_status', 'pf_agent_id', 'status'),
+        db.Index('idx_leads_workspace_status', 'workspace_id', 'status'),
     )
     
     id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id'), nullable=True, index=True)
     
     # Source
     source = db.Column(db.String(30), default='other')  # propertyfinder, bayut, website, facebook, instagram, zapier, phone, email
@@ -1133,6 +1414,7 @@ class Contact(db.Model):
     """Saved contacts with phone numbers and country codes"""
     __tablename__ = 'contacts'
     __table_args__ = (
+        db.Index('idx_contacts_workspace_id', 'workspace_id'),
         db.Index('idx_contacts_name', 'name'),
         db.Index('idx_contacts_phone', 'phone'),
         db.Index('idx_contacts_email', 'email'),
@@ -1142,6 +1424,7 @@ class Contact(db.Model):
     )
     
     id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id'), nullable=True, index=True)
     name = db.Column(db.String(200), nullable=False)
     phone = db.Column(db.String(50), nullable=False)  # Full phone with country code
     country_code = db.Column(db.String(10), default='+971')  # UAE default
@@ -1372,11 +1655,13 @@ class LoopConfig(db.Model):
     """Configuration for a listing loop (auto-duplicate/republish)"""
     __tablename__ = 'loop_configs'
     __table_args__ = (
+        db.Index('idx_loop_configs_workspace_id', 'workspace_id'),
         db.Index('idx_loop_configs_is_active', 'is_active'),
         db.Index('idx_loop_configs_next_run', 'next_run_at'),
     )
     
     id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id'), nullable=True, index=True)
     name = db.Column(db.String(100), nullable=False)
     
     # Loop type: 'duplicate' = create copy & publish, 'delete_republish' = delete from PF & republish
@@ -1698,6 +1983,7 @@ class TaskBoard(db.Model):
     """Task boards for organizing tasks (like Trello boards)"""
     __tablename__ = 'task_boards'
     __table_args__ = (
+        db.Index('idx_task_boards_workspace_id', 'workspace_id'),
         db.Index('idx_task_boards_created_by_id', 'created_by_id'),
         db.Index('idx_task_boards_is_archived', 'is_archived'),
         db.Index('idx_task_boards_is_private', 'is_private'),
@@ -1705,6 +1991,7 @@ class TaskBoard(db.Model):
     )
     
     id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id'), nullable=True, index=True)
     name = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, nullable=True)
     color = db.Column(db.String(20), default='#3b82f6')  # Board color

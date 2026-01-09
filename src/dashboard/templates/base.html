@@ -81,6 +81,10 @@
                     <i class="fas fa-shield-alt w-8"></i>
                     <span x-show="sidebarOpen">Permissions</span>
                 </a>
+                <a href="{{ url_for('workspaces_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspaces_page' %}bg-indigo-700{% endif %}">
+                    <i class="fas fa-layer-group w-8"></i>
+                    <span x-show="sidebarOpen">Workspaces</span>
+                </a>
                 {% endif %}
                 <a href="{{ url_for('auth_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'auth_page' %}bg-indigo-700{% endif %}">
                     <i class="fas fa-plug w-8"></i>
