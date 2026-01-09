@@ -4095,7 +4095,7 @@ def api_get_config():
 
 
 @app.route('/api/test-connection', methods=['GET', 'POST'])
-def api_test_connection():
+def api_test_pf_connection():
     """API: Test the Enterprise API connection"""
     try:
         client = get_client()
