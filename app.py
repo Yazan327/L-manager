@@ -4901,7 +4901,10 @@ def api_get_leads():
     - Non-admin users only see leads assigned to them
     - Unassigned leads (assigned_to_id is NULL) are only visible to admins
     """
-    query = Lead.query.order_by(Lead.created_at.desc())
+    from sqlalchemy.orm import joinedload
+    
+    # Use joinedload to prevent N+1 query problem (each lead would query user separately)
+    query = Lead.query.options(joinedload(Lead.assigned_to)).order_by(Lead.created_at.desc())
     
     # Filter by assignment for non-admin users
     if g.user.role != 'admin':
