@@ -1,0 +1,625 @@
+{% extends "base.html" %}
+
+{% block title %}System Administration - L-Manager{% endblock %}
+{% block page_title %}System Administration{% endblock %}
+
+{% block content %}
+<div x-data="systemAdminManager()" x-init="init()" class="max-w-7xl mx-auto">
+    
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h2 class="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                <i class="fas fa-shield-alt text-red-500"></i>
+                System Administration
+            </h2>
+            <p class="text-gray-500 mt-1">Global system settings, roles, and feature flags</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <span class="px-3 py-1 bg-red-100 text-red-700 rounded-full text-sm font-medium">
+                <i class="fas fa-user-shield mr-1"></i> System Admin Access
+            </span>
+        </div>
+    </div>
+    
+    <!-- Tabs -->
+    <div class="bg-white rounded-lg shadow mb-6">
+        <div class="border-b border-gray-200">
+            <nav class="flex -mb-px">
+                <button @click="activeTab = 'overview'" 
+                        :class="activeTab === 'overview' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                        class="py-4 px-6 border-b-2 font-medium text-sm">
+                    <i class="fas fa-chart-pie mr-2"></i>Overview
+                </button>
+                <button @click="activeTab = 'workspaces'" 
+                        :class="activeTab === 'workspaces' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                        class="py-4 px-6 border-b-2 font-medium text-sm">
+                    <i class="fas fa-layer-group mr-2"></i>All Workspaces
+                </button>
+                <button @click="activeTab = 'system-roles'" 
+                        :class="activeTab === 'system-roles' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                        class="py-4 px-6 border-b-2 font-medium text-sm">
+                    <i class="fas fa-user-tag mr-2"></i>System Roles
+                </button>
+                <button @click="activeTab = 'users'" 
+                        :class="activeTab === 'users' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                        class="py-4 px-6 border-b-2 font-medium text-sm">
+                    <i class="fas fa-users-cog mr-2"></i>User Roles
+                </button>
+                <button @click="activeTab = 'feature-flags'" 
+                        :class="activeTab === 'feature-flags' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                        class="py-4 px-6 border-b-2 font-medium text-sm">
+                    <i class="fas fa-toggle-on mr-2"></i>Feature Flags
+                </button>
+                <button @click="activeTab = 'audit'" 
+                        :class="activeTab === 'audit' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                        class="py-4 px-6 border-b-2 font-medium text-sm">
+                    <i class="fas fa-history mr-2"></i>Audit Logs
+                </button>
+            </nav>
+        </div>
+    </div>
+    
+    <!-- Overview Tab -->
+    <div x-show="activeTab === 'overview'" class="space-y-6">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="flex items-center">
+                    <div class="p-3 rounded-full bg-indigo-100 text-indigo-600">
+                        <i class="fas fa-layer-group text-xl"></i>
+                    </div>
+                    <div class="ml-4">
+                        <p class="text-sm font-medium text-gray-500">Workspaces</p>
+                        <p class="text-2xl font-semibold text-gray-900" x-text="stats.workspaces || 0"></p>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="flex items-center">
+                    <div class="p-3 rounded-full bg-green-100 text-green-600">
+                        <i class="fas fa-users text-xl"></i>
+                    </div>
+                    <div class="ml-4">
+                        <p class="text-sm font-medium text-gray-500">Total Users</p>
+                        <p class="text-2xl font-semibold text-gray-900" x-text="stats.users || 0"></p>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="flex items-center">
+                    <div class="p-3 rounded-full bg-yellow-100 text-yellow-600">
+                        <i class="fas fa-user-shield text-xl"></i>
+                    </div>
+                    <div class="ml-4">
+                        <p class="text-sm font-medium text-gray-500">System Admins</p>
+                        <p class="text-2xl font-semibold text-gray-900" x-text="stats.system_admins || 0"></p>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="flex items-center">
+                    <div class="p-3 rounded-full bg-blue-100 text-blue-600">
+                        <i class="fas fa-toggle-on text-xl"></i>
+                    </div>
+                    <div class="ml-4">
+                        <p class="text-sm font-medium text-gray-500">Active Flags</p>
+                        <p class="text-2xl font-semibold text-gray-900" x-text="stats.active_flags || 0"></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Permission Enforcement Status -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                <i class="fas fa-shield-alt text-indigo-500"></i>
+                Permission Enforcement Status
+            </h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                    <div>
+                        <p class="font-medium">Permission Enforcement</p>
+                        <p class="text-sm text-gray-500">Strict permission checking on all actions</p>
+                    </div>
+                    <span :class="permissionEnforcementEnabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'"
+                          class="px-3 py-1 rounded-full text-sm font-medium"
+                          x-text="permissionEnforcementEnabled ? 'Enabled' : 'Disabled'"></span>
+                </div>
+                <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                    <div>
+                        <p class="font-medium">Audit Mode</p>
+                        <p class="text-sm text-gray-500">Log permission checks without blocking</p>
+                    </div>
+                    <span :class="auditModeEnabled ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-600'"
+                          class="px-3 py-1 rounded-full text-sm font-medium"
+                          x-text="auditModeEnabled ? 'Enabled' : 'Disabled'"></span>
+                </div>
+            </div>
+            <p class="mt-4 text-sm text-gray-500">
+                <i class="fas fa-info-circle mr-1"></i>
+                When disabled, the system operates in backward-compatible mode. Enable permission enforcement to activate the Bitrix24-style permission model.
+            </p>
+        </div>
+    </div>
+    
+    <!-- All Workspaces Tab -->
+    <div x-show="activeTab === 'workspaces'" class="space-y-6">
+        <div class="bg-white rounded-lg shadow">
+            <div class="px-6 py-4 border-b flex items-center justify-between">
+                <h3 class="text-lg font-semibold">All Workspaces</h3>
+                <a href="{{ url_for('workspaces_page') }}" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">
+                    <i class="fas fa-plus mr-1"></i> Create Workspace
+                </a>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Workspace</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Members</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Connections</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        <template x-for="ws in workspaces" :key="ws.id">
+                            <tr>
+                                <td class="px-6 py-4">
+                                    <div class="flex items-center">
+                                        <div class="w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold"
+                                             :class="'bg-' + ws.color + '-500'">
+                                            <span x-text="ws.name.charAt(0).toUpperCase()"></span>
+                                        </div>
+                                        <div class="ml-3">
+                                            <p class="font-medium text-gray-900" x-text="ws.name"></p>
+                                            <p class="text-sm text-gray-500" x-text="ws.slug"></p>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td class="px-6 py-4" x-text="ws.member_count"></td>
+                                <td class="px-6 py-4" x-text="ws.connection_count"></td>
+                                <td class="px-6 py-4">
+                                    <span x-show="ws.is_active" class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-700">Active</span>
+                                    <span x-show="!ws.is_active" class="px-2 py-1 text-xs rounded-full bg-red-100 text-red-700">Inactive</span>
+                                </td>
+                                <td class="px-6 py-4">
+                                    <a :href="'/workspace/' + ws.id + '/admin'" class="text-indigo-600 hover:text-indigo-900">
+                                        <i class="fas fa-cog mr-1"></i> Manage
+                                    </a>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <!-- System Roles Tab -->
+    <div x-show="activeTab === 'system-roles'" class="space-y-6">
+        <div class="bg-white rounded-lg shadow">
+            <div class="px-6 py-4 border-b flex items-center justify-between">
+                <h3 class="text-lg font-semibold">System Roles</h3>
+                <button @click="showCreateRoleModal = true" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">
+                    <i class="fas fa-plus mr-1"></i> Create Role
+                </button>
+            </div>
+            <div class="p-6 space-y-4">
+                <template x-for="role in systemRoles" :key="role.id">
+                    <div class="border rounded-lg p-4">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <div class="flex items-center gap-2">
+                                    <h4 class="font-semibold text-gray-900" x-text="role.name"></h4>
+                                    <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-600" x-text="role.code"></span>
+                                    <span x-show="role.is_system" class="px-2 py-0.5 text-xs rounded bg-blue-100 text-blue-600">Built-in</span>
+                                </div>
+                                <p class="text-sm text-gray-500 mt-1" x-text="role.description"></p>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button @click="viewRoleCapabilities(role)" class="px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
+                                    <i class="fas fa-eye mr-1"></i> View
+                                </button>
+                            </div>
+                        </div>
+                        <!-- Capabilities Preview -->
+                        <div class="mt-3 flex flex-wrap gap-2">
+                            <template x-for="(value, key) in role.capabilities" :key="key">
+                                <span x-show="value" class="px-2 py-0.5 text-xs rounded bg-green-50 text-green-700" x-text="key"></span>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+    
+    <!-- User Roles Tab -->
+    <div x-show="activeTab === 'users'" class="space-y-6">
+        <div class="bg-white rounded-lg shadow">
+            <div class="px-6 py-4 border-b">
+                <h3 class="text-lg font-semibold">User System Role Assignments</h3>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">User</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Legacy Role</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">System Roles</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        <template x-for="user in users" :key="user.id">
+                            <tr>
+                                <td class="px-6 py-4">
+                                    <div>
+                                        <p class="font-medium text-gray-900" x-text="user.name"></p>
+                                        <p class="text-sm text-gray-500" x-text="user.email"></p>
+                                    </div>
+                                </td>
+                                <td class="px-6 py-4">
+                                    <span :class="user.role === 'admin' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600'"
+                                          class="px-2 py-1 text-xs rounded-full" x-text="user.role"></span>
+                                </td>
+                                <td class="px-6 py-4">
+                                    <div class="flex flex-wrap gap-1">
+                                        <template x-for="role in user.system_roles" :key="role.id">
+                                            <span class="px-2 py-0.5 text-xs rounded bg-indigo-100 text-indigo-700" x-text="role.role_code"></span>
+                                        </template>
+                                        <span x-show="!user.system_roles || user.system_roles.length === 0" class="text-gray-400 text-sm">No system roles</span>
+                                    </div>
+                                </td>
+                                <td class="px-6 py-4">
+                                    <button @click="manageUserRoles(user)" class="text-indigo-600 hover:text-indigo-900 text-sm">
+                                        <i class="fas fa-edit mr-1"></i> Manage
+                                    </button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Feature Flags Tab -->
+    <div x-show="activeTab === 'feature-flags'" class="space-y-6">
+        <div class="bg-white rounded-lg shadow">
+            <div class="px-6 py-4 border-b">
+                <h3 class="text-lg font-semibold">Feature Flags</h3>
+                <p class="text-sm text-gray-500 mt-1">Control feature rollout and permission enforcement</p>
+            </div>
+            <div class="p-6 space-y-4">
+                <template x-for="flag in featureFlags" :key="flag.id">
+                    <div class="flex items-center justify-between p-4 border rounded-lg" :class="flag.is_enabled ? 'border-green-200 bg-green-50' : ''">
+                        <div class="flex-1">
+                            <div class="flex items-center gap-2">
+                                <h4 class="font-medium text-gray-900" x-text="flag.name"></h4>
+                                <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-600" x-text="flag.code"></span>
+                                <span class="px-2 py-0.5 text-xs rounded bg-blue-50 text-blue-600" x-text="flag.scope"></span>
+                            </div>
+                            <p class="text-sm text-gray-500 mt-1" x-text="flag.description"></p>
+                        </div>
+                        <div class="ml-4">
+                            <button @click="toggleFlag(flag)" 
+                                    :class="flag.is_enabled ? 'bg-green-500' : 'bg-gray-300'"
+                                    class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
+                                <span :class="flag.is_enabled ? 'translate-x-5' : 'translate-x-0'"
+                                      class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"></span>
+                            </button>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Audit Logs Tab -->
+    <div x-show="activeTab === 'audit'" class="space-y-6">
+        <div class="bg-white rounded-lg shadow">
+            <div class="px-6 py-4 border-b flex items-center justify-between">
+                <h3 class="text-lg font-semibold">Audit Logs</h3>
+                <div class="flex items-center gap-4">
+                    <select x-model="auditFilter.action" @change="loadAuditLogs()" class="border rounded-lg px-3 py-2 text-sm">
+                        <option value="">All Actions</option>
+                        <option value="permission_check">Permission Check</option>
+                        <option value="permission_denied">Permission Denied</option>
+                        <option value="role_assigned">Role Assigned</option>
+                        <option value="role_removed">Role Removed</option>
+                    </select>
+                    <button @click="loadAuditLogs()" class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm">
+                        <i class="fas fa-refresh mr-1"></i> Refresh
+                    </button>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Timestamp</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">User</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Result</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Resource</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">IP</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        <template x-for="log in auditLogs" :key="log.id">
+                            <tr>
+                                <td class="px-6 py-4 text-sm text-gray-500" x-text="formatDate(log.created_at)"></td>
+                                <td class="px-6 py-4 text-sm" x-text="log.user_email || 'System'"></td>
+                                <td class="px-6 py-4">
+                                    <span class="px-2 py-0.5 text-xs rounded"
+                                          :class="{
+                                              'bg-green-100 text-green-700': log.action === 'permission_check',
+                                              'bg-red-100 text-red-700': log.action === 'permission_denied',
+                                              'bg-blue-100 text-blue-700': log.action === 'role_assigned',
+                                              'bg-yellow-100 text-yellow-700': log.action === 'role_removed'
+                                          }"
+                                          x-text="log.action"></span>
+                                </td>
+                                <td class="px-6 py-4">
+                                    <span :class="log.action_result === 'allowed' ? 'text-green-600' : 'text-red-600'" x-text="log.action_result"></span>
+                                </td>
+                                <td class="px-6 py-4 text-sm text-gray-500" x-text="(log.resource_type || '') + (log.resource_id ? ' #' + log.resource_id : '')"></td>
+                                <td class="px-6 py-4 text-sm text-gray-400" x-text="log.ip_address || '-'"></td>
+                            </tr>
+                        </template>
+                        <tr x-show="auditLogs.length === 0">
+                            <td colspan="6" class="px-6 py-8 text-center text-gray-500">No audit logs found</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <!-- Pagination -->
+            <div x-show="auditPagination.pages > 1" class="px-6 py-4 border-t flex items-center justify-between">
+                <p class="text-sm text-gray-500">
+                    Showing page <span x-text="auditPagination.page"></span> of <span x-text="auditPagination.pages"></span>
+                </p>
+                <div class="flex gap-2">
+                    <button @click="loadAuditLogs(auditPagination.page - 1)" :disabled="auditPagination.page <= 1"
+                            class="px-3 py-1 border rounded text-sm disabled:opacity-50">Previous</button>
+                    <button @click="loadAuditLogs(auditPagination.page + 1)" :disabled="auditPagination.page >= auditPagination.pages"
+                            class="px-3 py-1 border rounded text-sm disabled:opacity-50">Next</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Manage User Roles Modal -->
+    <div x-show="showUserRolesModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" x-cloak>
+        <div @click.away="showUserRolesModal = false" class="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4">
+            <div class="px-6 py-4 border-b flex items-center justify-between">
+                <h3 class="text-lg font-semibold">Manage System Roles</h3>
+                <button @click="showUserRolesModal = false" class="text-gray-400 hover:text-gray-600">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="p-6">
+                <p class="text-gray-600 mb-4">User: <strong x-text="selectedUser?.name"></strong> (<span x-text="selectedUser?.email"></span>)</p>
+                
+                <div class="space-y-3">
+                    <template x-for="role in systemRoles" :key="role.id">
+                        <label class="flex items-center justify-between p-3 border rounded-lg cursor-pointer hover:bg-gray-50">
+                            <div>
+                                <p class="font-medium" x-text="role.name"></p>
+                                <p class="text-sm text-gray-500" x-text="role.description"></p>
+                            </div>
+                            <input type="checkbox" 
+                                   :checked="userHasRole(role.code)"
+                                   @change="toggleUserRole(role.code, $event.target.checked)"
+                                   class="h-5 w-5 text-indigo-600 rounded">
+                        </label>
+                    </template>
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t bg-gray-50 flex justify-end">
+                <button @click="showUserRolesModal = false" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function systemAdminManager() {
+    return {
+        activeTab: 'overview',
+        stats: {},
+        workspaces: [],
+        systemRoles: [],
+        users: [],
+        featureFlags: [],
+        auditLogs: [],
+        auditPagination: { page: 1, pages: 1 },
+        auditFilter: { action: '' },
+        permissionEnforcementEnabled: false,
+        auditModeEnabled: false,
+        
+        showUserRolesModal: false,
+        selectedUser: null,
+        showCreateRoleModal: false,
+        
+        async init() {
+            await Promise.all([
+                this.loadWorkspaces(),
+                this.loadSystemRoles(),
+                this.loadUsers(),
+                this.loadFeatureFlags(),
+                this.loadAuditLogs()
+            ]);
+            this.calculateStats();
+        },
+        
+        async loadWorkspaces() {
+            try {
+                const resp = await fetch('/api/workspaces');
+                const data = await resp.json();
+                if (data.success) {
+                    this.workspaces = data.workspaces;
+                }
+            } catch (e) {
+                console.error('Failed to load workspaces:', e);
+            }
+        },
+        
+        async loadSystemRoles() {
+            try {
+                const resp = await fetch('/api/system/roles');
+                const data = await resp.json();
+                if (data.success) {
+                    this.systemRoles = data.roles;
+                }
+            } catch (e) {
+                console.error('Failed to load system roles:', e);
+            }
+        },
+        
+        async loadUsers() {
+            try {
+                const resp = await fetch('/api/users');
+                const data = await resp.json();
+                if (data.success) {
+                    // Load system roles for each user
+                    for (let user of data.users) {
+                        const rolesResp = await fetch(`/api/users/${user.id}/system-roles`);
+                        const rolesData = await rolesResp.json();
+                        user.system_roles = rolesData.success ? rolesData.roles : [];
+                    }
+                    this.users = data.users;
+                }
+            } catch (e) {
+                console.error('Failed to load users:', e);
+            }
+        },
+        
+        async loadFeatureFlags() {
+            try {
+                const resp = await fetch('/api/system/feature-flags');
+                const data = await resp.json();
+                if (data.success) {
+                    this.featureFlags = data.flags;
+                    // Check specific flags
+                    const enforcementFlag = this.featureFlags.find(f => f.code === 'permission_enforcement');
+                    const auditFlag = this.featureFlags.find(f => f.code === 'audit_mode');
+                    this.permissionEnforcementEnabled = enforcementFlag?.is_enabled || false;
+                    this.auditModeEnabled = auditFlag?.is_enabled || false;
+                }
+            } catch (e) {
+                console.error('Failed to load feature flags:', e);
+            }
+        },
+        
+        async loadAuditLogs(page = 1) {
+            try {
+                let url = `/api/system/audit-logs?page=${page}`;
+                if (this.auditFilter.action) {
+                    url += `&action=${this.auditFilter.action}`;
+                }
+                const resp = await fetch(url);
+                const data = await resp.json();
+                if (data.success) {
+                    this.auditLogs = data.logs;
+                    this.auditPagination = data.pagination;
+                }
+            } catch (e) {
+                console.error('Failed to load audit logs:', e);
+            }
+        },
+        
+        calculateStats() {
+            this.stats = {
+                workspaces: this.workspaces.length,
+                users: this.users.length,
+                system_admins: this.users.filter(u => 
+                    u.role === 'admin' || u.system_roles?.some(r => r.role_code === 'SYSTEM_ADMIN')
+                ).length,
+                active_flags: this.featureFlags.filter(f => f.is_enabled).length
+            };
+        },
+        
+        async toggleFlag(flag) {
+            try {
+                const resp = await fetch(`/api/system/feature-flags/${flag.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ is_enabled: !flag.is_enabled })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    flag.is_enabled = data.flag.is_enabled;
+                    // Update specific flag states
+                    if (flag.code === 'permission_enforcement') {
+                        this.permissionEnforcementEnabled = flag.is_enabled;
+                    } else if (flag.code === 'audit_mode') {
+                        this.auditModeEnabled = flag.is_enabled;
+                    }
+                    this.calculateStats();
+                }
+            } catch (e) {
+                console.error('Failed to toggle flag:', e);
+            }
+        },
+        
+        viewRoleCapabilities(role) {
+            alert('Capabilities for ' + role.name + ':\n\n' + 
+                  Object.entries(role.capabilities || {})
+                      .filter(([k, v]) => v)
+                      .map(([k, v]) => '• ' + k)
+                      .join('\n') || 'No capabilities');
+        },
+        
+        manageUserRoles(user) {
+            this.selectedUser = user;
+            this.showUserRolesModal = true;
+        },
+        
+        userHasRole(roleCode) {
+            return this.selectedUser?.system_roles?.some(r => r.role_code === roleCode);
+        },
+        
+        async toggleUserRole(roleCode, assign) {
+            if (!this.selectedUser) return;
+            
+            try {
+                if (assign) {
+                    const resp = await fetch(`/api/users/${this.selectedUser.id}/system-roles`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ role_code: roleCode })
+                    });
+                    const data = await resp.json();
+                    if (data.success) {
+                        if (!this.selectedUser.system_roles) {
+                            this.selectedUser.system_roles = [];
+                        }
+                        this.selectedUser.system_roles.push(data.assignment);
+                    }
+                } else {
+                    const resp = await fetch(`/api/users/${this.selectedUser.id}/system-roles/${roleCode}`, {
+                        method: 'DELETE'
+                    });
+                    const data = await resp.json();
+                    if (data.success) {
+                        this.selectedUser.system_roles = this.selectedUser.system_roles.filter(r => r.role_code !== roleCode);
+                    }
+                }
+                this.calculateStats();
+            } catch (e) {
+                console.error('Failed to toggle user role:', e);
+            }
+        },
+        
+        formatDate(dateStr) {
+            if (!dateStr) return '-';
+            return new Date(dateStr).toLocaleString();
+        }
+    };
+}
+</script>
+{% endblock %}

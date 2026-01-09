@@ -598,6 +598,534 @@ class WorkspaceConnection(db.Model):
         return data
 
 
+# ==================== BITRIX24-STYLE PERMISSION SYSTEM ====================
+
+class SystemRole(db.Model):
+    """System-level roles (Portal/Tenant level) - Bitrix24 style
+    These roles apply across all workspaces and define global capabilities.
+    """
+    __tablename__ = 'system_roles'
+    __table_args__ = (
+        db.Index('idx_system_roles_code', 'code'),
+    )
+    
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(50), unique=True, nullable=False)  # SYSTEM_ADMIN, GLOBAL_WORKSPACE_MANAGER, USER
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    is_system = db.Column(db.Boolean, default=False)  # Built-in role, cannot be deleted
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Capabilities stored as JSON: {"manage_workspaces": true, "view_all_workspaces": true, ...}
+    capabilities = db.Column(db.Text, default='{}')
+    
+    # System role codes
+    SYSTEM_ADMIN = 'SYSTEM_ADMIN'
+    GLOBAL_WORKSPACE_MANAGER = 'GLOBAL_WORKSPACE_MANAGER'
+    USER = 'USER'
+    
+    # Default system roles with capabilities
+    DEFAULT_ROLES = {
+        'SYSTEM_ADMIN': {
+            'name': 'System Administrator',
+            'description': 'Full system access including all configurations',
+            'capabilities': {
+                'manage_system': True,
+                'manage_workspaces': True,
+                'view_all_workspaces': True,
+                'manage_users': True,
+                'manage_system_roles': True,
+                'manage_feature_flags': True,
+                'view_audit_logs': True,
+                'manage_global_settings': True,
+            }
+        },
+        'GLOBAL_WORKSPACE_MANAGER': {
+            'name': 'Global Workspace Manager',
+            'description': 'Can manage all workspaces without accessing private content',
+            'capabilities': {
+                'manage_workspaces': True,
+                'view_all_workspaces': True,
+                'assign_workspace_admins': True,
+                'configure_workspace_features': True,
+                'view_workspace_stats': True,
+            }
+        },
+        'USER': {
+            'name': 'Regular User',
+            'description': 'Standard user with workspace-based permissions only',
+            'capabilities': {}
+        }
+    }
+    
+    def get_capabilities(self):
+        """Get capabilities as dictionary"""
+        import json
+        if self.capabilities:
+            try:
+                return json.loads(self.capabilities)
+            except:
+                return {}
+        return {}
+    
+    def set_capabilities(self, caps_dict):
+        """Set capabilities from dictionary"""
+        import json
+        self.capabilities = json.dumps(caps_dict) if caps_dict else '{}'
+    
+    def has_capability(self, capability):
+        """Check if role has a specific capability"""
+        return self.get_capabilities().get(capability, False)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'code': self.code,
+            'name': self.name,
+            'description': self.description,
+            'is_system': self.is_system,
+            'capabilities': self.get_capabilities(),
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+class UserSystemRole(db.Model):
+    """Links users to system-level roles"""
+    __tablename__ = 'user_system_roles'
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'system_role_id', name='uq_user_system_role'),
+        db.Index('idx_user_system_roles_user', 'user_id'),
+        db.Index('idx_user_system_roles_role', 'system_role_id'),
+    )
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    system_role_id = db.Column(db.Integer, db.ForeignKey('system_roles.id', ondelete='CASCADE'), nullable=False)
+    assigned_at = db.Column(db.DateTime, default=datetime.utcnow)
+    assigned_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    
+    # Relationships
+    user = db.relationship('User', foreign_keys=[user_id], backref=db.backref('system_roles_assoc', lazy='dynamic'))
+    system_role = db.relationship('SystemRole')
+    assigned_by = db.relationship('User', foreign_keys=[assigned_by_id])
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'system_role_id': self.system_role_id,
+            'role_code': self.system_role.code if self.system_role else None,
+            'role_name': self.system_role.name if self.system_role else None,
+            'assigned_at': self.assigned_at.isoformat() if self.assigned_at else None
+        }
+
+
+class WorkspaceRole(db.Model):
+    """Workspace-level roles - can be default or custom per workspace
+    Bitrix24-style: WORKSPACE_ADMIN, MODERATOR, MEMBER, EXTERNAL
+    """
+    __tablename__ = 'workspace_roles'
+    __table_args__ = (
+        db.Index('idx_workspace_roles_workspace', 'workspace_id'),
+        db.Index('idx_workspace_roles_code', 'code'),
+    )
+    
+    id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=True)  # NULL = global template
+    code = db.Column(db.String(50), nullable=False)  # WORKSPACE_ADMIN, MODERATOR, MEMBER, EXTERNAL
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    is_default = db.Column(db.Boolean, default=False)  # Is this the default role for new members?
+    is_system = db.Column(db.Boolean, default=False)  # Built-in role template
+    priority = db.Column(db.Integer, default=0)  # Higher = more privileged
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Permission buckets - JSON: {"manage_members": "admin_only", "edit_data": "all_members", ...}
+    # Values: "admin_only", "admin_moderator", "all_members", "authorized", "external", "deny"
+    permission_buckets = db.Column(db.Text, default='{}')
+    
+    # Role codes
+    WORKSPACE_ADMIN = 'WORKSPACE_ADMIN'
+    MODERATOR = 'MODERATOR'
+    MEMBER = 'MEMBER'
+    EXTERNAL = 'EXTERNAL'
+    
+    # Permission bucket values
+    BUCKET_ADMIN_ONLY = 'admin_only'
+    BUCKET_ADMIN_MODERATOR = 'admin_moderator'
+    BUCKET_ALL_MEMBERS = 'all_members'
+    BUCKET_AUTHORIZED = 'authorized'
+    BUCKET_EXTERNAL = 'external'
+    BUCKET_DENY = 'deny'
+    
+    # Default workspace roles
+    DEFAULT_ROLES = {
+        'WORKSPACE_ADMIN': {
+            'name': 'Workspace Admin',
+            'description': 'Full control of the workspace',
+            'priority': 100,
+            'buckets': {
+                'manage_members': 'admin_only',
+                'manage_roles': 'admin_only',
+                'manage_connections': 'admin_only',
+                'manage_settings': 'admin_only',
+                'delete_workspace': 'admin_only',
+                'view_data': 'all_members',
+                'create_data': 'all_members',
+                'edit_data': 'all_members',
+                'delete_data': 'admin_moderator',
+            }
+        },
+        'MODERATOR': {
+            'name': 'Moderator',
+            'description': 'Can moderate content and assist with management',
+            'priority': 50,
+            'buckets': {
+                'manage_members': 'admin_moderator',
+                'manage_roles': 'deny',
+                'manage_connections': 'deny',
+                'manage_settings': 'deny',
+                'delete_workspace': 'deny',
+                'view_data': 'all_members',
+                'create_data': 'all_members',
+                'edit_data': 'all_members',
+                'delete_data': 'admin_moderator',
+            }
+        },
+        'MEMBER': {
+            'name': 'Member',
+            'description': 'Standard workspace member with full data access',
+            'priority': 10,
+            'buckets': {
+                'manage_members': 'deny',
+                'manage_roles': 'deny',
+                'manage_connections': 'deny',
+                'manage_settings': 'deny',
+                'delete_workspace': 'deny',
+                'view_data': 'all_members',
+                'create_data': 'all_members',
+                'edit_data': 'all_members',
+                'delete_data': 'deny',
+            }
+        },
+        'EXTERNAL': {
+            'name': 'External/Guest',
+            'description': 'Limited access for external collaborators',
+            'priority': 1,
+            'buckets': {
+                'manage_members': 'deny',
+                'manage_roles': 'deny',
+                'manage_connections': 'deny',
+                'manage_settings': 'deny',
+                'delete_workspace': 'deny',
+                'view_data': 'external',
+                'create_data': 'deny',
+                'edit_data': 'deny',
+                'delete_data': 'deny',
+            }
+        }
+    }
+    
+    def get_permission_buckets(self):
+        """Get permission buckets as dictionary"""
+        import json
+        if self.permission_buckets:
+            try:
+                return json.loads(self.permission_buckets)
+            except:
+                return {}
+        return {}
+    
+    def set_permission_buckets(self, buckets_dict):
+        """Set permission buckets from dictionary"""
+        import json
+        self.permission_buckets = json.dumps(buckets_dict) if buckets_dict else '{}'
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'workspace_id': self.workspace_id,
+            'code': self.code,
+            'name': self.name,
+            'description': self.description,
+            'is_default': self.is_default,
+            'is_system': self.is_system,
+            'priority': self.priority,
+            'permission_buckets': self.get_permission_buckets(),
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+class ModulePermission(db.Model):
+    """Module-level RBAC - defines what each workspace role can do in each module
+    Modules: listings, leads, tasks, contacts, insights, etc.
+    """
+    __tablename__ = 'module_permissions'
+    __table_args__ = (
+        db.UniqueConstraint('workspace_role_id', 'module', name='uq_role_module'),
+        db.Index('idx_module_permissions_role', 'workspace_role_id'),
+        db.Index('idx_module_permissions_module', 'module'),
+    )
+    
+    id = db.Column(db.Integer, primary_key=True)
+    workspace_role_id = db.Column(db.Integer, db.ForeignKey('workspace_roles.id', ondelete='CASCADE'), nullable=False)
+    module = db.Column(db.String(50), nullable=False)  # listings, leads, tasks, contacts, insights
+    
+    # Capabilities for this module - JSON: {"read": true, "create": true, "edit": "own", ...}
+    # Values: true, false, "own", "team", "subteam", "workspace"
+    capabilities = db.Column(db.Text, default='{}')
+    
+    # Merge strategy for multiple roles
+    merge_strategy = db.Column(db.String(20), default='union')  # union, most_permissive, least_permissive
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Scope levels
+    SCOPE_NONE = False
+    SCOPE_ALL = True
+    SCOPE_OWN = 'own'
+    SCOPE_TEAM = 'team'
+    SCOPE_SUBTEAM = 'subteam'
+    SCOPE_WORKSPACE = 'workspace'
+    
+    # Available modules (matches User.SECTIONS)
+    MODULES = ['dashboard', 'listings', 'leads', 'insights', 'tasks', 'contacts', 'users', 'settings']
+    
+    # Relationship
+    workspace_role = db.relationship('WorkspaceRole', backref=db.backref('module_permissions', lazy='dynamic'))
+    
+    def get_capabilities(self):
+        """Get capabilities as dictionary"""
+        import json
+        if self.capabilities:
+            try:
+                return json.loads(self.capabilities)
+            except:
+                return {}
+        return {}
+    
+    def set_capabilities(self, caps_dict):
+        """Set capabilities from dictionary"""
+        import json
+        self.capabilities = json.dumps(caps_dict) if caps_dict else '{}'
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'workspace_role_id': self.workspace_role_id,
+            'module': self.module,
+            'capabilities': self.get_capabilities(),
+            'merge_strategy': self.merge_strategy,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+class ObjectACL(db.Model):
+    """Object-level ACL - per-object permission overrides with inheritance
+    Can be applied to listings, folders, leads, tasks, etc.
+    """
+    __tablename__ = 'object_acls'
+    __table_args__ = (
+        db.Index('idx_object_acl_object', 'object_type', 'object_id'),
+        db.Index('idx_object_acl_principal', 'principal_type', 'principal_id'),
+    )
+    
+    id = db.Column(db.Integer, primary_key=True)
+    
+    # Object being protected
+    object_type = db.Column(db.String(50), nullable=False)  # listing, folder, lead, task, contact
+    object_id = db.Column(db.Integer, nullable=False)
+    
+    # Principal (who has access)
+    principal_type = db.Column(db.String(20), nullable=False)  # user, workspace_role, team
+    principal_id = db.Column(db.Integer, nullable=False)
+    
+    # Permissions - JSON: {"read": true, "edit": true, "delete": false, "share": true, "admin": false}
+    permissions = db.Column(db.Text, default='{}')
+    
+    # Inheritance
+    inherit_from_parent = db.Column(db.Boolean, default=True)
+    propagate_to_children = db.Column(db.Boolean, default=True)
+    
+    # Metadata
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    
+    # Permission levels
+    PERM_READ = 'read'
+    PERM_CREATE = 'create'
+    PERM_EDIT = 'edit'
+    PERM_DELETE = 'delete'
+    PERM_SHARE = 'share'
+    PERM_ADMIN = 'admin'
+    
+    ALL_PERMISSIONS = [PERM_READ, PERM_CREATE, PERM_EDIT, PERM_DELETE, PERM_SHARE, PERM_ADMIN]
+    
+    def get_permissions(self):
+        """Get permissions as dictionary"""
+        import json
+        if self.permissions:
+            try:
+                return json.loads(self.permissions)
+            except:
+                return {}
+        return {}
+    
+    def set_permissions(self, perms_dict):
+        """Set permissions from dictionary"""
+        import json
+        self.permissions = json.dumps(perms_dict) if perms_dict else '{}'
+    
+    def has_permission(self, perm):
+        """Check if this ACL grants a specific permission"""
+        return self.get_permissions().get(perm, False)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'object_type': self.object_type,
+            'object_id': self.object_id,
+            'principal_type': self.principal_type,
+            'principal_id': self.principal_id,
+            'permissions': self.get_permissions(),
+            'inherit_from_parent': self.inherit_from_parent,
+            'propagate_to_children': self.propagate_to_children,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+class FeatureFlag(db.Model):
+    """Feature flags for controlling permission enforcement and features
+    Supports global, workspace, and module scopes
+    """
+    __tablename__ = 'feature_flags'
+    __table_args__ = (
+        db.UniqueConstraint('code', 'scope', 'scope_id', name='uq_feature_flag'),
+        db.Index('idx_feature_flags_code', 'code'),
+        db.Index('idx_feature_flags_scope', 'scope', 'scope_id'),
+    )
+    
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(100), nullable=False)  # permission_enforcement, audit_mode, new_feature_x
+    name = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    
+    # Scope: global, workspace, module
+    scope = db.Column(db.String(20), default='global')
+    scope_id = db.Column(db.Integer, nullable=True)  # workspace_id or null for global
+    
+    # Value
+    is_enabled = db.Column(db.Boolean, default=False)
+    value = db.Column(db.Text, nullable=True)  # Optional JSON value for complex flags
+    
+    # Metadata
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    
+    # Common feature flag codes
+    PERMISSION_ENFORCEMENT = 'permission_enforcement'
+    AUDIT_MODE = 'audit_mode'
+    WORKSPACE_ISOLATION = 'workspace_isolation'
+    OBJECT_ACL = 'object_acl'
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'code': self.code,
+            'name': self.name,
+            'description': self.description,
+            'scope': self.scope,
+            'scope_id': self.scope_id,
+            'is_enabled': self.is_enabled,
+            'value': self.value,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+class AuditLog(db.Model):
+    """Audit log for tracking permission checks and changes
+    Used for security monitoring and compliance
+    """
+    __tablename__ = 'audit_logs'
+    __table_args__ = (
+        db.Index('idx_audit_logs_user', 'user_id'),
+        db.Index('idx_audit_logs_action', 'action'),
+        db.Index('idx_audit_logs_resource', 'resource_type', 'resource_id'),
+        db.Index('idx_audit_logs_created_at', 'created_at'),
+        db.Index('idx_audit_logs_workspace', 'workspace_id'),
+    )
+    
+    id = db.Column(db.Integer, primary_key=True)
+    
+    # Actor
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    user_email = db.Column(db.String(120), nullable=True)  # Denormalized for history
+    
+    # Action
+    action = db.Column(db.String(100), nullable=False)  # permission_check, role_change, acl_update, etc.
+    action_result = db.Column(db.String(20), nullable=True)  # allowed, denied, error
+    
+    # Resource
+    resource_type = db.Column(db.String(50), nullable=True)  # workspace, listing, lead, etc.
+    resource_id = db.Column(db.Integer, nullable=True)
+    workspace_id = db.Column(db.Integer, nullable=True)
+    
+    # Details - JSON
+    details = db.Column(db.Text, nullable=True)
+    
+    # Request context
+    ip_address = db.Column(db.String(50), nullable=True)
+    user_agent = db.Column(db.String(500), nullable=True)
+    
+    # Timestamp
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Action types
+    ACTION_PERMISSION_CHECK = 'permission_check'
+    ACTION_PERMISSION_DENIED = 'permission_denied'
+    ACTION_ROLE_ASSIGNED = 'role_assigned'
+    ACTION_ROLE_REMOVED = 'role_removed'
+    ACTION_ACL_CREATED = 'acl_created'
+    ACTION_ACL_UPDATED = 'acl_updated'
+    ACTION_ACL_DELETED = 'acl_deleted'
+    ACTION_WORKSPACE_CREATED = 'workspace_created'
+    ACTION_WORKSPACE_DELETED = 'workspace_deleted'
+    ACTION_MEMBER_ADDED = 'member_added'
+    ACTION_MEMBER_REMOVED = 'member_removed'
+    
+    def get_details(self):
+        """Get details as dictionary"""
+        import json
+        if self.details:
+            try:
+                return json.loads(self.details)
+            except:
+                return {}
+        return {}
+    
+    def set_details(self, details_dict):
+        """Set details from dictionary"""
+        import json
+        self.details = json.dumps(details_dict) if details_dict else None
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'user_email': self.user_email,
+            'action': self.action,
+            'action_result': self.action_result,
+            'resource_type': self.resource_type,
+            'resource_id': self.resource_id,
+            'workspace_id': self.workspace_id,
+            'details': self.get_details(),
+            'ip_address': self.ip_address,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
 # ==================== LISTING FOLDERS ====================
 
 class ListingFolder(db.Model):

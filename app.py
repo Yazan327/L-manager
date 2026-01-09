@@ -405,6 +405,274 @@ with app.app_context():
             except Exception as e:
                 print(f"[MIGRATION] workspace_id column for {table_name} skipped or failed: {e}")
         
+        # ==================== BITRIX24-STYLE PERMISSION SYSTEM MIGRATION ====================
+        
+        # Migration: Create system_roles table
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='system_roles'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating system_roles table...")
+                    conn.execute(text("""
+                        CREATE TABLE system_roles (
+                            id SERIAL PRIMARY KEY,
+                            code VARCHAR(50) UNIQUE NOT NULL,
+                            name VARCHAR(100) NOT NULL,
+                            description TEXT,
+                            is_system BOOLEAN DEFAULT FALSE,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            capabilities TEXT DEFAULT '{}'
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX idx_system_roles_code ON system_roles(code)"))
+                    conn.commit()
+                    print("[MIGRATION] system_roles table created successfully")
+        except Exception as e:
+            print(f"[MIGRATION] system_roles table creation skipped or failed: {e}")
+        
+        # Migration: Create user_system_roles table
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='user_system_roles'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating user_system_roles table...")
+                    conn.execute(text("""
+                        CREATE TABLE user_system_roles (
+                            id SERIAL PRIMARY KEY,
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            system_role_id INTEGER NOT NULL REFERENCES system_roles(id) ON DELETE CASCADE,
+                            assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            assigned_by_id INTEGER REFERENCES users(id),
+                            UNIQUE(user_id, system_role_id)
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX idx_user_system_roles_user ON user_system_roles(user_id)"))
+                    conn.execute(text("CREATE INDEX idx_user_system_roles_role ON user_system_roles(system_role_id)"))
+                    conn.commit()
+                    print("[MIGRATION] user_system_roles table created successfully")
+        except Exception as e:
+            print(f"[MIGRATION] user_system_roles table creation skipped or failed: {e}")
+        
+        # Migration: Create workspace_roles table
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='workspace_roles'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating workspace_roles table...")
+                    conn.execute(text("""
+                        CREATE TABLE workspace_roles (
+                            id SERIAL PRIMARY KEY,
+                            workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
+                            code VARCHAR(50) NOT NULL,
+                            name VARCHAR(100) NOT NULL,
+                            description TEXT,
+                            is_default BOOLEAN DEFAULT FALSE,
+                            is_system BOOLEAN DEFAULT FALSE,
+                            priority INTEGER DEFAULT 0,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            permission_buckets TEXT DEFAULT '{}'
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX idx_workspace_roles_workspace ON workspace_roles(workspace_id)"))
+                    conn.execute(text("CREATE INDEX idx_workspace_roles_code ON workspace_roles(code)"))
+                    conn.commit()
+                    print("[MIGRATION] workspace_roles table created successfully")
+        except Exception as e:
+            print(f"[MIGRATION] workspace_roles table creation skipped or failed: {e}")
+        
+        # Migration: Create module_permissions table
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='module_permissions'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating module_permissions table...")
+                    conn.execute(text("""
+                        CREATE TABLE module_permissions (
+                            id SERIAL PRIMARY KEY,
+                            workspace_role_id INTEGER NOT NULL REFERENCES workspace_roles(id) ON DELETE CASCADE,
+                            module VARCHAR(50) NOT NULL,
+                            capabilities TEXT DEFAULT '{}',
+                            merge_strategy VARCHAR(20) DEFAULT 'union',
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            UNIQUE(workspace_role_id, module)
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX idx_module_permissions_role ON module_permissions(workspace_role_id)"))
+                    conn.execute(text("CREATE INDEX idx_module_permissions_module ON module_permissions(module)"))
+                    conn.commit()
+                    print("[MIGRATION] module_permissions table created successfully")
+        except Exception as e:
+            print(f"[MIGRATION] module_permissions table creation skipped or failed: {e}")
+        
+        # Migration: Create object_acls table
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='object_acls'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating object_acls table...")
+                    conn.execute(text("""
+                        CREATE TABLE object_acls (
+                            id SERIAL PRIMARY KEY,
+                            object_type VARCHAR(50) NOT NULL,
+                            object_id INTEGER NOT NULL,
+                            principal_type VARCHAR(20) NOT NULL,
+                            principal_id INTEGER NOT NULL,
+                            permissions TEXT DEFAULT '{}',
+                            inherit_from_parent BOOLEAN DEFAULT TRUE,
+                            propagate_to_children BOOLEAN DEFAULT TRUE,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            created_by_id INTEGER REFERENCES users(id)
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX idx_object_acl_object ON object_acls(object_type, object_id)"))
+                    conn.execute(text("CREATE INDEX idx_object_acl_principal ON object_acls(principal_type, principal_id)"))
+                    conn.commit()
+                    print("[MIGRATION] object_acls table created successfully")
+        except Exception as e:
+            print(f"[MIGRATION] object_acls table creation skipped or failed: {e}")
+        
+        # Migration: Create feature_flags table
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='feature_flags'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating feature_flags table...")
+                    conn.execute(text("""
+                        CREATE TABLE feature_flags (
+                            id SERIAL PRIMARY KEY,
+                            code VARCHAR(100) NOT NULL,
+                            name VARCHAR(200) NOT NULL,
+                            description TEXT,
+                            scope VARCHAR(20) DEFAULT 'global',
+                            scope_id INTEGER,
+                            is_enabled BOOLEAN DEFAULT FALSE,
+                            value TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_by_id INTEGER REFERENCES users(id),
+                            UNIQUE(code, scope, scope_id)
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX idx_feature_flags_code ON feature_flags(code)"))
+                    conn.execute(text("CREATE INDEX idx_feature_flags_scope ON feature_flags(scope, scope_id)"))
+                    conn.commit()
+                    print("[MIGRATION] feature_flags table created successfully")
+        except Exception as e:
+            print(f"[MIGRATION] feature_flags table creation skipped or failed: {e}")
+        
+        # Migration: Create audit_logs table
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='audit_logs'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating audit_logs table...")
+                    conn.execute(text("""
+                        CREATE TABLE audit_logs (
+                            id SERIAL PRIMARY KEY,
+                            user_id INTEGER REFERENCES users(id),
+                            user_email VARCHAR(120),
+                            action VARCHAR(100) NOT NULL,
+                            action_result VARCHAR(20),
+                            resource_type VARCHAR(50),
+                            resource_id INTEGER,
+                            workspace_id INTEGER,
+                            details TEXT,
+                            ip_address VARCHAR(50),
+                            user_agent VARCHAR(500),
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX idx_audit_logs_user ON audit_logs(user_id)"))
+                    conn.execute(text("CREATE INDEX idx_audit_logs_action ON audit_logs(action)"))
+                    conn.execute(text("CREATE INDEX idx_audit_logs_resource ON audit_logs(resource_type, resource_id)"))
+                    conn.execute(text("CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at)"))
+                    conn.execute(text("CREATE INDEX idx_audit_logs_workspace ON audit_logs(workspace_id)"))
+                    conn.commit()
+                    print("[MIGRATION] audit_logs table created successfully")
+        except Exception as e:
+            print(f"[MIGRATION] audit_logs table creation skipped or failed: {e}")
+        
+        # Backfill: Initialize default system roles
+        try:
+            from src.database.models import SystemRole, UserSystemRole, WorkspaceRole, FeatureFlag
+            
+            # Create default system roles if they don't exist
+            for code, info in SystemRole.DEFAULT_ROLES.items():
+                existing = SystemRole.query.filter_by(code=code).first()
+                if not existing:
+                    role = SystemRole(
+                        code=code,
+                        name=info['name'],
+                        description=info['description'],
+                        is_system=True
+                    )
+                    role.set_capabilities(info['capabilities'])
+                    db.session.add(role)
+                    print(f"[BACKFILL] Created system role: {code}")
+            db.session.commit()
+            
+            # Create default workspace role templates (workspace_id = NULL)
+            for code, info in WorkspaceRole.DEFAULT_ROLES.items():
+                existing = WorkspaceRole.query.filter_by(code=code, workspace_id=None).first()
+                if not existing:
+                    role = WorkspaceRole(
+                        workspace_id=None,  # Template
+                        code=code,
+                        name=info['name'],
+                        description=info['description'],
+                        is_system=True,
+                        priority=info['priority'],
+                        is_default=(code == 'MEMBER')
+                    )
+                    role.set_permission_buckets(info['buckets'])
+                    db.session.add(role)
+                    print(f"[BACKFILL] Created workspace role template: {code}")
+            db.session.commit()
+            
+            # Create default feature flags (disabled by default for backward compatibility)
+            default_flags = [
+                ('permission_enforcement', 'Permission Enforcement', 'Enable strict permission checking', False),
+                ('audit_mode', 'Audit Mode', 'Log permission checks without blocking (for testing)', False),
+                ('workspace_isolation', 'Workspace Isolation', 'Enforce workspace boundaries for data', False),
+                ('object_acl', 'Object-Level ACL', 'Enable per-object permission overrides', False),
+            ]
+            for code, name, description, enabled in default_flags:
+                existing = FeatureFlag.query.filter_by(code=code, scope='global').first()
+                if not existing:
+                    flag = FeatureFlag(
+                        code=code,
+                        name=name,
+                        description=description,
+                        scope='global',
+                        is_enabled=enabled
+                    )
+                    db.session.add(flag)
+                    print(f"[BACKFILL] Created feature flag: {code}")
+            db.session.commit()
+            
+            # Backfill: Assign SYSTEM_ADMIN role to existing admin users
+            system_admin_role = SystemRole.query.filter_by(code='SYSTEM_ADMIN').first()
+            if system_admin_role:
+                admin_users = User.query.filter_by(role='admin').all()
+                for admin in admin_users:
+                    existing = UserSystemRole.query.filter_by(
+                        user_id=admin.id,
+                        system_role_id=system_admin_role.id
+                    ).first()
+                    if not existing:
+                        assignment = UserSystemRole(
+                            user_id=admin.id,
+                            system_role_id=system_admin_role.id
+                        )
+                        db.session.add(assignment)
+                        print(f"[BACKFILL] Assigned SYSTEM_ADMIN to user: {admin.email}")
+                db.session.commit()
+            
+            print("[BACKFILL] Permission system initialization complete")
+        except Exception as e:
+            print(f"[BACKFILL] Permission system initialization failed: {e}")
+            db.session.rollback()
+        
         # Initialize default settings
         AppSettings.init_defaults()
         
@@ -2141,6 +2409,558 @@ def api_switch_workspace(workspace_id):
     return jsonify({
         'success': True,
         'workspace': workspace.to_dict()
+    })
+
+
+# ==================== BITRIX24-STYLE PERMISSION SYSTEM APIs ====================
+
+@app.route('/system-admin')
+@login_required
+def system_admin_page():
+    """Global system administration page - only for system admins"""
+    from src.services.permissions import get_permission_service
+    
+    service = get_permission_service()
+    if not service.is_system_admin(g.user):
+        flash('Access denied. System administrators only.', 'error')
+        return redirect(url_for('index'))
+    
+    return render_template('system_admin.html')
+
+
+@app.route('/workspace/<int:workspace_id>/admin')
+@login_required
+def workspace_admin_page(workspace_id):
+    """Workspace administration page"""
+    from src.database.models import Workspace, WorkspaceMember
+    from src.services.permissions import get_permission_service
+    
+    workspace = Workspace.query.get_or_404(workspace_id)
+    service = get_permission_service()
+    
+    # Check if user can access workspace admin
+    if not service.is_workspace_admin(g.user, workspace_id):
+        flash('Access denied. Workspace administrators only.', 'error')
+        return redirect(url_for('index'))
+    
+    return render_template('workspace_admin.html', workspace=workspace.to_dict(include_members=True))
+
+
+# --- System Roles API ---
+
+@app.route('/api/system/roles', methods=['GET'])
+@login_required
+def api_get_system_roles():
+    """Get all system roles"""
+    from src.database.models import SystemRole
+    from src.services.permissions import get_permission_service
+    
+    service = get_permission_service()
+    if not service.is_system_admin(g.user):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    roles = SystemRole.query.order_by(SystemRole.code).all()
+    return jsonify({
+        'success': True,
+        'roles': [r.to_dict() for r in roles]
+    })
+
+
+@app.route('/api/system/roles', methods=['POST'])
+@login_required
+def api_create_system_role():
+    """Create a custom system role"""
+    from src.database.models import SystemRole
+    from src.services.permissions import get_permission_service
+    
+    service = get_permission_service()
+    if not service.is_system_admin(g.user):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    data = request.get_json()
+    code = data.get('code', '').strip().upper()
+    name = data.get('name', '').strip()
+    
+    if not code or not name:
+        return jsonify({'success': False, 'error': 'Code and name are required'}), 400
+    
+    if SystemRole.query.filter_by(code=code).first():
+        return jsonify({'success': False, 'error': 'Role code already exists'}), 400
+    
+    role = SystemRole(
+        code=code,
+        name=name,
+        description=data.get('description', ''),
+        is_system=False
+    )
+    role.set_capabilities(data.get('capabilities', {}))
+    db.session.add(role)
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'role': role.to_dict()
+    })
+
+
+@app.route('/api/system/roles/<int:role_id>', methods=['PUT'])
+@login_required
+def api_update_system_role(role_id):
+    """Update a system role"""
+    from src.database.models import SystemRole
+    from src.services.permissions import get_permission_service
+    
+    service = get_permission_service()
+    if not service.is_system_admin(g.user):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    role = SystemRole.query.get_or_404(role_id)
+    
+    if role.is_system:
+        return jsonify({'success': False, 'error': 'Cannot modify built-in system roles'}), 400
+    
+    data = request.get_json()
+    role.name = data.get('name', role.name)
+    role.description = data.get('description', role.description)
+    if 'capabilities' in data:
+        role.set_capabilities(data['capabilities'])
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'role': role.to_dict()
+    })
+
+
+# --- User System Role Assignment API ---
+
+@app.route('/api/users/<int:user_id>/system-roles', methods=['GET'])
+@login_required
+def api_get_user_system_roles(user_id):
+    """Get system roles for a user"""
+    from src.database.models import UserSystemRole
+    from src.services.permissions import get_permission_service
+    
+    service = get_permission_service()
+    if not service.is_system_admin(g.user) and g.user.id != user_id:
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    assignments = UserSystemRole.query.filter_by(user_id=user_id).all()
+    return jsonify({
+        'success': True,
+        'roles': [a.to_dict() for a in assignments]
+    })
+
+
+@app.route('/api/users/<int:user_id>/system-roles', methods=['POST'])
+@login_required
+def api_assign_system_role(user_id):
+    """Assign a system role to a user"""
+    from src.database.models import SystemRole, UserSystemRole, AuditLog
+    from src.services.permissions import get_permission_service
+    
+    service = get_permission_service()
+    if not service.is_system_admin(g.user):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    data = request.get_json()
+    role_code = data.get('role_code')
+    
+    role = SystemRole.query.filter_by(code=role_code).first()
+    if not role:
+        return jsonify({'success': False, 'error': 'Role not found'}), 404
+    
+    # Check if already assigned
+    existing = UserSystemRole.query.filter_by(
+        user_id=user_id,
+        system_role_id=role.id
+    ).first()
+    if existing:
+        return jsonify({'success': False, 'error': 'Role already assigned'}), 400
+    
+    assignment = UserSystemRole(
+        user_id=user_id,
+        system_role_id=role.id,
+        assigned_by_id=g.user.id
+    )
+    db.session.add(assignment)
+    
+    # Audit log
+    log = AuditLog(
+        user_id=g.user.id,
+        user_email=g.user.email,
+        action=AuditLog.ACTION_ROLE_ASSIGNED,
+        resource_type='user',
+        resource_id=user_id
+    )
+    log.set_details({'role_code': role_code, 'assigned_to_user_id': user_id})
+    db.session.add(log)
+    
+    db.session.commit()
+    
+    # Clear cache
+    service.clear_cache(user_id)
+    
+    return jsonify({
+        'success': True,
+        'assignment': assignment.to_dict()
+    })
+
+
+@app.route('/api/users/<int:user_id>/system-roles/<role_code>', methods=['DELETE'])
+@login_required
+def api_remove_system_role(user_id, role_code):
+    """Remove a system role from a user"""
+    from src.database.models import SystemRole, UserSystemRole, AuditLog
+    from src.services.permissions import get_permission_service
+    
+    service = get_permission_service()
+    if not service.is_system_admin(g.user):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    role = SystemRole.query.filter_by(code=role_code).first()
+    if not role:
+        return jsonify({'success': False, 'error': 'Role not found'}), 404
+    
+    assignment = UserSystemRole.query.filter_by(
+        user_id=user_id,
+        system_role_id=role.id
+    ).first()
+    if not assignment:
+        return jsonify({'success': False, 'error': 'Assignment not found'}), 404
+    
+    db.session.delete(assignment)
+    
+    # Audit log
+    log = AuditLog(
+        user_id=g.user.id,
+        user_email=g.user.email,
+        action=AuditLog.ACTION_ROLE_REMOVED,
+        resource_type='user',
+        resource_id=user_id
+    )
+    log.set_details({'role_code': role_code, 'removed_from_user_id': user_id})
+    db.session.add(log)
+    
+    db.session.commit()
+    
+    # Clear cache
+    service.clear_cache(user_id)
+    
+    return jsonify({'success': True})
+
+
+# --- Workspace Roles API ---
+
+@app.route('/api/workspaces/<int:workspace_id>/roles', methods=['GET'])
+@login_required
+def api_get_workspace_roles(workspace_id):
+    """Get roles for a workspace"""
+    from src.database.models import WorkspaceRole
+    from src.services.permissions import get_permission_service
+    
+    service = get_permission_service()
+    if not service.is_workspace_member(g.user, workspace_id):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    # Get workspace-specific roles and global templates
+    roles = WorkspaceRole.query.filter(
+        (WorkspaceRole.workspace_id == workspace_id) | 
+        (WorkspaceRole.workspace_id.is_(None))
+    ).order_by(WorkspaceRole.priority.desc()).all()
+    
+    return jsonify({
+        'success': True,
+        'roles': [r.to_dict() for r in roles]
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>/roles', methods=['POST'])
+@login_required
+def api_create_workspace_role(workspace_id):
+    """Create a custom role for a workspace"""
+    from src.database.models import WorkspaceRole
+    from src.services.permissions import get_permission_service
+    
+    service = get_permission_service()
+    if not service.is_workspace_admin(g.user, workspace_id):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    data = request.get_json()
+    code = data.get('code', '').strip().upper()
+    name = data.get('name', '').strip()
+    
+    if not code or not name:
+        return jsonify({'success': False, 'error': 'Code and name are required'}), 400
+    
+    # Check for duplicate in this workspace
+    existing = WorkspaceRole.query.filter_by(
+        workspace_id=workspace_id,
+        code=code
+    ).first()
+    if existing:
+        return jsonify({'success': False, 'error': 'Role code already exists in this workspace'}), 400
+    
+    role = WorkspaceRole(
+        workspace_id=workspace_id,
+        code=code,
+        name=name,
+        description=data.get('description', ''),
+        priority=data.get('priority', 0),
+        is_default=data.get('is_default', False),
+        is_system=False
+    )
+    role.set_permission_buckets(data.get('permission_buckets', {}))
+    db.session.add(role)
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'role': role.to_dict()
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>/roles/<int:role_id>', methods=['PUT'])
+@login_required
+def api_update_workspace_role(workspace_id, role_id):
+    """Update a workspace role"""
+    from src.database.models import WorkspaceRole
+    from src.services.permissions import get_permission_service
+    
+    service = get_permission_service()
+    if not service.is_workspace_admin(g.user, workspace_id):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    role = WorkspaceRole.query.get_or_404(role_id)
+    
+    if role.workspace_id != workspace_id:
+        return jsonify({'success': False, 'error': 'Role not in this workspace'}), 400
+    
+    if role.is_system:
+        return jsonify({'success': False, 'error': 'Cannot modify built-in roles'}), 400
+    
+    data = request.get_json()
+    role.name = data.get('name', role.name)
+    role.description = data.get('description', role.description)
+    role.priority = data.get('priority', role.priority)
+    role.is_default = data.get('is_default', role.is_default)
+    if 'permission_buckets' in data:
+        role.set_permission_buckets(data['permission_buckets'])
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'role': role.to_dict()
+    })
+
+
+# --- Module Permissions API ---
+
+@app.route('/api/workspaces/<int:workspace_id>/roles/<int:role_id>/modules', methods=['GET'])
+@login_required
+def api_get_module_permissions(workspace_id, role_id):
+    """Get module permissions for a workspace role"""
+    from src.database.models import ModulePermission
+    from src.services.permissions import get_permission_service
+    
+    service = get_permission_service()
+    if not service.is_workspace_member(g.user, workspace_id):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    perms = ModulePermission.query.filter_by(workspace_role_id=role_id).all()
+    return jsonify({
+        'success': True,
+        'modules': [p.to_dict() for p in perms]
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>/roles/<int:role_id>/modules/<module>', methods=['PUT'])
+@login_required
+def api_set_module_permissions(workspace_id, role_id, module):
+    """Set module permissions for a workspace role"""
+    from src.database.models import ModulePermission, WorkspaceRole
+    from src.services.permissions import get_permission_service
+    
+    service = get_permission_service()
+    if not service.is_workspace_admin(g.user, workspace_id):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    # Verify role belongs to workspace
+    role = WorkspaceRole.query.get_or_404(role_id)
+    if role.workspace_id != workspace_id and role.workspace_id is not None:
+        return jsonify({'success': False, 'error': 'Role not in this workspace'}), 400
+    
+    data = request.get_json()
+    
+    perm = ModulePermission.query.filter_by(
+        workspace_role_id=role_id,
+        module=module
+    ).first()
+    
+    if not perm:
+        perm = ModulePermission(
+            workspace_role_id=role_id,
+            module=module
+        )
+        db.session.add(perm)
+    
+    perm.set_capabilities(data.get('capabilities', {}))
+    perm.merge_strategy = data.get('merge_strategy', 'union')
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'module_permission': perm.to_dict()
+    })
+
+
+# --- Feature Flags API ---
+
+@app.route('/api/system/feature-flags', methods=['GET'])
+@login_required
+def api_get_feature_flags():
+    """Get all feature flags"""
+    from src.database.models import FeatureFlag
+    from src.services.permissions import get_permission_service
+    
+    service = get_permission_service()
+    if not service.is_system_admin(g.user):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    flags = FeatureFlag.query.order_by(FeatureFlag.code).all()
+    return jsonify({
+        'success': True,
+        'flags': [f.to_dict() for f in flags]
+    })
+
+
+@app.route('/api/system/feature-flags/<int:flag_id>', methods=['PUT'])
+@login_required
+def api_update_feature_flag(flag_id):
+    """Update a feature flag"""
+    from src.database.models import FeatureFlag
+    from src.services.permissions import get_permission_service
+    
+    service = get_permission_service()
+    if not service.is_system_admin(g.user):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    flag = FeatureFlag.query.get_or_404(flag_id)
+    data = request.get_json()
+    
+    flag.is_enabled = data.get('is_enabled', flag.is_enabled)
+    flag.value = data.get('value', flag.value)
+    flag.updated_by_id = g.user.id
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'flag': flag.to_dict()
+    })
+
+
+# --- User Effective Permissions API ---
+
+@app.route('/api/users/<int:user_id>/permissions', methods=['GET'])
+@login_required
+def api_get_user_effective_permissions(user_id):
+    """Get effective permissions for a user"""
+    from src.services.permissions import get_permission_service, list_effective_permissions
+    
+    service = get_permission_service()
+    
+    # Users can see their own permissions, admins can see anyone's
+    if g.user.id != user_id and not service.is_system_admin(g.user):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    user = User.query.get_or_404(user_id)
+    workspace_id = request.args.get('workspace_id', type=int)
+    module = request.args.get('module')
+    
+    perms = list_effective_permissions(
+        user,
+        workspace_id=workspace_id,
+        module=module
+    )
+    
+    return jsonify({
+        'success': True,
+        'user_id': user_id,
+        'permissions': perms
+    })
+
+
+# --- Audit Logs API ---
+
+@app.route('/api/system/audit-logs', methods=['GET'])
+@login_required
+def api_get_audit_logs():
+    """Get audit logs"""
+    from src.database.models import AuditLog
+    from src.services.permissions import get_permission_service
+    
+    service = get_permission_service()
+    if not service.is_system_admin(g.user):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    page = request.args.get('page', 1, type=int)
+    per_page = min(request.args.get('per_page', 50, type=int), 100)
+    
+    # Filters
+    user_id = request.args.get('user_id', type=int)
+    action = request.args.get('action')
+    workspace_id = request.args.get('workspace_id', type=int)
+    
+    query = AuditLog.query
+    
+    if user_id:
+        query = query.filter_by(user_id=user_id)
+    if action:
+        query = query.filter_by(action=action)
+    if workspace_id:
+        query = query.filter_by(workspace_id=workspace_id)
+    
+    logs = query.order_by(AuditLog.created_at.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+    
+    return jsonify({
+        'success': True,
+        'logs': [l.to_dict() for l in logs.items],
+        'pagination': {
+            'page': page,
+            'per_page': per_page,
+            'total': logs.total,
+            'pages': logs.pages
+        }
+    })
+
+
+# --- Check Access API (for frontend) ---
+
+@app.route('/api/check-access', methods=['POST'])
+@login_required
+def api_check_access():
+    """Check if current user has access to perform an action"""
+    from src.services.permissions import check_access
+    
+    data = request.get_json()
+    
+    result = check_access(
+        g.user,
+        action=data.get('action'),
+        resource_type=data.get('resource_type'),
+        resource_id=data.get('resource_id'),
+        workspace_id=data.get('workspace_id'),
+        module=data.get('module')
+    )
+    
+    return jsonify({
+        'success': True,
+        'allowed': result
     })
 
 
