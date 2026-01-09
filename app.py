@@ -22,7 +22,14 @@ from werkzeug.utils import secure_filename
 from api import PropertyFinderClient, PropertyFinderAPIError, Config
 from models import PropertyListing, PropertyType, OfferingType, Location, Price
 from utils import BulkListingManager
-from database import db, LocalListing, PFSession, User, PFCache, AppSettings, ListingFolder, LoopConfig, LoopListing, DuplicatedListing, LoopExecutionLog, Lead, LeadComment, TaskBoard, TaskLabel, Task, TaskComment, BoardMember, BOARD_PERMISSIONS, task_assignee_association
+from database import (
+    db, LocalListing, PFSession, User, PFCache, AppSettings, ListingFolder, 
+    LoopConfig, LoopListing, DuplicatedListing, LoopExecutionLog, 
+    Lead, LeadComment, Contact, Customer,
+    TaskBoard, TaskLabel, Task, TaskComment, BoardMember, BOARD_PERMISSIONS, task_assignee_association,
+    Workspace, WorkspaceMember, WorkspaceConnection,
+    SystemRole, UserSystemRole, WorkspaceRole, ModulePermission, ObjectACL, FeatureFlag, AuditLog
+)
 from images import ImageProcessor
 
 # APScheduler for background loop execution
@@ -594,7 +601,7 @@ with app.app_context():
         
         # Backfill: Initialize default system roles
         try:
-            from src.database.models import SystemRole, UserSystemRole, WorkspaceRole, FeatureFlag
+            # SystemRole, UserSystemRole, WorkspaceRole, FeatureFlag imported at top
             
             # Create default system roles if they don't exist
             for code, info in SystemRole.DEFAULT_ROLES.items():
@@ -1956,7 +1963,7 @@ def workspaces_page():
         flash('Access denied. Admin only.', 'error')
         return redirect(url_for('index'))
     
-    from src.database.models import Workspace, WorkspaceMember, WorkspaceConnection
+    # Models imported at top
     workspaces = Workspace.query.order_by(Workspace.name).all()
     users = User.query.filter_by(is_active=True).order_by(User.name).all()
     return render_template('workspaces.html', 
@@ -1970,7 +1977,7 @@ def workspaces_page():
 @login_required
 def api_list_workspaces():
     """List workspaces for current user"""
-    from src.database.models import Workspace, WorkspaceMember
+    # Models imported at top
     
     if g.user.role == 'admin':
         # Admins see all workspaces
@@ -1997,7 +2004,7 @@ def api_create_workspace():
     if g.user.role != 'admin':
         return jsonify({'success': False, 'error': 'Admin only'}), 403
     
-    from src.database.models import Workspace, WorkspaceMember
+    # Models imported at top
     data = request.get_json()
     
     name = data.get('name', '').strip()
@@ -2041,7 +2048,7 @@ def api_create_workspace():
 @login_required
 def api_update_workspace(workspace_id):
     """Update a workspace"""
-    from src.database.models import Workspace
+    # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     
     if not workspace.is_admin(g.user.id) and g.user.role != 'admin':
@@ -2075,7 +2082,7 @@ def api_delete_workspace(workspace_id):
     if g.user.role != 'admin':
         return jsonify({'success': False, 'error': 'Admin only'}), 403
     
-    from src.database.models import Workspace
+    # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     
     db.session.delete(workspace)
@@ -2088,7 +2095,7 @@ def api_delete_workspace(workspace_id):
 @login_required
 def api_get_workspace_members(workspace_id):
     """Get workspace members"""
-    from src.database.models import Workspace
+    # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     
     return jsonify({
@@ -2101,7 +2108,7 @@ def api_get_workspace_members(workspace_id):
 @login_required
 def api_add_workspace_member(workspace_id):
     """Add a member to workspace"""
-    from src.database.models import Workspace, WorkspaceMember
+    # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     
     if not workspace.is_admin(g.user.id) and g.user.role != 'admin':
@@ -2142,7 +2149,7 @@ def api_add_workspace_member(workspace_id):
 @login_required
 def api_update_workspace_member(workspace_id, member_id):
     """Update a workspace member's role"""
-    from src.database.models import Workspace, WorkspaceMember
+    # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     member = WorkspaceMember.query.get_or_404(member_id)
     
@@ -2176,7 +2183,7 @@ def api_update_workspace_member(workspace_id, member_id):
 @login_required
 def api_remove_workspace_member(workspace_id, member_id):
     """Remove a member from workspace"""
-    from src.database.models import Workspace, WorkspaceMember
+    # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     member = WorkspaceMember.query.get_or_404(member_id)
     
@@ -2207,7 +2214,7 @@ def api_remove_workspace_member(workspace_id, member_id):
 @login_required
 def connections_page(workspace_id):
     """Connection center for a workspace"""
-    from src.database.models import Workspace, WorkspaceConnection
+    # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     
     # Check access
@@ -2224,7 +2231,7 @@ def connections_page(workspace_id):
 @login_required
 def api_get_connections(workspace_id):
     """Get workspace connections"""
-    from src.database.models import Workspace
+    # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     
     include_secrets = workspace.is_admin(g.user.id) or g.user.role == 'admin'
@@ -2239,7 +2246,7 @@ def api_get_connections(workspace_id):
 @login_required
 def api_create_connection(workspace_id):
     """Create a new connection"""
-    from src.database.models import Workspace, WorkspaceConnection
+    # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     
     member = workspace.get_member(g.user.id)
@@ -2282,7 +2289,7 @@ def api_create_connection(workspace_id):
 @login_required
 def api_update_connection(workspace_id, connection_id):
     """Update a connection"""
-    from src.database.models import Workspace, WorkspaceConnection
+    # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     connection = WorkspaceConnection.query.get_or_404(connection_id)
     
@@ -2314,7 +2321,7 @@ def api_update_connection(workspace_id, connection_id):
 @login_required
 def api_delete_connection(workspace_id, connection_id):
     """Delete a connection"""
-    from src.database.models import Workspace, WorkspaceConnection
+    # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     connection = WorkspaceConnection.query.get_or_404(connection_id)
     
@@ -2335,7 +2342,7 @@ def api_delete_connection(workspace_id, connection_id):
 @login_required
 def api_test_connection(workspace_id, connection_id):
     """Test a connection"""
-    from src.database.models import Workspace, WorkspaceConnection
+    # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     connection = WorkspaceConnection.query.get_or_404(connection_id)
     
@@ -2392,7 +2399,7 @@ def api_test_connection(workspace_id, connection_id):
 @login_required
 def api_switch_workspace(workspace_id):
     """Switch to a different workspace"""
-    from src.database.models import Workspace, WorkspaceMember
+    # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     
     # Check access
@@ -2432,7 +2439,7 @@ def system_admin_page():
 @login_required
 def workspace_admin_page(workspace_id):
     """Workspace administration page"""
-    from src.database.models import Workspace, WorkspaceMember
+    # Models imported at top
     from src.services.permissions import get_permission_service
     
     workspace = Workspace.query.get_or_404(workspace_id)
@@ -2657,7 +2664,7 @@ def api_remove_system_role(user_id, role_code):
 @login_required
 def api_get_workspace_roles(workspace_id):
     """Get roles for a workspace"""
-    from src.database.models import WorkspaceRole
+    # Models imported at top
     from src.services.permissions import get_permission_service
     
     service = get_permission_service()
@@ -2680,7 +2687,7 @@ def api_get_workspace_roles(workspace_id):
 @login_required
 def api_create_workspace_role(workspace_id):
     """Create a custom role for a workspace"""
-    from src.database.models import WorkspaceRole
+    # Models imported at top
     from src.services.permissions import get_permission_service
     
     service = get_permission_service()
@@ -2725,7 +2732,7 @@ def api_create_workspace_role(workspace_id):
 @login_required
 def api_update_workspace_role(workspace_id, role_id):
     """Update a workspace role"""
-    from src.database.models import WorkspaceRole
+    # Models imported at top
     from src.services.permissions import get_permission_service
     
     service = get_permission_service()
