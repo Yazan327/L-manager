@@ -53,6 +53,16 @@
                 </svg>
                 <span x-text="refreshingAgents ? 'Refreshing...' : 'Refresh Agents'"></span>
             </button>
+            {% if current_user and current_user.role == 'admin' %}
+            <button @click="autoAssignLeads()" :disabled="autoAssigning"
+                    class="bg-purple-100 text-purple-700 px-4 py-2 rounded-lg hover:bg-purple-200 flex items-center gap-2 disabled:opacity-50"
+                    title="Auto-assign unassigned leads to users based on matching email with PF agent">
+                <svg class="w-5 h-5" :class="autoAssigning && 'animate-spin'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>
+                </svg>
+                <span x-text="autoAssigning ? 'Assigning...' : 'Auto-Assign'"></span>
+            </button>
+            {% endif %}
             <button x-show="selectedLeads.length > 0" @click="bulkDelete()"
                     class="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 flex items-center gap-2">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1203,6 +1213,7 @@ function leadsManager() {
         loading: true,
         syncing: false,
         refreshingAgents: false,
+        autoAssigning: false,
         showAddModal: false,
         showViewModal: false,
         selectedLead: null,
@@ -1481,6 +1492,27 @@ function leadsManager() {
                 alert('Failed to refresh: ' + e.message);
             }
             this.refreshingAgents = false;
+        },
+        
+        async autoAssignLeads() {
+            if (!confirm('This will auto-assign unassigned leads to L-Manager users based on matching email with PropertyFinder agents. Continue?')) {
+                return;
+            }
+            this.autoAssigning = true;
+            try {
+                const resp = await fetch('/api/leads/auto-assign', { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    alert(`Auto-assigned ${data.assigned} of ${data.total_unassigned} unassigned leads to matching users`);
+                    await this.loadLeads();
+                } else {
+                    alert('Failed to auto-assign: ' + (data.error || 'Unknown error'));
+                }
+            } catch (e) {
+                console.error('Failed to auto-assign leads:', e);
+                alert('Failed to auto-assign: ' + e.message);
+            }
+            this.autoAssigning = false;
         },
         
         sortBy(column) {

@@ -1127,6 +1127,21 @@ def sync_pf_leads_to_db(pf_leads):
     from database import Lead
     from dateutil import parser as date_parser
     
+    # Build a map of PF agent email -> L-Manager user for auto-assignment
+    pf_users = PFCache.get_cache('users') or []
+    lm_users = User.query.filter_by(is_active=True).all()
+    
+    # Map PF agent email to L-Manager user
+    email_to_lm_user = {u.email.lower(): u for u in lm_users}
+    
+    # Map PF agent ID to their email
+    pf_agent_email_map = {}
+    for pf_user in pf_users:
+        pf_id = pf_user.get('publicProfile', {}).get('id')
+        pf_email = pf_user.get('email', '').lower()
+        if pf_id and pf_email:
+            pf_agent_email_map[str(pf_id)] = pf_email
+    
     imported = 0
     updated = 0
     for pf_lead in pf_leads:
@@ -1179,6 +1194,14 @@ def sync_pf_leads_to_db(pf_leads):
                     updated += 1
                 continue
             
+            # Auto-assign to L-Manager user based on PF agent email
+            pf_agent_id_str = str(public_profile.get('id', ''))
+            assigned_to_id = None
+            if pf_agent_id_str and pf_agent_id_str in pf_agent_email_map:
+                pf_agent_email = pf_agent_email_map[pf_agent_id_str]
+                if pf_agent_email in email_to_lm_user:
+                    assigned_to_id = email_to_lm_user[pf_agent_email].id
+            
             # Create new lead
             lead = Lead(
                 source='propertyfinder',
@@ -1195,8 +1218,9 @@ def sync_pf_leads_to_db(pf_leads):
                 status='new',
                 pf_status=pf_lead.get('status', ''),
                 priority='medium',
-                pf_agent_id=str(public_profile.get('id', '')),
+                pf_agent_id=pf_agent_id_str,
                 pf_agent_name=public_profile.get('name', ''),
+                assigned_to_id=assigned_to_id,  # Auto-assigned if email matches
                 received_at=received_at
             )
             db.session.add(lead)
@@ -4051,8 +4075,20 @@ def api_update_leads_config():
 @app.route('/api/leads', methods=['GET'])
 @login_required
 def api_get_leads():
-    """Get all leads"""
-    leads = Lead.query.order_by(Lead.created_at.desc()).all()
+    """Get leads based on user permissions.
+    
+    - Admin users see all leads (including unassigned)
+    - Non-admin users only see leads assigned to them
+    - Unassigned leads (assigned_to_id is NULL) are only visible to admins
+    """
+    query = Lead.query.order_by(Lead.created_at.desc())
+    
+    # Filter by assignment for non-admin users
+    if g.user.role != 'admin':
+        # Non-admins only see leads assigned to them
+        query = query.filter(Lead.assigned_to_id == g.user.id)
+    
+    leads = query.all()
     return jsonify({'leads': [l.to_dict() for l in leads]})
 
 
@@ -4308,6 +4344,62 @@ def api_refresh_lead_agents():
     return jsonify({'success': True, 'updated': updated, 'total': len(leads)})
 
 
+@app.route('/api/leads/auto-assign', methods=['POST'])
+@login_required
+def api_auto_assign_leads():
+    """Auto-assign unassigned leads to L-Manager users based on PF agent email matching.
+    
+    This endpoint looks at leads that have a pf_agent_id but no assigned_to_id,
+    finds the PF agent's email, and assigns the lead to the L-Manager user with
+    the matching email.
+    """
+    if g.user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Admin only'}), 403
+    
+    # Get PF users to map agent ID to email
+    pf_users = PFCache.get_cache('users') or []
+    pf_agent_email_map = {}
+    for pf_user in pf_users:
+        pf_id = pf_user.get('publicProfile', {}).get('id')
+        pf_email = pf_user.get('email', '').lower()
+        if pf_id and pf_email:
+            pf_agent_email_map[str(pf_id)] = pf_email
+    
+    # Get L-Manager users by email
+    lm_users = User.query.filter_by(is_active=True).all()
+    email_to_lm_user = {u.email.lower(): u for u in lm_users}
+    
+    # Find unassigned leads that have a PF agent
+    unassigned_leads = Lead.query.filter(
+        Lead.assigned_to_id.is_(None),
+        Lead.pf_agent_id.isnot(None),
+        Lead.pf_agent_id != ''
+    ).all()
+    
+    assigned_count = 0
+    no_match_count = 0
+    
+    for lead in unassigned_leads:
+        if lead.pf_agent_id in pf_agent_email_map:
+            pf_email = pf_agent_email_map[lead.pf_agent_id]
+            if pf_email in email_to_lm_user:
+                lead.assigned_to_id = email_to_lm_user[pf_email].id
+                assigned_count += 1
+            else:
+                no_match_count += 1
+        else:
+            no_match_count += 1
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'assigned': assigned_count,
+        'no_match': no_match_count,
+        'total_unassigned': len(unassigned_leads)
+    })
+
+
 @app.route('/api/leads/sync-pf', methods=['POST'])
 @login_required
 def api_sync_leads_from_pf():
@@ -4332,9 +4424,21 @@ def api_sync_leads_from_pf():
             if page > 10:  # Safety limit
                 break
         
-        # Get PF users to map agent names
+        # Get PF users to map agent names and emails
         pf_users = PFCache.get_cache('users') or []
         user_map = {u.get('publicProfile', {}).get('id'): u for u in pf_users}
+        
+        # Build map of PF agent email -> L-Manager user for auto-assignment
+        lm_users = User.query.filter_by(is_active=True).all()
+        email_to_lm_user = {u.email.lower(): u for u in lm_users}
+        
+        # Map PF agent ID to their email
+        pf_agent_email_map = {}
+        for pf_user in pf_users:
+            pf_id = pf_user.get('publicProfile', {}).get('id')
+            pf_email = pf_user.get('email', '').lower()
+            if pf_id and pf_email:
+                pf_agent_email_map[str(pf_id)] = pf_email
         
         # Get PF listings to map listing owners (assignedTo)
         pf_listings = PFCache.get_cache('listings') or []
@@ -4400,6 +4504,13 @@ def api_sync_leads_from_pf():
                     user = user_map[agent_id_int]
                     pf_agent_name = f"{user.get('firstName', '')} {user.get('lastName', '')}".strip()
             
+            # Auto-assign to L-Manager user based on PF agent email
+            assigned_to_id = None
+            if pf_agent_id and pf_agent_id in pf_agent_email_map:
+                pf_agent_email = pf_agent_email_map[pf_agent_id]
+                if pf_agent_email in email_to_lm_user:
+                    assigned_to_id = email_to_lm_user[pf_agent_email].id
+            
             lead = Lead(
                 source='propertyfinder',
                 source_id=source_id,
@@ -4417,6 +4528,7 @@ def api_sync_leads_from_pf():
                 priority='medium',
                 pf_agent_id=pf_agent_id,
                 pf_agent_name=pf_agent_name,
+                assigned_to_id=assigned_to_id,  # Auto-assigned if email matches
                 received_at=received_at
             )
             db.session.add(lead)
