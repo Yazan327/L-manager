@@ -1,0 +1,174 @@
+{% extends "workspaces/base.html" %}
+
+{% block page_title %}Dashboard{% endblock %}
+
+{% block content %}
+<!-- Stats Grid -->
+<div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+    <div class="bg-white overflow-hidden shadow rounded-lg">
+        <div class="p-5">
+            <div class="flex items-center">
+                <div class="flex-shrink-0 bg-blue-500 rounded-md p-3">
+                    <svg class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    </svg>
+                </div>
+                <div class="ml-5 w-0 flex-1">
+                    <dl>
+                        <dt class="text-sm font-medium text-gray-500 truncate">Total Leads</dt>
+                        <dd class="text-2xl font-semibold text-gray-900">{{ stats.total_leads }}</dd>
+                    </dl>
+                </div>
+            </div>
+        </div>
+        <div class="bg-gray-50 px-5 py-3">
+            <a href="{% url 'workspaces:leads:list' workspace_slug=workspace.slug %}" class="text-sm text-blue-600 hover:text-blue-500">View all</a>
+        </div>
+    </div>
+
+    <div class="bg-white overflow-hidden shadow rounded-lg">
+        <div class="p-5">
+            <div class="flex items-center">
+                <div class="flex-shrink-0 bg-yellow-500 rounded-md p-3">
+                    <svg class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                </div>
+                <div class="ml-5 w-0 flex-1">
+                    <dl>
+                        <dt class="text-sm font-medium text-gray-500 truncate">Open Leads</dt>
+                        <dd class="text-2xl font-semibold text-gray-900">{{ stats.open_leads }}</dd>
+                    </dl>
+                </div>
+            </div>
+        </div>
+        <div class="bg-gray-50 px-5 py-3">
+            <a href="{% url 'workspaces:leads:list' workspace_slug=workspace.slug %}?status=new" class="text-sm text-blue-600 hover:text-blue-500">View new</a>
+        </div>
+    </div>
+
+    <div class="bg-white overflow-hidden shadow rounded-lg">
+        <div class="p-5">
+            <div class="flex items-center">
+                <div class="flex-shrink-0 bg-green-500 rounded-md p-3">
+                    <svg class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
+                    </svg>
+                </div>
+                <div class="ml-5 w-0 flex-1">
+                    <dl>
+                        <dt class="text-sm font-medium text-gray-500 truncate">Total Listings</dt>
+                        <dd class="text-2xl font-semibold text-gray-900">{{ stats.total_listings }}</dd>
+                    </dl>
+                </div>
+            </div>
+        </div>
+        <div class="bg-gray-50 px-5 py-3">
+            <a href="{% url 'workspaces:listings:list' workspace_slug=workspace.slug %}" class="text-sm text-blue-600 hover:text-blue-500">View all</a>
+        </div>
+    </div>
+
+    <div class="bg-white overflow-hidden shadow rounded-lg">
+        <div class="p-5">
+            <div class="flex items-center">
+                <div class="flex-shrink-0 bg-purple-500 rounded-md p-3">
+                    <svg class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
+                    </svg>
+                </div>
+                <div class="ml-5 w-0 flex-1">
+                    <dl>
+                        <dt class="text-sm font-medium text-gray-500 truncate">Team Members</dt>
+                        <dd class="text-2xl font-semibold text-gray-900">{{ stats.members }}</dd>
+                    </dl>
+                </div>
+            </div>
+        </div>
+        <div class="bg-gray-50 px-5 py-3">
+            <a href="{% url 'workspaces:members' workspace_slug=workspace.slug %}" class="text-sm text-blue-600 hover:text-blue-500">Manage team</a>
+        </div>
+    </div>
+</div>
+
+<!-- Recent sections -->
+<div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+    <!-- Recent Leads -->
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 border-b border-gray-200 sm:px-6">
+            <div class="flex items-center justify-between">
+                <h3 class="text-lg leading-6 font-medium text-gray-900">Recent Leads</h3>
+                <a href="{% url 'workspaces:leads:list' workspace_slug=workspace.slug %}" class="text-sm text-blue-600 hover:text-blue-500">View all</a>
+            </div>
+        </div>
+        <ul class="divide-y divide-gray-200">
+            {% for lead in recent_leads %}
+            <li>
+                <a href="{% url 'workspaces:leads:detail' workspace_slug=workspace.slug lead_id=lead.id %}" class="block hover:bg-gray-50">
+                    <div class="px-4 py-4 sm:px-6">
+                        <div class="flex items-center justify-between">
+                            <p class="text-sm font-medium text-gray-900 truncate">{{ lead.name }}</p>
+                            <span class="px-2 py-1 text-xs rounded-full 
+                                {% if lead.status == 'new' %}bg-blue-100 text-blue-800
+                                {% elif lead.status == 'contacted' %}bg-yellow-100 text-yellow-800
+                                {% elif lead.status == 'qualified' %}bg-green-100 text-green-800
+                                {% else %}bg-gray-100 text-gray-800{% endif %}">
+                                {{ lead.get_status_display }}
+                            </span>
+                        </div>
+                        <div class="mt-2 flex items-center text-sm text-gray-500">
+                            <span>{{ lead.received_at|timesince }} ago</span>
+                            {% if lead.assigned_to %}
+                            <span class="mx-2">•</span>
+                            <span>{{ lead.assigned_to.full_name }}</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </a>
+            </li>
+            {% empty %}
+            <li class="px-4 py-8 text-center text-gray-500">
+                No leads yet
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <!-- Recent Listings -->
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 border-b border-gray-200 sm:px-6">
+            <div class="flex items-center justify-between">
+                <h3 class="text-lg leading-6 font-medium text-gray-900">Recent Listings</h3>
+                <a href="{% url 'workspaces:listings:list' workspace_slug=workspace.slug %}" class="text-sm text-blue-600 hover:text-blue-500">View all</a>
+            </div>
+        </div>
+        <ul class="divide-y divide-gray-200">
+            {% for listing in recent_listings %}
+            <li>
+                <a href="{% url 'workspaces:listings:detail' workspace_slug=workspace.slug listing_id=listing.id %}" class="block hover:bg-gray-50">
+                    <div class="px-4 py-4 sm:px-6">
+                        <div class="flex items-center justify-between">
+                            <p class="text-sm font-medium text-gray-900 truncate">{{ listing.title }}</p>
+                            <span class="px-2 py-1 text-xs rounded-full 
+                                {% if listing.status == 'active' %}bg-green-100 text-green-800
+                                {% elif listing.status == 'draft' %}bg-gray-100 text-gray-800
+                                {% else %}bg-yellow-100 text-yellow-800{% endif %}">
+                                {{ listing.get_status_display }}
+                            </span>
+                        </div>
+                        <div class="mt-2 flex items-center text-sm text-gray-500">
+                            <span>{{ listing.reference_number }}</span>
+                            <span class="mx-2">•</span>
+                            <span>AED {{ listing.price|floatformat:0 }}</span>
+                        </div>
+                    </div>
+                </a>
+            </li>
+            {% empty %}
+            <li class="px-4 py-8 text-center text-gray-500">
+                No listings yet
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+</div>
+{% endblock %}

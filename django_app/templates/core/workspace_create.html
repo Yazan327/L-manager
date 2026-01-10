@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}Create Workspace - L-Manager{% endblock %}
+
+{% block content %}
+<div class="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div class="max-w-xl mx-auto">
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-900">🏠 Create Workspace</h1>
+            <p class="mt-2 text-gray-600">Set up a new workspace for your team</p>
+        </div>
+        
+        {% if messages %}
+        <div class="mb-6 rounded-md p-4 bg-red-50">
+            {% for message in messages %}
+            <p class="text-sm text-red-700">{{ message }}</p>
+            {% endfor %}
+        </div>
+        {% endif %}
+        
+        <form method="POST" class="bg-white shadow rounded-lg p-6 space-y-6">
+            {% csrf_token %}
+            
+            <div>
+                <label for="name" class="block text-sm font-medium text-gray-700">Workspace Name *</label>
+                <input type="text" name="name" id="name" required
+                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                       placeholder="My Real Estate Agency">
+                <p class="mt-1 text-xs text-gray-500">The display name for your workspace</p>
+            </div>
+            
+            <div>
+                <label for="slug" class="block text-sm font-medium text-gray-700">URL Slug</label>
+                <div class="mt-1 flex rounded-md shadow-sm">
+                    <span class="inline-flex items-center px-3 rounded-l-md border border-r-0 border-gray-300 bg-gray-50 text-gray-500 sm:text-sm">
+                        /
+                    </span>
+                    <input type="text" name="slug" id="slug"
+                           class="flex-1 min-w-0 block w-full px-3 py-2 rounded-none rounded-r-md border-gray-300 focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                           placeholder="my-agency" pattern="[a-z0-9-]+">
+                </div>
+                <p class="mt-1 text-xs text-gray-500">Lowercase letters, numbers, and hyphens only. Leave blank to auto-generate.</p>
+            </div>
+            
+            <div>
+                <label for="description" class="block text-sm font-medium text-gray-700">Description</label>
+                <textarea name="description" id="description" rows="3"
+                          class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                          placeholder="Brief description of your workspace..."></textarea>
+            </div>
+            
+            <div class="flex items-center justify-between pt-4">
+                <a href="{% url 'core:workspace_list' %}" class="text-sm text-gray-600 hover:text-gray-900">
+                    ← Back to workspaces
+                </a>
+                <button type="submit"
+                        class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                    <svg class="-ml-1 mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                    </svg>
+                    Create Workspace
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+// Auto-generate slug from name
+document.getElementById('name').addEventListener('input', function() {
+    const slugField = document.getElementById('slug');
+    if (!slugField.value) {  // Only auto-fill if slug is empty
+        const slug = this.value
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '');
+        slugField.placeholder = slug || 'my-agency';
+    }
+});
+</script>
+{% endblock %}

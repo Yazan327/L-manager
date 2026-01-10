@@ -1,0 +1,207 @@
+{% extends "workspaces/base.html" %}
+
+{% block page_title %}Listings{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="sm:flex sm:items-center sm:justify-between mb-6">
+    <div>
+        <h1 class="text-2xl font-bold text-gray-900">Listings</h1>
+        <p class="mt-1 text-sm text-gray-500">Manage your property listings</p>
+    </div>
+    <div class="mt-4 sm:mt-0 flex space-x-3">
+        {% if membership.has_permission.can_create_listings %}
+        <a href="{% url 'workspaces:listings:create' workspace_slug=workspace.slug %}"
+           class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700">
+            <svg class="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+            </svg>
+            New Listing
+        </a>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="bg-white shadow rounded-lg p-4 mb-6">
+    <form method="GET" class="flex flex-wrap gap-4 items-end">
+        <div class="flex-1 min-w-[200px]">
+            <label for="search" class="block text-sm font-medium text-gray-700">Search</label>
+            <input type="text" name="search" id="search" value="{{ request.GET.search }}"
+                   class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                   placeholder="Reference, title, location...">
+        </div>
+        <div class="w-40">
+            <label for="status" class="block text-sm font-medium text-gray-700">Status</label>
+            <select name="status" id="status"
+                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
+                <option value="">All Status</option>
+                <option value="draft" {% if request.GET.status == 'draft' %}selected{% endif %}>Draft</option>
+                <option value="active" {% if request.GET.status == 'active' %}selected{% endif %}>Active</option>
+                <option value="pending" {% if request.GET.status == 'pending' %}selected{% endif %}>Pending</option>
+                <option value="expired" {% if request.GET.status == 'expired' %}selected{% endif %}>Expired</option>
+                <option value="archived" {% if request.GET.status == 'archived' %}selected{% endif %}>Archived</option>
+            </select>
+        </div>
+        <div class="w-40">
+            <label for="type" class="block text-sm font-medium text-gray-700">Type</label>
+            <select name="type" id="type"
+                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
+                <option value="">All Types</option>
+                <option value="sale" {% if request.GET.type == 'sale' %}selected{% endif %}>For Sale</option>
+                <option value="rent" {% if request.GET.type == 'rent' %}selected{% endif %}>For Rent</option>
+            </select>
+        </div>
+        <div>
+            <button type="submit"
+                    class="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                Filter
+            </button>
+        </div>
+    </form>
+</div>
+
+<!-- Listings Grid -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+    {% for listing in listings %}
+    <div class="bg-white shadow rounded-lg overflow-hidden hover:shadow-lg transition">
+        <!-- Listing Image -->
+        <div class="aspect-video bg-gray-200 relative">
+            {% if listing.cover_image %}
+            <img src="{{ listing.cover_image.url }}" alt="{{ listing.title }}" class="w-full h-full object-cover">
+            {% else %}
+            <div class="w-full h-full flex items-center justify-center text-gray-400">
+                <svg class="h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
+                </svg>
+            </div>
+            {% endif %}
+            
+            <!-- Status Badge -->
+            <div class="absolute top-2 left-2">
+                <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full
+                    {% if listing.status == 'active' %}bg-green-100 text-green-800
+                    {% elif listing.status == 'draft' %}bg-gray-100 text-gray-800
+                    {% elif listing.status == 'pending' %}bg-yellow-100 text-yellow-800
+                    {% elif listing.status == 'expired' %}bg-red-100 text-red-800
+                    {% else %}bg-gray-100 text-gray-800{% endif %}">
+                    {{ listing.get_status_display }}
+                </span>
+            </div>
+            
+            <!-- Type Badge -->
+            <div class="absolute top-2 right-2">
+                <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full
+                    {% if listing.listing_type == 'sale' %}bg-blue-100 text-blue-800
+                    {% else %}bg-purple-100 text-purple-800{% endif %}">
+                    {% if listing.listing_type == 'sale' %}For Sale{% else %}For Rent{% endif %}
+                </span>
+            </div>
+        </div>
+        
+        <!-- Listing Content -->
+        <div class="p-4">
+            <div class="flex justify-between items-start mb-2">
+                <h3 class="text-lg font-semibold text-gray-900 truncate">
+                    <a href="{% url 'workspaces:listings:detail' workspace_slug=workspace.slug listing_id=listing.id %}" class="hover:text-blue-600">
+                        {{ listing.title }}
+                    </a>
+                </h3>
+            </div>
+            
+            <p class="text-sm text-gray-500 mb-2 truncate">{{ listing.location|default:"-" }}</p>
+            
+            <div class="flex items-center justify-between">
+                <span class="text-lg font-bold text-blue-600">
+                    {{ listing.price|floatformat:0 }} {{ listing.currency|default:"AED" }}
+                    {% if listing.listing_type == 'rent' %}<span class="text-sm font-normal text-gray-500">/{{ listing.rental_period|default:"year" }}</span>{% endif %}
+                </span>
+            </div>
+            
+            <!-- Property Details -->
+            <div class="mt-3 flex items-center text-sm text-gray-500 space-x-4">
+                {% if listing.bedrooms %}
+                <span class="flex items-center">
+                    <svg class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
+                    </svg>
+                    {{ listing.bedrooms }} beds
+                </span>
+                {% endif %}
+                {% if listing.bathrooms %}
+                <span class="flex items-center">
+                    <svg class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                    </svg>
+                    {{ listing.bathrooms }} baths
+                </span>
+                {% endif %}
+                {% if listing.size %}
+                <span class="flex items-center">
+                    <svg class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+                    </svg>
+                    {{ listing.size|floatformat:0 }} sqft
+                </span>
+                {% endif %}
+            </div>
+            
+            <div class="mt-3 text-xs text-gray-400">
+                Ref: {{ listing.reference_number|default:listing.id|slice:":8" }}
+            </div>
+        </div>
+    </div>
+    {% empty %}
+    <div class="col-span-full">
+        <div class="bg-white shadow rounded-lg p-12 text-center">
+            <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
+            </svg>
+            <h3 class="mt-2 text-sm font-medium text-gray-900">No listings yet</h3>
+            <p class="mt-1 text-sm text-gray-500">Get started by creating your first property listing.</p>
+            {% if membership.has_permission.can_create_listings %}
+            <div class="mt-6">
+                <a href="{% url 'workspaces:listings:create' workspace_slug=workspace.slug %}"
+                   class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700">
+                    <svg class="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                    </svg>
+                    Create Listing
+                </a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Pagination -->
+{% if listings.has_other_pages %}
+<nav class="mt-6 flex items-center justify-between">
+    <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+        <div>
+            <p class="text-sm text-gray-700">
+                Showing <span class="font-medium">{{ listings.start_index }}</span> to <span class="font-medium">{{ listings.end_index }}</span>
+                of <span class="font-medium">{{ listings.paginator.count }}</span> results
+            </p>
+        </div>
+        <div>
+            <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                {% if listings.has_previous %}
+                <a href="?page={{ listings.previous_page_number }}"
+                   class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                    Previous
+                </a>
+                {% endif %}
+                {% if listings.has_next %}
+                <a href="?page={{ listings.next_page_number }}"
+                   class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                    Next
+                </a>
+                {% endif %}
+            </nav>
+        </div>
+    </div>
+</nav>
+{% endif %}
+{% endblock %}

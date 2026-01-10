@@ -1,0 +1,187 @@
+{% extends "workspaces/base.html" %}
+
+{% block page_title %}{% if lead %}Edit Lead{% else %}Create Lead{% endif %}{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <nav class="flex" aria-label="Breadcrumb">
+        <ol class="flex items-center space-x-4">
+            <li>
+                <a href="{% url 'workspaces:leads:list' workspace_slug=workspace.slug %}" class="text-gray-400 hover:text-gray-500">
+                    Leads
+                </a>
+            </li>
+            <li>
+                <div class="flex items-center">
+                    <svg class="flex-shrink-0 h-5 w-5 text-gray-300" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M5.555 17.776l8-16 .894.448-8 16-.894-.448z" />
+                    </svg>
+                    <span class="ml-4 text-sm font-medium text-gray-500">{% if lead %}Edit{% else %}Create{% endif %}</span>
+                </div>
+            </li>
+        </ol>
+    </nav>
+</div>
+
+<div class="max-w-3xl">
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:px-6 border-b border-gray-200">
+            <h1 class="text-xl font-semibold text-gray-900">{% if lead %}Edit Lead{% else %}Create New Lead{% endif %}</h1>
+        </div>
+        
+        <form method="POST" class="px-4 py-5 sm:px-6 space-y-6">
+            {% csrf_token %}
+            
+            {% if messages %}
+            <div class="rounded-md bg-red-50 p-4">
+                {% for message in messages %}
+                <p class="text-sm text-red-700">{{ message }}</p>
+                {% endfor %}
+            </div>
+            {% endif %}
+            
+            <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                <!-- Contact Info -->
+                <div class="sm:col-span-2">
+                    <h2 class="text-lg font-medium text-gray-900 mb-4">Contact Information</h2>
+                </div>
+                
+                <div>
+                    <label for="name" class="block text-sm font-medium text-gray-700">Name *</label>
+                    <input type="text" name="name" id="name" required
+                           value="{{ lead.name|default:'' }}"
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
+                </div>
+                
+                <div>
+                    <label for="email" class="block text-sm font-medium text-gray-700">Email *</label>
+                    <input type="email" name="email" id="email" required
+                           value="{{ lead.email|default:'' }}"
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
+                </div>
+                
+                <div>
+                    <label for="phone" class="block text-sm font-medium text-gray-700">Phone</label>
+                    <input type="tel" name="phone" id="phone"
+                           value="{{ lead.phone|default:'' }}"
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
+                </div>
+                
+                <div>
+                    <label for="source" class="block text-sm font-medium text-gray-700">Source</label>
+                    <select name="source" id="source"
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
+                        <option value="">Select source...</option>
+                        <option value="website" {% if lead.source == 'website' %}selected{% endif %}>Website</option>
+                        <option value="propertyfinder" {% if lead.source == 'propertyfinder' %}selected{% endif %}>PropertyFinder</option>
+                        <option value="bayut" {% if lead.source == 'bayut' %}selected{% endif %}>Bayut</option>
+                        <option value="dubizzle" {% if lead.source == 'dubizzle' %}selected{% endif %}>Dubizzle</option>
+                        <option value="referral" {% if lead.source == 'referral' %}selected{% endif %}>Referral</option>
+                        <option value="walk-in" {% if lead.source == 'walk-in' %}selected{% endif %}>Walk-in</option>
+                        <option value="phone" {% if lead.source == 'phone' %}selected{% endif %}>Phone Call</option>
+                        <option value="social" {% if lead.source == 'social' %}selected{% endif %}>Social Media</option>
+                        <option value="other" {% if lead.source == 'other' %}selected{% endif %}>Other</option>
+                    </select>
+                </div>
+                
+                <!-- Property Requirements -->
+                <div class="sm:col-span-2 pt-4">
+                    <h2 class="text-lg font-medium text-gray-900 mb-4">Property Requirements</h2>
+                </div>
+                
+                <div>
+                    <label for="property_type" class="block text-sm font-medium text-gray-700">Property Type</label>
+                    <select name="property_type" id="property_type"
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
+                        <option value="">Any type...</option>
+                        <option value="apartment" {% if lead.property_type == 'apartment' %}selected{% endif %}>Apartment</option>
+                        <option value="villa" {% if lead.property_type == 'villa' %}selected{% endif %}>Villa</option>
+                        <option value="townhouse" {% if lead.property_type == 'townhouse' %}selected{% endif %}>Townhouse</option>
+                        <option value="penthouse" {% if lead.property_type == 'penthouse' %}selected{% endif %}>Penthouse</option>
+                        <option value="studio" {% if lead.property_type == 'studio' %}selected{% endif %}>Studio</option>
+                        <option value="office" {% if lead.property_type == 'office' %}selected{% endif %}>Office</option>
+                        <option value="retail" {% if lead.property_type == 'retail' %}selected{% endif %}>Retail</option>
+                        <option value="warehouse" {% if lead.property_type == 'warehouse' %}selected{% endif %}>Warehouse</option>
+                        <option value="land" {% if lead.property_type == 'land' %}selected{% endif %}>Land</option>
+                    </select>
+                </div>
+                
+                <div>
+                    <label for="location" class="block text-sm font-medium text-gray-700">Preferred Location</label>
+                    <input type="text" name="location" id="location"
+                           value="{{ lead.location|default:'' }}"
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                           placeholder="e.g., Dubai Marina, Downtown">
+                </div>
+                
+                <div>
+                    <label for="min_budget" class="block text-sm font-medium text-gray-700">Min Budget</label>
+                    <input type="number" name="min_budget" id="min_budget"
+                           value="{{ lead.min_budget|default:'' }}"
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                           placeholder="0">
+                </div>
+                
+                <div>
+                    <label for="max_budget" class="block text-sm font-medium text-gray-700">Max Budget</label>
+                    <input type="number" name="max_budget" id="max_budget"
+                           value="{{ lead.max_budget|default:'' }}"
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                           placeholder="No limit">
+                </div>
+                
+                <!-- Status & Assignment -->
+                <div class="sm:col-span-2 pt-4">
+                    <h2 class="text-lg font-medium text-gray-900 mb-4">Status & Assignment</h2>
+                </div>
+                
+                <div>
+                    <label for="status" class="block text-sm font-medium text-gray-700">Status</label>
+                    <select name="status" id="status"
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
+                        <option value="new" {% if lead.status == 'new' or not lead %}selected{% endif %}>New</option>
+                        <option value="contacted" {% if lead.status == 'contacted' %}selected{% endif %}>Contacted</option>
+                        <option value="qualified" {% if lead.status == 'qualified' %}selected{% endif %}>Qualified</option>
+                        <option value="proposal" {% if lead.status == 'proposal' %}selected{% endif %}>Proposal</option>
+                        <option value="negotiation" {% if lead.status == 'negotiation' %}selected{% endif %}>Negotiation</option>
+                        <option value="won" {% if lead.status == 'won' %}selected{% endif %}>Won</option>
+                        <option value="lost" {% if lead.status == 'lost' %}selected{% endif %}>Lost</option>
+                    </select>
+                </div>
+                
+                <div>
+                    <label for="assigned_to" class="block text-sm font-medium text-gray-700">Assign To</label>
+                    <select name="assigned_to" id="assigned_to"
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
+                        <option value="">-- Unassigned --</option>
+                        {% for member in members %}
+                        <option value="{{ member.user.id }}" {% if lead.assigned_to_id == member.user.id %}selected{% endif %}>
+                            {{ member.user.get_full_name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                
+                <!-- Message -->
+                <div class="sm:col-span-2">
+                    <label for="message" class="block text-sm font-medium text-gray-700">Message / Notes</label>
+                    <textarea name="message" id="message" rows="4"
+                              class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                              placeholder="Any additional notes about this lead...">{{ lead.message|default:'' }}</textarea>
+                </div>
+            </div>
+            
+            <div class="flex justify-end space-x-3 pt-4">
+                <a href="{% url 'workspaces:leads:list' workspace_slug=workspace.slug %}"
+                   class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                    Cancel
+                </a>
+                <button type="submit"
+                        class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700">
+                    {% if lead %}Update Lead{% else %}Create Lead{% endif %}
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

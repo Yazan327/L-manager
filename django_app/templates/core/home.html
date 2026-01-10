@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block title %}L-Manager - Property Listings Manager{% endblock %}
+
+{% block content %}
+<div class="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800">
+    <!-- Hero Section -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
+        <div class="text-center">
+            <h1 class="text-4xl tracking-tight font-extrabold text-white sm:text-5xl md:text-6xl">
+                <span class="block">🏠 L-Manager</span>
+                <span class="block text-blue-200 text-2xl sm:text-3xl mt-3">Property Listings Management</span>
+            </h1>
+            <p class="mt-6 max-w-md mx-auto text-xl text-blue-100 sm:max-w-3xl">
+                Manage your property listings, leads, and team in one powerful platform. 
+                Seamlessly integrate with PropertyFinder and other platforms.
+            </p>
+            <div class="mt-10 flex justify-center space-x-4">
+                <a href="{% url 'core:login' %}" 
+                   class="px-8 py-3 border border-transparent text-base font-medium rounded-md text-blue-700 bg-white hover:bg-blue-50 md:py-4 md:text-lg md:px-10">
+                    Sign In
+                </a>
+                <a href="{% url 'core:register' %}" 
+                   class="px-8 py-3 border border-white text-base font-medium rounded-md text-white hover:bg-blue-700 md:py-4 md:text-lg md:px-10">
+                    Get Started
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Features Section -->
+    <div class="bg-white py-16">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center">
+                <h2 class="text-3xl font-extrabold text-gray-900">
+                    Everything you need to manage properties
+                </h2>
+                <p class="mt-4 text-lg text-gray-600">
+                    A complete solution for real estate professionals
+                </p>
+            </div>
+
+            <div class="mt-16 grid gap-8 md:grid-cols-3">
+                <div class="text-center">
+                    <div class="flex items-center justify-center h-12 w-12 rounded-md bg-blue-500 text-white mx-auto">
+                        <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
+                        </svg>
+                    </div>
+                    <h3 class="mt-6 text-lg font-medium text-gray-900">Listing Management</h3>
+                    <p class="mt-2 text-gray-600">
+                        Create, publish, and manage property listings across multiple platforms with ease.
+                    </p>
+                </div>
+
+                <div class="text-center">
+                    <div class="flex items-center justify-center h-12 w-12 rounded-md bg-blue-500 text-white mx-auto">
+                        <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>
+                        </svg>
+                    </div>
+                    <h3 class="mt-6 text-lg font-medium text-gray-900">Lead CRM</h3>
+                    <p class="mt-2 text-gray-600">
+                        Track and manage leads from PropertyFinder and other sources. Never miss a follow-up.
+                    </p>
+                </div>
+
+                <div class="text-center">
+                    <div class="flex items-center justify-center h-12 w-12 rounded-md bg-blue-500 text-white mx-auto">
+                        <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
+                        </svg>
+                    </div>
+                    <h3 class="mt-6 text-lg font-medium text-gray-900">Team Collaboration</h3>
+                    <p class="mt-2 text-gray-600">
+                        Invite team members, assign roles, and collaborate on listings and leads.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CTA Section -->
+    <div class="bg-blue-700 py-16">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+            <h2 class="text-3xl font-extrabold text-white">
+                Ready to get started?
+            </h2>
+            <p class="mt-4 text-xl text-blue-100">
+                Create your workspace and start managing properties today.
+            </p>
+            <div class="mt-8">
+                <a href="{% url 'core:register' %}" 
+                   class="px-8 py-3 border border-transparent text-base font-medium rounded-md text-blue-700 bg-white hover:bg-blue-50 md:py-4 md:text-lg md:px-10">
+                    Create Free Account
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="bg-gray-900 py-8">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-gray-400">
+            <p>&copy; 2026 L-Manager. All rights reserved.</p>
+        </div>
+    </footer>
+</div>
+{% endblock %}

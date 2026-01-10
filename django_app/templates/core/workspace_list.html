@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block title %}Select Workspace - L-Manager{% endblock %}
+
+{% block content %}
+<div class="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div class="max-w-3xl mx-auto">
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-900">🏠 Select Workspace</h1>
+            <p class="mt-2 text-gray-600">Choose a workspace to continue, or create a new one</p>
+        </div>
+        
+        {% if messages %}
+        <div class="mb-6 rounded-md p-4 bg-green-50">
+            {% for message in messages %}
+            <p class="text-sm text-green-700">{{ message }}</p>
+            {% endfor %}
+        </div>
+        {% endif %}
+        
+        {% if memberships %}
+        <div class="bg-white shadow rounded-lg divide-y divide-gray-200">
+            {% for membership in memberships %}
+            <a href="{% url 'workspaces:dashboard' workspace_slug=membership.workspace.slug %}" 
+               class="block hover:bg-gray-50 transition">
+                <div class="px-6 py-4 flex items-center justify-between">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0 h-12 w-12 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center">
+                            <span class="text-white font-bold text-lg">
+                                {{ membership.workspace.name|slice:":2"|upper }}
+                            </span>
+                        </div>
+                        <div class="ml-4">
+                            <h3 class="text-lg font-medium text-gray-900">
+                                {{ membership.workspace.name }}
+                            </h3>
+                            <p class="text-sm text-gray-500">
+                                {{ membership.role.name }} • {{ membership.workspace.slug }}
+                            </p>
+                        </div>
+                    </div>
+                    <div class="flex items-center">
+                        {% if membership.workspace.is_active %}
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                            Active
+                        </span>
+                        {% else %}
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                            Inactive
+                        </span>
+                        {% endif %}
+                        <svg class="ml-4 h-5 w-5 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
+                        </svg>
+                    </div>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="bg-white shadow rounded-lg p-8 text-center">
+            <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
+                      d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
+            </svg>
+            <h3 class="mt-4 text-lg font-medium text-gray-900">No workspaces yet</h3>
+            <p class="mt-2 text-gray-500">Create your first workspace to get started</p>
+        </div>
+        {% endif %}
+        
+        <!-- Create New Workspace -->
+        <div class="mt-8">
+            <h3 class="text-lg font-medium text-gray-900 mb-4">Create New Workspace</h3>
+            <form method="POST" action="{% url 'core:workspace_create' %}" class="bg-white shadow rounded-lg p-6">
+                {% csrf_token %}
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label for="name" class="block text-sm font-medium text-gray-700">Workspace Name</label>
+                        <input type="text" name="name" id="name" required
+                               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                               placeholder="My Real Estate Agency">
+                    </div>
+                    <div>
+                        <label for="slug" class="block text-sm font-medium text-gray-700">URL Slug</label>
+                        <div class="mt-1 flex rounded-md shadow-sm">
+                            <span class="inline-flex items-center px-3 rounded-l-md border border-r-0 border-gray-300 bg-gray-50 text-gray-500 sm:text-sm">
+                                /
+                            </span>
+                            <input type="text" name="slug" id="slug" required
+                                   class="flex-1 min-w-0 block w-full px-3 py-2 rounded-none rounded-r-md border-gray-300 focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                                   placeholder="my-agency" pattern="[a-z0-9-]+">
+                        </div>
+                        <p class="mt-1 text-xs text-gray-500">Lowercase letters, numbers, and hyphens only</p>
+                    </div>
+                </div>
+                <div class="mt-4 flex justify-end">
+                    <button type="submit"
+                            class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                        <svg class="-ml-1 mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                        </svg>
+                        Create Workspace
+                    </button>
+                </div>
+            </form>
+        </div>
+        
+        <!-- Account Actions -->
+        <div class="mt-8 flex justify-between items-center text-sm">
+            <span class="text-gray-600">
+                Logged in as <strong>{{ request.user.email }}</strong>
+            </span>
+            <a href="{% url 'core:logout' %}" class="text-red-600 hover:text-red-800">
+                Sign Out
+            </a>
+        </div>
+    </div>
+</div>
+
+<script>
+// Auto-generate slug from name
+document.getElementById('name').addEventListener('input', function() {
+    const slug = this.value
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+    document.getElementById('slug').value = slug;
+});
+</script>
+{% endblock %}

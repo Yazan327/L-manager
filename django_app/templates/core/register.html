@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}Register - L-Manager{% endblock %}
+
+{% block content %}
+<div class="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div class="max-w-md w-full space-y-8">
+        <div>
+            <h2 class="mt-6 text-center text-3xl font-extrabold text-gray-900">
+                🏠 Create your account
+            </h2>
+            <p class="mt-2 text-center text-sm text-gray-600">
+                Or
+                <a href="{% url 'core:login' %}" class="font-medium text-blue-600 hover:text-blue-500">
+                    sign in to existing account
+                </a>
+            </p>
+        </div>
+        
+        {% if messages %}
+        <div class="rounded-md p-4 bg-red-50">
+            {% for message in messages %}
+            <p class="text-sm text-red-700">{{ message }}</p>
+            {% endfor %}
+        </div>
+        {% endif %}
+        
+        <form class="mt-8 space-y-6" method="POST">
+            {% csrf_token %}
+            <div class="rounded-md shadow-sm space-y-3">
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label for="first_name" class="sr-only">First name</label>
+                        <input id="first_name" name="first_name" type="text" required 
+                               class="appearance-none rounded-md relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" 
+                               placeholder="First name">
+                    </div>
+                    <div>
+                        <label for="last_name" class="sr-only">Last name</label>
+                        <input id="last_name" name="last_name" type="text" 
+                               class="appearance-none rounded-md relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" 
+                               placeholder="Last name">
+                    </div>
+                </div>
+                <div>
+                    <label for="email" class="sr-only">Email address</label>
+                    <input id="email" name="email" type="email" autocomplete="email" required 
+                           class="appearance-none rounded-md relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" 
+                           placeholder="Email address">
+                </div>
+                <div>
+                    <label for="password" class="sr-only">Password</label>
+                    <input id="password" name="password" type="password" required 
+                           class="appearance-none rounded-md relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" 
+                           placeholder="Password (min 8 characters)">
+                </div>
+                <div>
+                    <label for="password_confirm" class="sr-only">Confirm password</label>
+                    <input id="password_confirm" name="password_confirm" type="password" required 
+                           class="appearance-none rounded-md relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" 
+                           placeholder="Confirm password">
+                </div>
+            </div>
+
+            <div>
+                <button type="submit" 
+                        class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                    Create Account
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
