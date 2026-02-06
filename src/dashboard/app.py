@@ -274,6 +274,34 @@ def map_pf_state_to_local_status(pf_state: str):
     return None
 
 
+def _extract_pf_listings(response: dict):
+    """Extract listings list from varying PF response shapes."""
+    if not isinstance(response, dict):
+        return []
+    if isinstance(response.get('data'), list):
+        return response['data']
+    results = response.get('results')
+    if isinstance(results, dict) and isinstance(results.get('items'), list):
+        return results['items']
+    if isinstance(response.get('items'), list):
+        return response['items']
+    return []
+
+
+def find_pf_listing_by_reference(client, reference: str):
+    """Find PF listing by reference using filter[reference]."""
+    if not reference:
+        return None
+    try:
+        resp = client.get_listings(page=1, per_page=1, **{'filter[reference]': reference})
+    except Exception:
+        return None
+    listings = _extract_pf_listings(resp)
+    if not listings:
+        return None
+    return listings[0]
+
+
 @app.route('/api/version', methods=['GET'])
 def api_version():
     """API: Return build/version info for deployment verification"""
@@ -1378,11 +1406,31 @@ def api_local_delete_listing(listing_id):
 def api_local_sync_pf_status(listing_id):
     """Sync local listing status with PropertyFinder state"""
     listing = LocalListing.query.get_or_404(listing_id)
-    if not listing.pf_listing_id:
-        return jsonify({'success': False, 'error': 'Listing is not synced to PropertyFinder'}), 400
-
     client = get_client()
-    state_resp = client.get_listing_state_safe(listing.pf_listing_id)
+    pf_listing_id = listing.pf_listing_id
+    if not pf_listing_id:
+        lookup = find_pf_listing_by_reference(client, listing.reference) if listing.reference else None
+        if lookup and lookup.get('id'):
+            pf_listing_id = str(lookup.get('id'))
+            listing.pf_listing_id = pf_listing_id
+            listing.updated_at = datetime.utcnow()
+            db.session.commit()
+        else:
+            return jsonify({'success': False, 'error': 'Listing is not synced to PropertyFinder'}), 400
+
+    try:
+        state_resp = client.get_listing_state_safe(pf_listing_id)
+    except PropertyFinderAPIError:
+        lookup = find_pf_listing_by_reference(client, listing.reference) if listing.reference else None
+        if lookup and lookup.get('id'):
+            new_id = str(lookup.get('id'))
+            if new_id != listing.pf_listing_id:
+                listing.pf_listing_id = new_id
+                listing.updated_at = datetime.utcnow()
+                db.session.commit()
+            state_resp = client.get_listing_state_safe(new_id)
+        else:
+            raise
     pf_state = None
     if isinstance(state_resp, dict):
         if isinstance(state_resp.get('data'), dict):
@@ -1411,12 +1459,32 @@ def api_local_sync_pf_status(listing_id):
 def sync_pf_status_form(listing_id):
     """Sync local listing status with PropertyFinder state (form redirect)"""
     listing = LocalListing.query.get_or_404(listing_id)
-    if not listing.pf_listing_id:
-        flash('This listing is not synced to PropertyFinder', 'warning')
-        return redirect(request.referrer or url_for('listings'))
-
     client = get_client()
-    state_resp = client.get_listing_state_safe(listing.pf_listing_id)
+    pf_listing_id = listing.pf_listing_id
+    if not pf_listing_id:
+        lookup = find_pf_listing_by_reference(client, listing.reference) if listing.reference else None
+        if lookup and lookup.get('id'):
+            pf_listing_id = str(lookup.get('id'))
+            listing.pf_listing_id = pf_listing_id
+            listing.updated_at = datetime.utcnow()
+            db.session.commit()
+        else:
+            flash('This listing is not synced to PropertyFinder', 'warning')
+            return redirect(request.referrer or url_for('listings'))
+
+    try:
+        state_resp = client.get_listing_state_safe(pf_listing_id)
+    except PropertyFinderAPIError:
+        lookup = find_pf_listing_by_reference(client, listing.reference) if listing.reference else None
+        if lookup and lookup.get('id'):
+            new_id = str(lookup.get('id'))
+            if new_id != listing.pf_listing_id:
+                listing.pf_listing_id = new_id
+                listing.updated_at = datetime.utcnow()
+                db.session.commit()
+            state_resp = client.get_listing_state_safe(new_id)
+        else:
+            raise
     pf_state = None
     if isinstance(state_resp, dict):
         if isinstance(state_resp.get('data'), dict):

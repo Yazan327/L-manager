@@ -356,12 +356,10 @@
                                     <i class="fas fa-pause-circle"></i>
                                 </button>
                                 {% endif %}
-                                {% if listing.pf_listing_id %}
                                 <button @click="syncPfStatus('{{ listing.id }}')" 
                                         class="p-1.5 text-gray-600 hover:bg-gray-100 rounded" title="Sync PF Status">
                                     <i class="fas fa-sync-alt"></i>
                                 </button>
-                                {% endif %}
                                 <button @click="duplicateListing('{{ listing.id }}')" 
                                         class="p-1.5 text-blue-600 hover:bg-blue-50 rounded" title="Duplicate">
                                     <i class="fas fa-copy"></i>
