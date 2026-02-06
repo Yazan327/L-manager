@@ -254,6 +254,26 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+def map_pf_state_to_local_status(pf_state: str):
+    """Map PF listing state to local listing status."""
+    if not pf_state:
+        return None
+    pf_state = str(pf_state).lower()
+    if pf_state in ('live', 'published', 'live_pending_unpublishing'):
+        return 'live'
+    if pf_state in (
+        'draft',
+        'pf_draft',
+        'unpublished',
+        'takendown',
+        'live_unpublishing_failed',
+        'live_pending_deletion',
+        'takendown_pending_deletion',
+    ):
+        return 'draft'
+    return None
+
+
 def api_error_handler(f):
     """Decorator to handle API errors"""
     @wraps(f)
@@ -627,7 +647,24 @@ def view_listing(listing_id):
         local_id = int(listing_id)
         local_listing = LocalListing.query.get(local_id)
         if local_listing:
-            return render_template('listing_detail.html', listing=local_listing.to_dict())
+            listing_dict = local_listing.to_dict()
+            # If synced to PF, fetch current PF state for display (best-effort)
+            if local_listing.pf_listing_id:
+                try:
+                    client = get_client()
+                    state_resp = client.get_listing_state(local_listing.pf_listing_id)
+                    pf_state = None
+                    if isinstance(state_resp, dict):
+                        if isinstance(state_resp.get('data'), dict):
+                            pf_state = state_resp['data'].get('state')
+                        pf_state = pf_state or state_resp.get('state')
+                    if pf_state:
+                        listing_dict['pf_state'] = pf_state
+                except PropertyFinderAPIError as e:
+                    listing_dict['pf_state_error'] = e.message
+                except Exception:
+                    listing_dict['pf_state_error'] = 'Unable to fetch PF state'
+            return render_template('listing_detail.html', listing=listing_dict)
     except (ValueError, TypeError):
         pass  # Not an integer ID, try API
     
@@ -1323,6 +1360,50 @@ def api_local_delete_listing(listing_id):
     db.session.commit()
     
     return jsonify({'success': True, 'message': 'Listing deleted'})
+
+
+@app.route('/api/local/listings/<int:listing_id>/sync-pf-status', methods=['POST'])
+@api_error_handler
+def api_local_sync_pf_status(listing_id):
+    """Sync local listing status with PropertyFinder state"""
+    listing = LocalListing.query.get_or_404(listing_id)
+    if not listing.pf_listing_id:
+        if request.is_json or request.headers.get('Accept') == 'application/json':
+            return jsonify({'success': False, 'error': 'Listing is not synced to PropertyFinder'}), 400
+        flash('This listing is not synced to PropertyFinder', 'warning')
+        return redirect(request.referrer or url_for('listings'))
+
+    client = get_client()
+    state_resp = client.get_listing_state(listing.pf_listing_id)
+    pf_state = None
+    if isinstance(state_resp, dict):
+        if isinstance(state_resp.get('data'), dict):
+            pf_state = state_resp['data'].get('state')
+        pf_state = pf_state or state_resp.get('state')
+
+    if not pf_state:
+        if request.is_json or request.headers.get('Accept') == 'application/json':
+            return jsonify({'success': False, 'error': 'Unable to determine PropertyFinder listing state'}), 500
+        flash('Unable to determine PropertyFinder listing state', 'error')
+        return redirect(request.referrer or url_for('listings'))
+
+    new_status = map_pf_state_to_local_status(pf_state)
+    if new_status and listing.status != new_status:
+        old_status = listing.status
+        listing.status = new_status
+        listing.updated_at = datetime.utcnow()
+        db.session.commit()
+        msg = f'PF state: {pf_state}. Local status updated from {old_status or "draft"} to {new_status}.'
+        if request.is_json or request.headers.get('Accept') == 'application/json':
+            return jsonify({'success': True, 'pf_state': pf_state, 'status': new_status, 'message': msg})
+        flash(msg, 'success')
+    else:
+        msg = f'PF state: {pf_state}. Local status is already up to date.'
+        if request.is_json or request.headers.get('Accept') == 'application/json':
+            return jsonify({'success': True, 'pf_state': pf_state, 'status': listing.status, 'message': msg})
+        flash(msg, 'info')
+
+    return redirect(request.referrer or url_for('listings'))
 
 
 @app.route('/api/local/listings/bulk', methods=['POST'])

@@ -356,6 +356,12 @@
                                     <i class="fas fa-pause-circle"></i>
                                 </button>
                                 {% endif %}
+                                {% if listing.pf_listing_id %}
+                                <button @click="syncPfStatus('{{ listing.id }}')" 
+                                        class="p-1.5 text-gray-600 hover:bg-gray-100 rounded" title="Sync PF Status">
+                                    <i class="fas fa-sync-alt"></i>
+                                </button>
+                                {% endif %}
                                 <button @click="duplicateListing('{{ listing.id }}')" 
                                         class="p-1.5 text-blue-600 hover:bg-blue-50 rounded" title="Duplicate">
                                     <i class="fas fa-copy"></i>
@@ -763,6 +769,20 @@ function listingsPage() {
                 else alert('Failed to unpublish listing');
             } catch (e) {
                 alert('Failed to unpublish listing');
+            }
+        },
+
+        async syncPfStatus(id) {
+            try {
+                const response = await fetch(`/api/local/listings/${id}/sync-pf-status`, { method: 'POST' });
+                if (response.ok) {
+                    location.reload();
+                } else {
+                    const data = await response.json().catch(() => ({}));
+                    alert(data.error || 'Failed to sync PF status');
+                }
+            } catch (e) {
+                alert('Failed to sync PF status');
             }
         },
         
