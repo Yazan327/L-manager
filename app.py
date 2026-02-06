@@ -1810,6 +1810,26 @@ def validate_media_urls(listing_data):
     return False, message, shown, warnings
 
 
+def map_pf_state_to_local_status(pf_state: str):
+    """Map PF listing state to local listing status."""
+    if not pf_state:
+        return None
+    pf_state = str(pf_state).lower()
+    if pf_state in ('live', 'published', 'live_pending_unpublishing'):
+        return 'live'
+    if pf_state in (
+        'draft',
+        'pf_draft',
+        'unpublished',
+        'takendown',
+        'live_unpublishing_failed',
+        'live_pending_deletion',
+        'takendown_pending_deletion',
+    ):
+        return 'draft'
+    return None
+
+
 def generate_reference_id():
     """Generate a unique reference ID for listings"""
     import uuid
@@ -3620,7 +3640,24 @@ def view_listing(listing_id):
         local_id = int(listing_id)
         local_listing = LocalListing.query.get(local_id)
         if local_listing:
-            return render_template('listing_detail.html', listing=local_listing.to_dict())
+            listing_dict = local_listing.to_dict()
+            # If synced to PF, fetch current PF state for display (best-effort)
+            if local_listing.pf_listing_id:
+                try:
+                    client = get_client()
+                    state_resp = client.get_listing_state(local_listing.pf_listing_id)
+                    state = None
+                    if isinstance(state_resp, dict):
+                        if isinstance(state_resp.get('data'), dict):
+                            state = state_resp['data'].get('state')
+                        state = state or state_resp.get('state')
+                    if state:
+                        listing_dict['pf_state'] = state
+                except PropertyFinderAPIError as e:
+                    listing_dict['pf_state_error'] = e.message
+                except Exception:
+                    listing_dict['pf_state_error'] = 'Unable to fetch PF state'
+            return render_template('listing_detail.html', listing=listing_dict)
     except (ValueError, TypeError):
         pass  # Not an integer ID, try API
     
@@ -5202,6 +5239,52 @@ def unpublish_listing_form(listing_id):
     
     flash('Listing unpublished successfully!', 'success')
     return redirect(url_for('view_listing', listing_id=listing_id))
+
+
+@app.route('/listings/<listing_id>/sync-pf-status', methods=['POST'])
+@login_required
+@api_error_handler
+def sync_pf_status_form(listing_id):
+    """Sync local listing status with PropertyFinder state"""
+    try:
+        local_id = int(listing_id)
+        local_listing = LocalListing.query.get(local_id)
+        if not local_listing:
+            flash('Listing not found', 'error')
+            return redirect(request.referrer or url_for('listings'))
+
+        if not local_listing.pf_listing_id:
+            flash('This listing is not synced to PropertyFinder', 'warning')
+            return redirect(request.referrer or url_for('view_listing', listing_id=listing_id))
+
+        client = get_client()
+        state_resp = client.get_listing_state(local_listing.pf_listing_id)
+        pf_state = None
+        if isinstance(state_resp, dict):
+            if isinstance(state_resp.get('data'), dict):
+                pf_state = state_resp['data'].get('state')
+            pf_state = pf_state or state_resp.get('state')
+
+        if not pf_state:
+            flash('Unable to determine PropertyFinder listing state', 'error')
+            return redirect(request.referrer or url_for('view_listing', listing_id=listing_id))
+
+        new_status = map_pf_state_to_local_status(pf_state)
+        if new_status and local_listing.status != new_status:
+            old_status = local_listing.status
+            local_listing.status = new_status
+            db.session.commit()
+            flash(
+                f'PF state: {pf_state}. Local status updated from {old_status or "draft"} to {new_status}.',
+                'success'
+            )
+        else:
+            flash(f'PF state: {pf_state}. Local status is already up to date.', 'info')
+
+        return redirect(request.referrer or url_for('view_listing', listing_id=listing_id))
+    except (ValueError, TypeError):
+        flash('Can only sync local listings', 'error')
+        return redirect(request.referrer or url_for('listings'))
 
 
 def build_listing_from_form(form):
