@@ -385,17 +385,26 @@ def api_error_handler(f):
             request_id = None
             details = None
             cloudfront = None
+            meta = None
             if isinstance(e.response, dict):
                 request_id = e.response.get('_request_id')
                 details = e.response.get('errors') or e.response.get('error') or e.response.get('raw')
                 cloudfront = e.response.get('_cloudfront')
+                meta = {
+                    'status_code': e.response.get('_status_code'),
+                    'content_type': e.response.get('_content_type'),
+                    'headers': e.response.get('_headers'),
+                }
+                if not any(meta.values()):
+                    meta = None
             if request.path.startswith('/api/') or request.is_json or request.headers.get('Accept') == 'application/json':
                 return jsonify({
                     'error': e.message,
                     'status_code': e.status_code,
                     'request_id': request_id,
                     'details': details,
-                    'cloudfront': cloudfront
+                    'cloudfront': cloudfront,
+                    'meta': meta
                 }), e.status_code or 500
             if cloudfront and isinstance(cloudfront, dict):
                 cf_id = cloudfront.get('cf_id')

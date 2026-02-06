@@ -302,6 +302,25 @@ class PropertyFinderClient:
                 if request_id and isinstance(response_data, dict) and '_request_id' not in response_data:
                     response_data['_request_id'] = request_id
 
+                # Attach basic response metadata for debugging
+                if isinstance(response_data, dict):
+                    response_data['_status_code'] = response.status_code
+                    response_data['_content_type'] = content_type
+                    headers_meta = {}
+                    for key in (
+                        'x-request-id',
+                        'x-correlation-id',
+                        'x-amz-cf-id',
+                        'x-amz-cf-pop',
+                        'x-cache',
+                        'server',
+                    ):
+                        value = response.headers.get(key)
+                        if value:
+                            headers_meta[key] = value
+                    if headers_meta:
+                        response_data['_headers'] = headers_meta
+
                 # Auto-retry CloudFront 403
                 if is_cloudfront_block and cloudfront_attempts < cloudfront_max_retries:
                     cloudfront_attempts += 1
@@ -311,6 +330,15 @@ class PropertyFinderClient:
                     if Config.DEBUG:
                         cf_id = response_data.get('_cloudfront', {}).get('cf_id') if isinstance(response_data, dict) else None
                         print(f"[DEBUG] CloudFront 403 detected (cf_id={cf_id}); retrying in {wait_time:.2f}s...")
+                    time.sleep(wait_time)
+                    attempt += 1
+                    continue
+
+                # Retry transient upstream errors
+                if response.status_code in (502, 503, 504) and attempt < retries:
+                    wait_time = 2 ** attempt
+                    if Config.DEBUG:
+                        print(f"[DEBUG] Upstream {response.status_code} detected; retrying in {wait_time}s...")
                     time.sleep(wait_time)
                     attempt += 1
                     continue
