@@ -64,6 +64,17 @@ class PropertyFinderClient:
             'User-Agent': Config.USER_AGENT,
             'Accept-Language': Config.ACCEPT_LANGUAGE
         })
+        http_proxy = Config.HTTP_PROXY.strip()
+        https_proxy = Config.HTTPS_PROXY.strip() or http_proxy
+        if http_proxy or https_proxy:
+            proxies = {}
+            if http_proxy:
+                proxies['http'] = http_proxy
+            if https_proxy:
+                proxies['https'] = https_proxy
+            self.session.proxies.update(proxies)
+            if Config.DEBUG:
+                print("[DEBUG] PF proxy enabled")
     
     # ==================== AUTHENTICATION ====================
     

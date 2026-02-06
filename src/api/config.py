@@ -44,6 +44,8 @@ class Config:
     )
     ACCEPT_LANGUAGE = os.getenv('PF_ACCEPT_LANGUAGE', 'en-US,en;q=0.9')
     SKIP_MEDIA = os.getenv('PF_SKIP_MEDIA', 'false').lower() == 'true'
+    HTTP_PROXY = os.getenv('PF_HTTP_PROXY', '')
+    HTTPS_PROXY = os.getenv('PF_HTTPS_PROXY', '')
     
     # Bulk Operations
     BULK_BATCH_SIZE = int(os.getenv('PF_BULK_BATCH_SIZE', '50'))
