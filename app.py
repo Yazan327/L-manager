@@ -4632,10 +4632,28 @@ def api_unpublish_listing(listing_id):
         local_listing = LocalListing.query.get(local_id)
         if local_listing and local_listing.pf_listing_id:
             # Use the PF listing ID instead
-            result = client.unpublish_listing(local_listing.pf_listing_id)
-            local_listing.status = 'draft'
-            db.session.commit()
-            return jsonify({'success': True, 'data': result})
+            client.unpublish_listing(local_listing.pf_listing_id)
+            pf_state = None
+            try:
+                pf_listing = _normalize_pf_listing(client.get_listing(local_listing.pf_listing_id))
+                pf_state = extract_pf_state_from_listing(pf_listing)
+            except PropertyFinderAPIError:
+                pf_state = None
+
+            new_status = map_pf_state_to_local_status(pf_state) if pf_state else None
+            if new_status and local_listing.status != new_status:
+                local_listing.status = new_status
+                local_listing.updated_at = datetime.utcnow()
+                db.session.commit()
+
+            return jsonify({
+                'success': True,
+                'pf_state': pf_state,
+                'status': local_listing.status,
+                'message': 'Unpublish request submitted'
+            })
+        if local_listing and not local_listing.pf_listing_id:
+            return jsonify({'success': False, 'error': 'Listing is not synced to PropertyFinder'}), 400
     except (ValueError, TypeError):
         pass
     
@@ -5328,13 +5346,33 @@ def unpublish_listing_form(listing_id):
             
             # Unpublish on PropertyFinder
             client = get_client()
-            result = client.unpublish_listing(local_listing.pf_listing_id)
-            
-            # Update local status
-            local_listing.status = 'draft'
-            db.session.commit()
-            
-            flash('Listing unpublished successfully!', 'success')
+            client.unpublish_listing(local_listing.pf_listing_id)
+
+            pf_state = None
+            try:
+                pf_listing = _normalize_pf_listing(client.get_listing(local_listing.pf_listing_id))
+                pf_state = extract_pf_state_from_listing(pf_listing)
+            except PropertyFinderAPIError:
+                pf_state = None
+
+            new_status = map_pf_state_to_local_status(pf_state) if pf_state else None
+            if new_status and local_listing.status != new_status:
+                old_status = local_listing.status
+                local_listing.status = new_status
+                local_listing.updated_at = datetime.utcnow()
+                db.session.commit()
+                if new_status == 'draft':
+                    flash('Listing unpublished successfully!', 'success')
+                else:
+                    flash(
+                        f'Unpublish requested. PF state: {pf_state}. Local status updated from {old_status or "draft"} to {new_status}.',
+                        'info'
+                    )
+            else:
+                if pf_state:
+                    flash(f'Unpublish requested. PF state: {pf_state}. Local status unchanged.', 'info')
+                else:
+                    flash('Unpublish request submitted. Status will update after PF confirms.', 'info')
             return redirect(url_for('view_listing', listing_id=listing_id))
     except (ValueError, TypeError):
         pass  # Not an integer ID, continue with PF listing
