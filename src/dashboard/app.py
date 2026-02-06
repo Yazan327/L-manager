@@ -382,12 +382,37 @@ def api_error_handler(f):
         try:
             return f(*args, **kwargs)
         except PropertyFinderAPIError as e:
-            if request.is_json or request.headers.get('Accept') == 'application/json':
-                return jsonify({'error': e.message, 'status_code': e.status_code}), e.status_code or 500
-            flash(f'API Error: {e.message}', 'error')
+            request_id = None
+            details = None
+            cloudfront = None
+            if isinstance(e.response, dict):
+                request_id = e.response.get('_request_id')
+                details = e.response.get('errors') or e.response.get('error') or e.response.get('raw')
+                cloudfront = e.response.get('_cloudfront')
+            if request.path.startswith('/api/') or request.is_json or request.headers.get('Accept') == 'application/json':
+                return jsonify({
+                    'error': e.message,
+                    'status_code': e.status_code,
+                    'request_id': request_id,
+                    'details': details,
+                    'cloudfront': cloudfront
+                }), e.status_code or 500
+            if cloudfront and isinstance(cloudfront, dict):
+                cf_id = cloudfront.get('cf_id')
+                if cf_id:
+                    flash(
+                        f'PropertyFinder CDN blocked this request. Try again later or contact PF support with CloudFront ID: {cf_id}',
+                        'error'
+                    )
+                else:
+                    flash('PropertyFinder CDN blocked this request. Try again later or contact PF support.', 'error')
+            elif request_id:
+                flash(f'API Error: {e.message} (Request ID: {request_id})', 'error')
+            else:
+                flash(f'API Error: {e.message}', 'error')
             return redirect(request.referrer or url_for('index'))
         except Exception as e:
-            if request.is_json or request.headers.get('Accept') == 'application/json':
+            if request.path.startswith('/api/') or request.is_json or request.headers.get('Accept') == 'application/json':
                 return jsonify({'error': str(e)}), 500
             flash(f'Error: {str(e)}', 'error')
             return redirect(request.referrer or url_for('index'))

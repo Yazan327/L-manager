@@ -2107,7 +2107,7 @@ def api_error_handler(f):
                 request_id = e.response.get('_request_id')
                 details = e.response.get('errors') or e.response.get('error') or e.response.get('raw')
                 cloudfront = e.response.get('_cloudfront')
-            if request.is_json or request.headers.get('Accept') == 'application/json':
+            if request.path.startswith('/api/') or request.is_json or request.headers.get('Accept') == 'application/json':
                 return jsonify({
                     'error': e.message,
                     'status_code': e.status_code,
@@ -2130,7 +2130,7 @@ def api_error_handler(f):
                 flash(f'API Error: {e.message}', 'error')
             return redirect(request.referrer or url_for('index'))
         except Exception as e:
-            if request.is_json or request.headers.get('Accept') == 'application/json':
+            if request.path.startswith('/api/') or request.is_json or request.headers.get('Accept') == 'application/json':
                 return jsonify({'error': str(e)}), 500
             flash(f'Error: {str(e)}', 'error')
             return redirect(request.referrer or url_for('index'))
