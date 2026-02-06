@@ -113,7 +113,8 @@ class PropertyFinderClient:
             print(f"[DEBUG] Requesting new access token from {token_url}")
         
         try:
-            response = requests.post(
+            # Use the session (trust_env is disabled) to avoid proxy/env leakage
+            response = self.session.post(
                 token_url,
                 json={
                     'apiKey': self.api_key,
@@ -191,6 +192,18 @@ class PropertyFinderClient:
             self._ensure_authenticated()
         
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        # Guard against unexpected hosts (helps detect misrouted traffic)
+        try:
+            from urllib.parse import urlparse
+            host = urlparse(url).hostname or ''
+            if host and host != 'atlas.propertyfinder.com':
+                raise PropertyFinderAPIError(
+                    f"Refusing to call unexpected host: {host}. Check PF_API_BASE_URL."
+                )
+        except PropertyFinderAPIError:
+            raise
+        except Exception:
+            pass
         retries = retries or Config.MAX_RETRIES
         
         payload_size = 0
