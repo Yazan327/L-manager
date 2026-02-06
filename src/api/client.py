@@ -15,6 +15,7 @@ Rate Limits:
 """
 import json
 import time
+import random
 import requests
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
@@ -59,7 +60,9 @@ class PropertyFinderClient:
         self.session = requests.Session()
         self.session.headers.update({
             'Content-Type': 'application/json',
-            'Accept': 'application/json'
+            'Accept': 'application/json',
+            'User-Agent': Config.USER_AGENT,
+            'Accept-Language': Config.ACCEPT_LANGUAGE
         })
     
     # ==================== AUTHENTICATION ====================
@@ -184,7 +187,10 @@ class PropertyFinderClient:
             except Exception:
                 payload_size = 0
 
-        for attempt in range(retries + 1):
+        attempt = 0
+        cloudfront_attempts = 0
+        cloudfront_max_retries = 2
+        while attempt <= retries:
             try:
                 if Config.DEBUG:
                     print(f"[DEBUG] {method} {url}")
@@ -215,6 +221,7 @@ class PropertyFinderClient:
                             print("[DEBUG] Token expired, refreshing...")
                         self._access_token = None  # Force refresh
                         self._ensure_authenticated()
+                        attempt += 1
                         continue
                 
                 # Handle rate limiting
@@ -223,9 +230,11 @@ class PropertyFinderClient:
                     if attempt < retries:
                         print(f"Rate limited. Waiting {retry_after} seconds...")
                         time.sleep(retry_after)
+                        attempt += 1
                         continue
                 
                 # Parse response
+                raw_text = None
                 try:
                     response_data = response.json()
                 except json.JSONDecodeError:
@@ -237,10 +246,48 @@ class PropertyFinderClient:
                         snippet = raw_text[:200] + ('...' if len(raw_text) > 200 else '')
                         print(f"[DEBUG] Non-JSON response body: {snippet}")
 
-                # Capture request/correlation ID if present
+                # Detect CloudFront 403 HTML block
+                content_type = (response.headers.get('content-type') or '').lower()
+                is_cloudfront_block = False
+                if response.status_code == 403 and 'text/html' in content_type and raw_text:
+                    lowered = raw_text.lower()
+                    if 'request could not be satisfied' in lowered:
+                        is_cloudfront_block = True
+
+                if is_cloudfront_block and isinstance(response_data, dict):
+                    cf_id = response.headers.get('x-amz-cf-id')
+                    cf_pop = response.headers.get('x-amz-cf-pop')
+                    x_cache = response.headers.get('x-cache')
+                    err_type = response.headers.get('x-amzn-errortype')
+                    response_data['_cloudfront'] = {
+                        'cf_id': cf_id,
+                        'cf_pop': cf_pop,
+                        'cache': x_cache,
+                        'error_type': err_type
+                    }
+                    response_data['error'] = 'CloudFront 403: Request blocked'
+                    if cf_id:
+                        response_data['_request_id'] = cf_id
+                    if Config.DEBUG:
+                        print(f"[DEBUG] CloudFront headers: cf_id={cf_id}, cf_pop={cf_pop}, cache={x_cache}, error_type={err_type}")
+
+                # Capture request/correlation ID if present (unless CloudFront already set one)
                 request_id = response.headers.get('x-request-id') or response.headers.get('x-correlation-id')
-                if request_id and isinstance(response_data, dict):
+                if request_id and isinstance(response_data, dict) and '_request_id' not in response_data:
                     response_data['_request_id'] = request_id
+
+                # Auto-retry CloudFront 403
+                if is_cloudfront_block and cloudfront_attempts < cloudfront_max_retries:
+                    cloudfront_attempts += 1
+                    base_delay = 2 ** (cloudfront_attempts - 1)
+                    jitter = random.uniform(-0.25, 0.25)
+                    wait_time = max(0, base_delay + jitter)
+                    if Config.DEBUG:
+                        cf_id = response_data.get('_cloudfront', {}).get('cf_id') if isinstance(response_data, dict) else None
+                        print(f"[DEBUG] CloudFront 403 detected (cf_id={cf_id}); retrying in {wait_time:.2f}s...")
+                    time.sleep(wait_time)
+                    attempt += 1
+                    continue
                 
                 # Check for errors
                 if not response.ok:
@@ -272,8 +319,11 @@ class PropertyFinderClient:
                     wait_time = 2 ** attempt  # Exponential backoff
                     print(f"Request failed. Retrying in {wait_time}s... ({attempt + 1}/{retries})")
                     time.sleep(wait_time)
+                    attempt += 1
+                    continue
                 else:
                     raise PropertyFinderAPIError(f"Request failed after {retries} retries: {str(e)}")
+            attempt += 1
     
     # ==================== CONNECTION TEST ====================
     
@@ -387,7 +437,13 @@ class PropertyFinderClient:
         Returns:
             Created listing response with listingId
         """
-        return self._make_request('POST', '/listings', data=listing_data)
+        data = listing_data
+        if Config.SKIP_MEDIA and isinstance(listing_data, dict) and 'media' in listing_data:
+            data = dict(listing_data)
+            data.pop('media', None)
+            if Config.DEBUG:
+                print("[DEBUG] PF_SKIP_MEDIA enabled - removed media from listing payload")
+        return self._make_request('POST', '/listings', data=data)
     
     def update_listing(self, listing_id: str, listing_data: Dict[str, Any]) -> Dict[str, Any]:
         """

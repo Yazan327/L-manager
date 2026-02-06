@@ -1752,7 +1752,7 @@ def validate_location_id(local_listing, client):
 def validate_media_urls(listing_data):
     """
     Validate that media image URLs are publicly accessible.
-    Returns (True, None, None) on success, (False, message, failed_urls) on failure.
+    Returns (ok, message, failed_urls, warnings).
     """
     media = listing_data.get('media') or {}
     images = media.get('images') or []
@@ -1765,8 +1765,17 @@ def validate_media_urls(listing_data):
         if url:
             urls.append(str(url).strip())
 
+    warnings = []
+    max_warn = getattr(Config, 'MAX_IMAGES_WARN', 15)
+    if max_warn and len(urls) > max_warn:
+        warnings.append(
+            f"Listing has {len(urls)} images (recommended <= {max_warn}). Consider reducing images."
+        )
+
     if not urls:
-        return True, None, None
+        return True, None, None, warnings
+    if getattr(Config, 'SKIP_MEDIA', False):
+        return True, None, None, warnings
 
     import requests
 
@@ -1789,7 +1798,7 @@ def validate_media_urls(listing_data):
             failed.append(url)
 
     if not failed:
-        return True, None, None
+        return True, None, None, warnings
 
     max_list = 3
     shown = failed[:max_list]
@@ -1798,7 +1807,7 @@ def validate_media_urls(listing_data):
     if remaining > 0:
         message += f" (and {remaining} more)"
     message += ". Check APP_PUBLIC_URL and ensure images are publicly accessible."
-    return False, message, shown
+    return False, message, shown, warnings
 
 
 def generate_reference_id():
@@ -1917,17 +1926,29 @@ def api_error_handler(f):
         except PropertyFinderAPIError as e:
             request_id = None
             details = None
+            cloudfront = None
             if isinstance(e.response, dict):
                 request_id = e.response.get('_request_id')
                 details = e.response.get('errors') or e.response.get('error') or e.response.get('raw')
+                cloudfront = e.response.get('_cloudfront')
             if request.is_json or request.headers.get('Accept') == 'application/json':
                 return jsonify({
                     'error': e.message,
                     'status_code': e.status_code,
                     'request_id': request_id,
-                    'details': details
+                    'details': details,
+                    'cloudfront': cloudfront
                 }), e.status_code or 500
-            if request_id:
+            if cloudfront and isinstance(cloudfront, dict):
+                cf_id = cloudfront.get('cf_id')
+                if cf_id:
+                    flash(
+                        f'PropertyFinder CDN blocked this request. Try again later or contact PF support with CloudFront ID: {cf_id}',
+                        'error'
+                    )
+                else:
+                    flash('PropertyFinder CDN blocked this request. Try again later or contact PF support.', 'error')
+            elif request_id:
                 flash(f'API Error: {e.message} (Request ID: {request_id})', 'error')
             else:
                 flash(f'API Error: {e.message}', 'error')
@@ -4327,6 +4348,7 @@ def api_publish_listing(listing_id):
         local_id = int(listing_id)
         local_listing = LocalListing.query.get(local_id)
         if local_listing:
+            media_warnings = []
             if local_listing.pf_listing_id:
                 # Check if PF listing still exists
                 try:
@@ -4383,7 +4405,12 @@ def api_publish_listing(listing_id):
                     return redirect(url_for('edit_listing', listing_id=listing_id))
 
                 # Validate media URLs (public access required by PF)
-                ok, error, failed_urls = validate_media_urls(listing_data)
+                ok, error, failed_urls, warnings = validate_media_urls(listing_data)
+                if warnings:
+                    media_warnings = warnings
+                    if not (request.is_json or request.headers.get('Accept') == 'application/json'):
+                        for warning in warnings:
+                            flash(warning, 'warning')
                 if not ok:
                     if request.is_json or request.headers.get('Accept') == 'application/json':
                         return jsonify({'success': False, 'error': error, 'details': failed_urls}), 400
@@ -4408,16 +4435,25 @@ def api_publish_listing(listing_id):
                         return redirect(url_for('view_listing', listing_id=listing_id))
                 except Exception as e:
                     request_id = None
+                    cloudfront = None
                     msg = str(e)
                     if isinstance(e, PropertyFinderAPIError):
                         msg = e.message
                         if isinstance(e.response, dict):
                             request_id = e.response.get('_request_id')
-                    if request_id:
+                            cloudfront = e.response.get('_cloudfront')
+                            if cloudfront and isinstance(cloudfront, dict):
+                                cf_id = cloudfront.get('cf_id')
+                                if cf_id:
+                                    msg = (
+                                        "PropertyFinder CDN blocked this request. "
+                                        f"Try again later or contact PF support with CloudFront ID: {cf_id}"
+                                    )
+                    if request_id and not (cloudfront and isinstance(cloudfront, dict)):
                         msg = f"{msg} (Request ID: {request_id})"
                     error_msg = f"Failed to create listing on PropertyFinder: {msg}"
                     if request.is_json or request.headers.get('Accept') == 'application/json':
-                        return jsonify({'success': False, 'error': error_msg}), 400
+                        return jsonify({'success': False, 'error': error_msg, 'cloudfront': cloudfront}), 400
                     flash(error_msg, 'error')
                     return redirect(url_for('view_listing', listing_id=listing_id))
             
@@ -4428,7 +4464,14 @@ def api_publish_listing(listing_id):
                 db.session.commit()
                 
                 if request.is_json or request.headers.get('Accept') == 'application/json':
-                    return jsonify({'success': True, 'data': result, 'pf_listing_id': local_listing.pf_listing_id})
+                    response_payload = {
+                        'success': True,
+                        'data': result,
+                        'pf_listing_id': local_listing.pf_listing_id
+                    }
+                    if media_warnings:
+                        response_payload['warnings'] = media_warnings
+                    return jsonify(response_payload)
                 flash(f'Publish request submitted for listing {local_listing.pf_listing_id}', 'success')
                 return redirect(url_for('view_listing', listing_id=listing_id))
             except PropertyFinderAPIError as e:
@@ -4929,7 +4972,10 @@ def send_to_pf_draft(listing_id):
             return redirect(url_for('edit_listing', listing_id=listing_id))
 
         # Validate media URLs (public access required by PF)
-        ok, error, failed_urls = validate_media_urls(listing_data)
+        ok, error, failed_urls, warnings = validate_media_urls(listing_data)
+        if warnings:
+            for warning in warnings:
+                flash(warning, 'warning')
         if not ok:
             flash(error, 'error')
             return redirect(url_for('edit_listing', listing_id=listing_id))
@@ -4956,8 +5002,16 @@ def send_to_pf_draft(listing_id):
             
         except PropertyFinderAPIError as e:
             request_id = e.response.get('_request_id') if isinstance(e.response, dict) else None
+            cloudfront = e.response.get('_cloudfront') if isinstance(e.response, dict) else None
             msg = e.message
-            if request_id:
+            if cloudfront and isinstance(cloudfront, dict):
+                cf_id = cloudfront.get('cf_id')
+                if cf_id:
+                    msg = (
+                        "PropertyFinder CDN blocked this request. "
+                        f"Try again later or contact PF support with CloudFront ID: {cf_id}"
+                    )
+            elif request_id:
                 msg = f"{msg} (Request ID: {request_id})"
             flash(f'Failed to create on PropertyFinder: {msg}', 'error')
             return redirect(url_for('view_listing', listing_id=listing_id))

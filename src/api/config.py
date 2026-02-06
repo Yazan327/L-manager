@@ -38,10 +38,19 @@ class Config:
     REQUEST_TIMEOUT = int(os.getenv('PF_REQUEST_TIMEOUT', '30'))
     MAX_RETRIES = int(os.getenv('PF_MAX_RETRIES', '3'))
     DEBUG = os.getenv('PF_DEBUG', 'false').lower() == 'true'
+    USER_AGENT = os.getenv(
+        'PF_USER_AGENT',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+    )
+    ACCEPT_LANGUAGE = os.getenv('PF_ACCEPT_LANGUAGE', 'en-US,en;q=0.9')
+    SKIP_MEDIA = os.getenv('PF_SKIP_MEDIA', 'false').lower() == 'true'
     
     # Bulk Operations
     BULK_BATCH_SIZE = int(os.getenv('PF_BULK_BATCH_SIZE', '50'))
     BULK_DELAY_SECONDS = float(os.getenv('PF_BULK_DELAY_SECONDS', '1'))
+
+    # Media warnings
+    MAX_IMAGES_WARN = int(os.getenv('PF_MAX_IMAGES_WARN', '15'))
     
     # Default Values for Bulk Upload
     DEFAULT_AGENT_EMAIL = os.getenv('PF_DEFAULT_AGENT_EMAIL', '')
