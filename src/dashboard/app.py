@@ -312,6 +312,8 @@ def extract_pf_state_from_listing(listing: dict):
     if not isinstance(listing, dict):
         return None
     state = listing.get('state')
+    if isinstance(state, dict):
+        state = state.get('stage') or state.get('type') or state.get('state')
     if not state:
         is_live = listing.get('portals', {}).get('propertyfinder', {}).get('isLive')
         if is_live is True:
