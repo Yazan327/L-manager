@@ -624,6 +624,44 @@ class PropertyFinderClient:
         """
         params = {'page': page, 'perPage': per_page, **filters}
         return self._make_request('GET', '/leads', params=params)
+
+    # ==================== WEBHOOKS ====================
+
+    def list_webhooks(self, event_type: str = None) -> Dict[str, Any]:
+        """
+        List webhook subscriptions
+
+        Args:
+            event_type: Optional event type filter
+
+        Returns:
+            List of webhooks
+        """
+        params = {}
+        if event_type:
+            params['eventType'] = event_type
+        return self._make_request('GET', '/webhooks', params=params)
+
+    def create_webhook(self, event_id: str, url: str, secret: str = None) -> Dict[str, Any]:
+        """
+        Create a webhook subscription
+
+        Args:
+            event_id: Event ID (e.g., lead.created)
+            url: Target webhook URL
+            secret: Optional HMAC secret
+        """
+        payload = {
+            'eventId': event_id,
+            'url': url
+        }
+        if secret:
+            payload['secret'] = secret
+        return self._make_request('POST', '/webhooks', data=payload)
+
+    def delete_webhook(self, event_id: str) -> Dict[str, Any]:
+        """Delete a webhook subscription by event ID"""
+        return self._make_request('DELETE', f'/webhooks/{event_id}')
     
     # ==================== BULK OPERATIONS ====================
     

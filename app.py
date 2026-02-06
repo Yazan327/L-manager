@@ -4645,6 +4645,50 @@ def api_test_pf_connection():
         })
 
 
+@app.route('/api/pf/webhooks', methods=['GET'])
+@permission_required('settings')
+def api_pf_list_webhooks():
+    """API: List PropertyFinder webhooks"""
+    event_type = request.args.get('eventType') or request.args.get('event_type')
+    client = get_client()
+    result = client.list_webhooks(event_type=event_type)
+    return jsonify(result)
+
+
+@app.route('/api/pf/webhooks', methods=['POST'])
+@permission_required('settings')
+def api_pf_create_webhook():
+    """API: Create PropertyFinder webhook subscription"""
+    data = request.get_json() or {}
+    event_id = data.get('eventId') or data.get('event_id')
+    url = data.get('url')
+    secret = data.get('secret') or Config.WEBHOOK_SECRET or None
+
+    if not event_id:
+        return jsonify({'success': False, 'error': 'eventId is required'}), 400
+
+    if not url:
+        if Config.WEBHOOK_URL:
+            url = Config.WEBHOOK_URL
+        else:
+            if not APP_PUBLIC_URL:
+                return jsonify({'success': False, 'error': 'APP_PUBLIC_URL or PF_WEBHOOK_URL is required'}), 400
+            url = f"{APP_PUBLIC_URL}/webhooks/propertyfinder"
+
+    client = get_client()
+    result = client.create_webhook(event_id=event_id, url=url, secret=secret)
+    return jsonify({'success': True, 'data': result})
+
+
+@app.route('/api/pf/webhooks/<event_id>', methods=['DELETE'])
+@permission_required('settings')
+def api_pf_delete_webhook(event_id):
+    """API: Delete PropertyFinder webhook subscription"""
+    client = get_client()
+    result = client.delete_webhook(event_id)
+    return jsonify({'success': True, 'data': result})
+
+
 @app.route('/api/users', methods=['GET'])
 @api_error_handler
 def api_get_users():
@@ -6949,31 +6993,102 @@ def webhook_zapier():
 @app.route('/webhooks/propertyfinder', methods=['POST'])
 def webhook_propertyfinder():
     """Receive lead notifications from PropertyFinder webhook"""
-    data = request.get_json()
+    raw_body = request.get_data() or b''
+    signature = request.headers.get('X-Signature', '')
+    if Config.WEBHOOK_SECRET:
+        import hmac
+        import hashlib
+        expected = hmac.new(
+            Config.WEBHOOK_SECRET.encode('utf-8'),
+            raw_body,
+            hashlib.sha256
+        ).hexdigest()
+        if not signature or not hmac.compare_digest(expected, signature):
+            return jsonify({'error': 'Invalid webhook signature'}), 401
+
+    data = request.get_json(silent=True)
     if not data:
         return jsonify({'error': 'No data provided'}), 400
-    
-    # Extract lead info from PF webhook
-    contact = data.get('contact', {})
-    listing = data.get('listing', {})
-    
+
+    payload = data.get('payload') or data.get('data') or data
+    event_id = data.get('eventId') or data.get('event_id')
+    if event_id and not str(event_id).startswith('lead.'):
+        return jsonify({'success': True, 'ignored': True, 'event_id': event_id})
+
+    # Extract lead info from PF webhook payload (WHPayloadLead)
+    sender = payload.get('sender', {}) if isinstance(payload, dict) else {}
+    contacts = sender.get('contacts', []) if isinstance(sender, dict) else []
+    phone = ''
+    email = ''
+    whatsapp = ''
+    for contact in contacts:
+        if contact.get('type') == 'phone':
+            phone = contact.get('value', '')
+            if payload.get('channel') == 'whatsapp':
+                whatsapp = phone
+        elif contact.get('type') == 'email':
+            email = contact.get('value', '')
+
+    listing = payload.get('listing', {}) if isinstance(payload, dict) else {}
+    public_profile = payload.get('publicProfile', {}) if isinstance(payload, dict) else {}
+
+    source_id = payload.get('id') or data.get('id') or payload.get('leadId') or data.get('leadId')
+    if not source_id:
+        import hashlib
+        source_id = hashlib.sha256(raw_body).hexdigest()
+
+    existing = Lead.query.filter_by(source='propertyfinder', source_id=str(source_id)).first()
+
+    if existing:
+        # Update status/response link if present
+        existing.pf_status = payload.get('status', existing.pf_status)
+        if payload.get('responseLink'):
+            existing.response_link = payload.get('responseLink')
+        db.session.commit()
+        return jsonify({'success': True, 'lead_id': existing.id, 'event_id': event_id})
+
+    # Auto-assign to L-Manager user based on PF agent email
+    pf_users = PFCache.get_cache('users') or []
+    lm_users = User.query.filter_by(is_active=True).all()
+    email_to_lm_user = {u.email.lower(): u for u in lm_users}
+    pf_agent_email_map = {}
+    for pf_user in pf_users:
+        pf_id = pf_user.get('publicProfile', {}).get('id')
+        pf_email = pf_user.get('email', '').lower()
+        if pf_id and pf_email:
+            pf_agent_email_map[str(pf_id)] = pf_email
+
+    pf_agent_id = str(public_profile.get('id', '')) if public_profile else ''
+    assigned_to_id = None
+    if pf_agent_id and pf_agent_id in pf_agent_email_map:
+        pf_agent_email = pf_agent_email_map[pf_agent_id]
+        if pf_agent_email in email_to_lm_user:
+            assigned_to_id = email_to_lm_user[pf_agent_email].id
+
     lead = Lead(
         source='propertyfinder',
-        source_id=str(data.get('id')),
-        name=contact.get('name', 'Unknown'),
-        email=contact.get('email'),
-        phone=contact.get('phone'),
-        message=data.get('message'),
+        source_id=str(source_id),
+        channel=payload.get('channel', ''),
+        name=sender.get('name', 'Unknown'),
+        email=email,
+        phone=phone,
+        whatsapp=whatsapp,
+        message=payload.get('message') or data.get('message'),
         pf_listing_id=str(listing.get('id')) if listing.get('id') else None,
         listing_reference=listing.get('reference'),
+        response_link=payload.get('responseLink', ''),
         status='new',
-        priority='medium'
+        pf_status=payload.get('status', ''),
+        priority='medium',
+        pf_agent_id=pf_agent_id,
+        pf_agent_name=public_profile.get('name', ''),
+        assigned_to_id=assigned_to_id
     )
-    
+
     db.session.add(lead)
     db.session.commit()
-    
-    return jsonify({'success': True, 'lead_id': lead.id})
+
+    return jsonify({'success': True, 'lead_id': lead.id, 'event_id': event_id})
 
 
 # ==================== IMAGE EDITOR ENDPOINTS ====================

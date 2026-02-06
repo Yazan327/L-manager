@@ -46,6 +46,8 @@ class Config:
     SKIP_MEDIA = os.getenv('PF_SKIP_MEDIA', 'false').lower() == 'true'
     HTTP_PROXY = os.getenv('PF_HTTP_PROXY', '')
     HTTPS_PROXY = os.getenv('PF_HTTPS_PROXY', '')
+    WEBHOOK_SECRET = os.getenv('PF_WEBHOOK_SECRET', '')
+    WEBHOOK_URL = os.getenv('PF_WEBHOOK_URL', '')
     
     # Bulk Operations
     BULK_BATCH_SIZE = int(os.getenv('PF_BULK_BATCH_SIZE', '50'))
