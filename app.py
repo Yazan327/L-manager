@@ -1749,6 +1749,58 @@ def validate_location_id(local_listing, client):
     return False, 'Invalid Location ID for PropertyFinder. Please re-select the location from search.'
 
 
+def validate_media_urls(listing_data):
+    """
+    Validate that media image URLs are publicly accessible.
+    Returns (True, None, None) on success, (False, message, failed_urls) on failure.
+    """
+    media = listing_data.get('media') or {}
+    images = media.get('images') or []
+    urls = []
+    for img in images:
+        if not isinstance(img, dict):
+            continue
+        original = img.get('original') or {}
+        url = original.get('url')
+        if url:
+            urls.append(str(url).strip())
+
+    if not urls:
+        return True, None, None
+
+    import requests
+
+    failed = []
+    for url in urls:
+        if not url:
+            continue
+        try:
+            resp = requests.head(url, allow_redirects=True, timeout=10)
+            status = resp.status_code
+            resp.close()
+            if status == 405:
+                resp = requests.get(url, allow_redirects=True, timeout=10, stream=True)
+                resp.raw.read(1024)
+                status = resp.status_code
+                resp.close()
+            if status < 200 or status >= 400:
+                failed.append(url)
+        except requests.RequestException:
+            failed.append(url)
+
+    if not failed:
+        return True, None, None
+
+    max_list = 3
+    shown = failed[:max_list]
+    remaining = len(failed) - len(shown)
+    message = f"One or more image URLs are not publicly reachable: {', '.join(shown)}"
+    if remaining > 0:
+        message += f" (and {remaining} more)"
+    message += ". Check APP_PUBLIC_URL and ensure images are publicly accessible."
+    return False, message, shown
+
+
 def generate_reference_id():
     """Generate a unique reference ID for listings"""
     import uuid
@@ -4329,6 +4381,14 @@ def api_publish_listing(listing_id):
                         return jsonify({'success': False, 'error': error_msg}), 400
                     flash(error_msg, 'error')
                     return redirect(url_for('edit_listing', listing_id=listing_id))
+
+                # Validate media URLs (public access required by PF)
+                ok, error, failed_urls = validate_media_urls(listing_data)
+                if not ok:
+                    if request.is_json or request.headers.get('Accept') == 'application/json':
+                        return jsonify({'success': False, 'error': error, 'details': failed_urls}), 400
+                    flash(error, 'error')
+                    return redirect(url_for('edit_listing', listing_id=listing_id))
                 
                 # Create on PF
                 try:
@@ -4866,6 +4926,12 @@ def send_to_pf_draft(listing_id):
         
         if missing_fields:
             flash(f'Cannot send to PF. Missing required fields: {", ".join(missing_fields)}', 'error')
+            return redirect(url_for('edit_listing', listing_id=listing_id))
+
+        # Validate media URLs (public access required by PF)
+        ok, error, failed_urls = validate_media_urls(listing_data)
+        if not ok:
+            flash(error, 'error')
             return redirect(url_for('edit_listing', listing_id=listing_id))
         
         # Create on PropertyFinder as draft

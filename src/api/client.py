@@ -177,6 +177,13 @@ class PropertyFinderClient:
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
         retries = retries or Config.MAX_RETRIES
         
+        payload_size = 0
+        if data is not None:
+            try:
+                payload_size = len(json.dumps(data))
+            except Exception:
+                payload_size = 0
+
         for attempt in range(retries + 1):
             try:
                 if Config.DEBUG:
@@ -193,7 +200,13 @@ class PropertyFinderClient:
                 )
                 
                 if Config.DEBUG:
-                    print(f"[DEBUG] Response Status: {response.status_code}")
+                    request_id = response.headers.get('x-request-id') or response.headers.get('x-correlation-id')
+                    debug_line = f"[DEBUG] Response Status: {response.status_code}"
+                    if request_id:
+                        debug_line += f", Request ID: {request_id}"
+                    if payload_size:
+                        debug_line += f", Payload bytes: {payload_size}"
+                    print(debug_line)
                 
                 # Handle authentication errors (token expired)
                 if response.status_code == 401 and not skip_auth:
@@ -220,6 +233,9 @@ class PropertyFinderClient:
                     if len(raw_text) > 500:
                         raw_text = raw_text[:500] + '...'
                     response_data = {'raw': raw_text}
+                    if Config.DEBUG and raw_text:
+                        snippet = raw_text[:200] + ('...' if len(raw_text) > 200 else '')
+                        print(f"[DEBUG] Non-JSON response body: {snippet}")
 
                 # Capture request/correlation ID if present
                 request_id = response.headers.get('x-request-id') or response.headers.get('x-correlation-id')
