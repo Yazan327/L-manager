@@ -509,6 +509,32 @@ class PropertyFinderClient:
             Listing state info
         """
         return self._make_request('GET', f'/listings/{listing_id}/state')
+
+    def get_listing_state_safe(self, listing_id: str) -> Dict[str, Any]:
+        """
+        Get listing state with fallback to GET /listings/{id} if /state is blocked.
+        Returns a dict with 'state' when available.
+        """
+        try:
+            return self.get_listing_state(listing_id)
+        except PropertyFinderAPIError as e:
+            msg = (e.message or '').lower()
+            if e.status_code in (401, 403, 404) or 'invalid key=value pair' in msg or 'authorization header' in msg:
+                if Config.DEBUG:
+                    print("[DEBUG] get_listing_state failed; falling back to get_listing")
+                listing = self.get_listing(listing_id) or {}
+                data = listing.get('data') if isinstance(listing, dict) else None
+                payload = data if isinstance(data, dict) else (listing if isinstance(listing, dict) else {})
+                state = payload.get('state')
+                if not state:
+                    is_live = payload.get('portals', {}).get('propertyfinder', {}).get('isLive')
+                    if is_live is True:
+                        state = 'live'
+                    elif is_live is False:
+                        state = 'draft'
+                if state:
+                    return {'state': state, 'source': 'listing'}
+            raise
     
     # ==================== PUBLISH OPERATIONS ====================
     

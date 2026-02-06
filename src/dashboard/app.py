@@ -663,7 +663,7 @@ def view_listing(listing_id):
             if local_listing.pf_listing_id:
                 try:
                     client = get_client()
-                    state_resp = client.get_listing_state(local_listing.pf_listing_id)
+                    state_resp = client.get_listing_state_safe(local_listing.pf_listing_id)
                     pf_state = None
                     if isinstance(state_resp, dict):
                         if isinstance(state_resp.get('data'), dict):
@@ -1382,7 +1382,7 @@ def api_local_sync_pf_status(listing_id):
         return jsonify({'success': False, 'error': 'Listing is not synced to PropertyFinder'}), 400
 
     client = get_client()
-    state_resp = client.get_listing_state(listing.pf_listing_id)
+    state_resp = client.get_listing_state_safe(listing.pf_listing_id)
     pf_state = None
     if isinstance(state_resp, dict):
         if isinstance(state_resp.get('data'), dict):
@@ -1416,7 +1416,7 @@ def sync_pf_status_form(listing_id):
         return redirect(request.referrer or url_for('listings'))
 
     client = get_client()
-    state_resp = client.get_listing_state(listing.pf_listing_id)
+    state_resp = client.get_listing_state_safe(listing.pf_listing_id)
     pf_state = None
     if isinstance(state_resp, dict):
         if isinstance(state_resp.get('data'), dict):
