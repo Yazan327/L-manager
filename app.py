@@ -2360,7 +2360,9 @@ def workspace_listings(workspace_slug):
                                'pages': pagination.pages
                            },
                            current_status=status,
-                           current_folder=folder)
+                           current_folder=folder,
+                           page=page,
+                           per_page=per_page)
 
 
 @app.route('/<workspace_slug>/leads')
@@ -5430,10 +5432,7 @@ def api_local_sync_pf_status(listing_id):
     """Sync local listing status with PropertyFinder state"""
     listing = LocalListing.query.get_or_404(listing_id)
     if not listing.pf_listing_id:
-        if request.is_json or request.headers.get('Accept') == 'application/json':
-            return jsonify({'success': False, 'error': 'Listing is not synced to PropertyFinder'}), 400
-        flash('This listing is not synced to PropertyFinder', 'warning')
-        return redirect(request.referrer or url_for('listings'))
+        return jsonify({'success': False, 'error': 'Listing is not synced to PropertyFinder'}), 400
 
     client = get_client()
     state_resp = client.get_listing_state(listing.pf_listing_id)
@@ -5444,10 +5443,7 @@ def api_local_sync_pf_status(listing_id):
         pf_state = pf_state or state_resp.get('state')
 
     if not pf_state:
-        if request.is_json or request.headers.get('Accept') == 'application/json':
-            return jsonify({'success': False, 'error': 'Unable to determine PropertyFinder listing state'}), 500
-        flash('Unable to determine PropertyFinder listing state', 'error')
-        return redirect(request.referrer or url_for('listings'))
+        return jsonify({'success': False, 'error': 'Unable to determine PropertyFinder listing state'}), 500
 
     new_status = map_pf_state_to_local_status(pf_state)
     if new_status and listing.status != new_status:
@@ -5456,16 +5452,10 @@ def api_local_sync_pf_status(listing_id):
         listing.updated_at = datetime.utcnow()
         db.session.commit()
         msg = f'PF state: {pf_state}. Local status updated from {old_status or \"draft\"} to {new_status}.'
-        if request.is_json or request.headers.get('Accept') == 'application/json':
-            return jsonify({'success': True, 'pf_state': pf_state, 'status': new_status, 'message': msg})
-        flash(msg, 'success')
+        return jsonify({'success': True, 'pf_state': pf_state, 'status': new_status, 'message': msg})
     else:
         msg = f'PF state: {pf_state}. Local status is already up to date.'
-        if request.is_json or request.headers.get('Accept') == 'application/json':
-            return jsonify({'success': True, 'pf_state': pf_state, 'status': listing.status, 'message': msg})
-        flash(msg, 'info')
-
-    return redirect(request.referrer or url_for('listings'))
+        return jsonify({'success': True, 'pf_state': pf_state, 'status': listing.status, 'message': msg})
 
 
 @app.route('/api/local/listings/bulk', methods=['POST'])

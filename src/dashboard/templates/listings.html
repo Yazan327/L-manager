@@ -774,7 +774,10 @@ function listingsPage() {
 
         async syncPfStatus(id) {
             try {
-                const response = await fetch(`/api/local/listings/${id}/sync-pf-status`, { method: 'POST' });
+                const response = await fetch(`/api/local/listings/${id}/sync-pf-status`, { 
+                    method: 'POST',
+                    headers: { 'Accept': 'application/json' }
+                });
                 if (response.ok) {
                     location.reload();
                 } else {
