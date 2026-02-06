@@ -1644,6 +1644,111 @@ def get_client():
     return PropertyFinderClient()
 
 
+def resolve_assigned_agent_id(local_listing, client):
+    """
+    Ensure assigned_agent is a PF publicProfile ID.
+    Accepts numeric PF IDs or agent email and auto-maps to PF ID.
+    """
+    assigned_raw = local_listing.assigned_agent
+    assigned = str(assigned_raw).strip() if assigned_raw is not None else ''
+    if not assigned:
+        return False, 'Assigned Agent is required (email or PF ID).'
+
+    if assigned.isdigit():
+        return True, None
+
+    if '@' not in assigned:
+        return False, 'Assigned Agent must be a PF ID or a valid email.'
+
+    target_email = assigned.lower()
+
+    # Try cached users first
+    users = PFCache.get_cache('users') or []
+    if not users:
+        users = []
+        page = 1
+        per_page = 50
+        max_pages = 20
+        while page <= max_pages:
+            result = client.get_users(page=page, per_page=per_page)
+            data = result.get('data', []) if isinstance(result, dict) else []
+            if not data:
+                break
+            users.extend(data)
+
+            pagination = result.get('pagination', {}) if isinstance(result, dict) else {}
+            total_pages = pagination.get('totalPages') or pagination.get('total_pages')
+            if total_pages and page >= int(total_pages):
+                break
+            if len(data) < per_page:
+                break
+            page += 1
+
+        if users:
+            PFCache.set_cache('users', users)
+
+    matched = None
+    for user in users:
+        email = (user.get('email') or user.get('user', {}).get('email') or '').lower()
+        if email == target_email:
+            matched = user
+            break
+
+    if not matched:
+        return False, f'Assigned Agent email not found in PropertyFinder users: {assigned}'
+
+    public_profile = matched.get('publicProfile') or {}
+    pf_id = public_profile.get('id') or matched.get('publicProfileId') or matched.get('id')
+    if not pf_id:
+        return False, f'Assigned Agent has no public profile ID in PropertyFinder: {assigned}'
+
+    local_listing.assigned_agent = str(pf_id)
+    db.session.commit()
+    return True, None
+
+
+def validate_location_id(local_listing, client):
+    """Validate listing location_id against PropertyFinder search results."""
+    if not local_listing.location_id:
+        return False, 'Location ID is required. Please re-select the location from search.'
+    location_text = (local_listing.location or '').strip()
+    if not location_text:
+        return False, 'Location name is required. Please re-select the location from search.'
+
+    try:
+        result = client.get_locations(search=location_text, page=1)
+    except PropertyFinderAPIError as e:
+        return False, f'Failed to validate location with PropertyFinder: {e.message}'
+
+    locations = []
+    if isinstance(result, dict):
+        if isinstance(result.get('data'), list):
+            locations = result.get('data', [])
+        elif isinstance(result.get('results'), list):
+            locations = result.get('results', [])
+        elif isinstance(result.get('locations'), list):
+            locations = result.get('locations', [])
+    elif isinstance(result, list):
+        locations = result
+
+    if not locations:
+        return False, 'PropertyFinder did not return any locations for the selected text. Please re-select the location from search.'
+
+    try:
+        target_id = int(local_listing.location_id)
+    except (ValueError, TypeError):
+        return False, 'Location ID is invalid. Please re-select the location from search.'
+
+    for loc in locations:
+        try:
+            if int(loc.get('id')) == target_id:
+                return True, None
+        except (ValueError, TypeError):
+            continue
+
+    return False, 'Invalid Location ID for PropertyFinder. Please re-select the location from search.'
+
+
 def generate_reference_id():
     """Generate a unique reference ID for listings"""
     import uuid
@@ -1758,9 +1863,22 @@ def api_error_handler(f):
         try:
             return f(*args, **kwargs)
         except PropertyFinderAPIError as e:
+            request_id = None
+            details = None
+            if isinstance(e.response, dict):
+                request_id = e.response.get('_request_id')
+                details = e.response.get('errors') or e.response.get('error') or e.response.get('raw')
             if request.is_json or request.headers.get('Accept') == 'application/json':
-                return jsonify({'error': e.message, 'status_code': e.status_code}), e.status_code or 500
-            flash(f'API Error: {e.message}', 'error')
+                return jsonify({
+                    'error': e.message,
+                    'status_code': e.status_code,
+                    'request_id': request_id,
+                    'details': details
+                }), e.status_code or 500
+            if request_id:
+                flash(f'API Error: {e.message} (Request ID: {request_id})', 'error')
+            else:
+                flash(f'API Error: {e.message}', 'error')
             return redirect(request.referrer or url_for('index'))
         except Exception as e:
             if request.is_json or request.headers.get('Accept') == 'application/json':
@@ -4172,6 +4290,20 @@ def api_publish_listing(listing_id):
             
             if not local_listing.pf_listing_id:
                 # Need to create on PF first
+                ok, error = resolve_assigned_agent_id(local_listing, client)
+                if not ok:
+                    if request.is_json or request.headers.get('Accept') == 'application/json':
+                        return jsonify({'success': False, 'error': error}), 400
+                    flash(error, 'error')
+                    return redirect(url_for('edit_listing', listing_id=listing_id))
+
+                ok, error = validate_location_id(local_listing, client)
+                if not ok:
+                    if request.is_json or request.headers.get('Accept') == 'application/json':
+                        return jsonify({'success': False, 'error': error}), 400
+                    flash(error, 'error')
+                    return redirect(url_for('edit_listing', listing_id=listing_id))
+
                 listing_data = local_listing.to_pf_format()
                 
                 # Validate required fields
@@ -4207,12 +4339,23 @@ def api_publish_listing(listing_id):
                         db.session.commit()
                     else:
                         error_msg = f"Failed to create listing on PropertyFinder: {result}"
+                        request_id = result.get('_request_id') if isinstance(result, dict) else None
+                        if request_id:
+                            error_msg = f"{error_msg} (Request ID: {request_id})"
                         if request.is_json or request.headers.get('Accept') == 'application/json':
                             return jsonify({'success': False, 'error': error_msg}), 400
                         flash(error_msg, 'error')
                         return redirect(url_for('view_listing', listing_id=listing_id))
                 except Exception as e:
-                    error_msg = f"Failed to create listing on PropertyFinder: {str(e)}"
+                    request_id = None
+                    msg = str(e)
+                    if isinstance(e, PropertyFinderAPIError):
+                        msg = e.message
+                        if isinstance(e.response, dict):
+                            request_id = e.response.get('_request_id')
+                    if request_id:
+                        msg = f"{msg} (Request ID: {request_id})"
+                    error_msg = f"Failed to create listing on PropertyFinder: {msg}"
                     if request.is_json or request.headers.get('Accept') == 'application/json':
                         return jsonify({'success': False, 'error': error_msg}), 400
                     flash(error_msg, 'error')
@@ -4687,6 +4830,17 @@ def send_to_pf_draft(listing_id):
             return redirect(url_for('view_listing', listing_id=listing_id))
         
         client = get_client()
+
+        # Preflight: resolve assigned agent and validate location
+        ok, error = resolve_assigned_agent_id(local_listing, client)
+        if not ok:
+            flash(error, 'error')
+            return redirect(url_for('edit_listing', listing_id=listing_id))
+
+        ok, error = validate_location_id(local_listing, client)
+        if not ok:
+            flash(error, 'error')
+            return redirect(url_for('edit_listing', listing_id=listing_id))
         
         # Build listing data
         listing_data = local_listing.to_pf_format()
@@ -4721,6 +4875,9 @@ def send_to_pf_draft(listing_id):
             
             if not pf_listing_id:
                 error_msg = result.get('error') or result.get('message') or str(result)
+                request_id = result.get('_request_id') if isinstance(result, dict) else None
+                if request_id:
+                    error_msg = f"{error_msg} (Request ID: {request_id})"
                 flash(f'PropertyFinder rejected the listing: {error_msg}', 'error')
                 return redirect(url_for('view_listing', listing_id=listing_id))
             
@@ -4732,7 +4889,11 @@ def send_to_pf_draft(listing_id):
             return redirect(url_for('view_listing', listing_id=listing_id))
             
         except PropertyFinderAPIError as e:
-            flash(f'Failed to create on PropertyFinder: {e.message}', 'error')
+            request_id = e.response.get('_request_id') if isinstance(e.response, dict) else None
+            msg = e.message
+            if request_id:
+                msg = f"{msg} (Request ID: {request_id})"
+            flash(f'Failed to create on PropertyFinder: {msg}', 'error')
             return redirect(url_for('view_listing', listing_id=listing_id))
         except Exception as e:
             flash(f'Failed to create on PropertyFinder: {str(e)}', 'error')

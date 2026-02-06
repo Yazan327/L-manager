@@ -216,11 +216,23 @@ class PropertyFinderClient:
                 try:
                     response_data = response.json()
                 except json.JSONDecodeError:
-                    response_data = {'raw': response.text}
+                    raw_text = (response.text or '').strip()
+                    if len(raw_text) > 500:
+                        raw_text = raw_text[:500] + '...'
+                    response_data = {'raw': raw_text}
+
+                # Capture request/correlation ID if present
+                request_id = response.headers.get('x-request-id') or response.headers.get('x-correlation-id')
+                if request_id and isinstance(response_data, dict):
+                    response_data['_request_id'] = request_id
                 
                 # Check for errors
                 if not response.ok:
-                    error_msg = response_data.get('message', f'HTTP {response.status_code}')
+                    error_msg = None
+                    if isinstance(response_data, dict):
+                        error_msg = response_data.get('message') or response_data.get('error') or response_data.get('raw')
+                    if not error_msg:
+                        error_msg = f'HTTP {response.status_code}'
                     if 'errors' in response_data:
                         # Extract validation errors
                         errors = response_data.get('errors', [])
