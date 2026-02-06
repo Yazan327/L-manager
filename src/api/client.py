@@ -58,6 +58,8 @@ class PropertyFinderClient:
         
         # Session setup
         self.session = requests.Session()
+        # Avoid picking up unrelated HTTP_PROXY/HTTPS_PROXY from the environment
+        self.session.trust_env = False
         self.session.headers.update({
             'Content-Type': 'application/json',
             'Accept': 'application/json',
