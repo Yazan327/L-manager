@@ -1137,6 +1137,18 @@ def auto_refresh_pf_data():
             
             print("[AUTO-REFRESH] Refreshing PropertyFinder data...")
             get_cached_pf_data(force_refresh=True, quick_load=False)
+            status_result = sync_local_listing_statuses_from_pf_cache()
+            if status_result.get('matched'):
+                print(f"[AUTO-REFRESH] Status sync: matched={status_result.get('matched')}, updated={status_result.get('updated')}")
+
+            # Fetch credits (account-level analytics)
+            try:
+                client = get_client()
+                credits = client.get_credits()
+                _pf_cache['credits'] = credits
+                PFCache.set_cache('credits', credits)
+            except Exception as e:
+                print(f"[AUTO-REFRESH] Credits sync failed: {e}")
             print("[AUTO-REFRESH] Complete")
             
         except Exception as e:
@@ -1921,6 +1933,57 @@ def find_pf_listing_by_reference(client, reference: str):
     if not listings:
         return None
     return listings[0]
+
+
+def sync_local_listing_statuses_from_pf_cache():
+    """Sync LocalListing.status using cached PF listings (no extra API calls)."""
+    pf_listings = get_cached_listings() or []
+    if not pf_listings:
+        return {'matched': 0, 'updated': 0, 'changed': 0}
+
+    pf_by_id = {}
+    pf_by_ref = {}
+    for listing in pf_listings:
+        if not isinstance(listing, dict):
+            continue
+        pf_id = listing.get('id')
+        if pf_id is not None:
+            pf_by_id[str(pf_id)] = listing
+        ref = _pf_listing_reference(listing)
+        if ref:
+            pf_by_ref[ref.lower()] = listing
+
+    matched = 0
+    updated = 0
+    changed = 0
+
+    for local in LocalListing.query.all():
+        pf_listing = None
+        if local.pf_listing_id:
+            pf_listing = pf_by_id.get(str(local.pf_listing_id))
+        if not pf_listing and local.reference:
+            pf_listing = pf_by_ref.get(str(local.reference).strip().lower())
+        if not pf_listing:
+            continue
+
+        matched += 1
+        pf_id = pf_listing.get('id')
+        if pf_id and (not local.pf_listing_id or str(local.pf_listing_id) != str(pf_id)):
+            local.pf_listing_id = str(pf_id)
+            changed += 1
+
+        pf_state = extract_pf_state_from_listing(pf_listing)
+        new_status = map_pf_state_to_local_status(pf_state)
+        if new_status and local.status != new_status:
+            local.status = new_status
+            local.updated_at = datetime.utcnow()
+            updated += 1
+            changed += 1
+
+    if changed:
+        db.session.commit()
+
+    return {'matched': matched, 'updated': updated, 'changed': changed}
 
 
 def generate_reference_id():
