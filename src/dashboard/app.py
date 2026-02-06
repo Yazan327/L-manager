@@ -22,7 +22,7 @@ from werkzeug.utils import secure_filename
 from api import PropertyFinderClient, PropertyFinderAPIError, Config
 from models import PropertyListing, PropertyType, OfferingType, Location, Price
 from utils import BulkListingManager
-from database import db, LocalListing, PFSession, User, ListingFolder, AppSettings
+from database import db, LocalListing, PFSession, User, ListingFolder, AppSettings, PFCache
 from images import ImageProcessor
 
 # Setup paths for templates and static files
@@ -286,6 +286,66 @@ def _extract_pf_listings(response: dict):
     if isinstance(response.get('items'), list):
         return response['items']
     return []
+
+
+def _normalize_pf_listing(response: dict):
+    """Normalize PF listing response to a listing dict."""
+    if not isinstance(response, dict):
+        return None
+    if isinstance(response.get('data'), dict):
+        return response.get('data')
+    return response
+
+
+def _pf_listing_reference(listing: dict):
+    """Get reference string from a PF listing dict."""
+    if not isinstance(listing, dict):
+        return ''
+    ref = listing.get('reference')
+    if not ref and isinstance(listing.get('listing'), dict):
+        ref = listing.get('listing', {}).get('reference')
+    return str(ref).strip() if ref else ''
+
+
+def extract_pf_state_from_listing(listing: dict):
+    """Extract listing state from PF listing payload."""
+    if not isinstance(listing, dict):
+        return None
+    state = listing.get('state')
+    if not state:
+        is_live = listing.get('portals', {}).get('propertyfinder', {}).get('isLive')
+        if is_live is True:
+            state = 'live'
+        elif is_live is False:
+            state = 'draft'
+    return state
+
+
+def get_cached_listings():
+    """Get cached PF listings from DB cache."""
+    return PFCache.get_cache('listings') or []
+
+
+def find_pf_listing_in_cache_by_reference(reference: str):
+    """Find PF listing in cached listings by reference."""
+    ref = str(reference or '').strip().lower()
+    if not ref:
+        return None
+    for listing in get_cached_listings():
+        if _pf_listing_reference(listing).lower() == ref:
+            return listing
+    return None
+
+
+def find_pf_listing_in_cache_by_id(pf_listing_id: str):
+    """Find PF listing in cached listings by PF listing id."""
+    if not pf_listing_id:
+        return None
+    target = str(pf_listing_id)
+    for listing in get_cached_listings():
+        if str(listing.get('id')) == target:
+            return listing
+    return None
 
 
 def find_pf_listing_by_reference(client, reference: str):
@@ -691,12 +751,12 @@ def view_listing(listing_id):
             if local_listing.pf_listing_id:
                 try:
                     client = get_client()
-                    state_resp = client.get_listing_state_safe(local_listing.pf_listing_id)
-                    pf_state = None
-                    if isinstance(state_resp, dict):
-                        if isinstance(state_resp.get('data'), dict):
-                            pf_state = state_resp['data'].get('state')
-                        pf_state = pf_state or state_resp.get('state')
+                    pf_listing = find_pf_listing_in_cache_by_id(local_listing.pf_listing_id)
+                    if not pf_listing:
+                        pf_listing = find_pf_listing_in_cache_by_reference(local_listing.reference)
+                    if not pf_listing:
+                        pf_listing = _normalize_pf_listing(client.get_listing(local_listing.pf_listing_id))
+                    pf_state = extract_pf_state_from_listing(pf_listing)
                     if pf_state:
                         listing_dict['pf_state'] = pf_state
                 except PropertyFinderAPIError as e:
@@ -1408,35 +1468,30 @@ def api_local_sync_pf_status(listing_id):
     listing = LocalListing.query.get_or_404(listing_id)
     client = get_client()
     pf_listing_id = listing.pf_listing_id
-    if not pf_listing_id:
-        lookup = find_pf_listing_by_reference(client, listing.reference) if listing.reference else None
-        if lookup and lookup.get('id'):
-            pf_listing_id = str(lookup.get('id'))
-            listing.pf_listing_id = pf_listing_id
-            listing.updated_at = datetime.utcnow()
-            db.session.commit()
-        else:
-            return jsonify({'success': False, 'error': 'Listing is not synced to PropertyFinder'}), 400
+    pf_listing = None
 
-    try:
-        state_resp = client.get_listing_state_safe(pf_listing_id)
-    except PropertyFinderAPIError:
-        lookup = find_pf_listing_by_reference(client, listing.reference) if listing.reference else None
-        if lookup and lookup.get('id'):
-            new_id = str(lookup.get('id'))
-            if new_id != listing.pf_listing_id:
-                listing.pf_listing_id = new_id
-                listing.updated_at = datetime.utcnow()
-                db.session.commit()
-            state_resp = client.get_listing_state_safe(new_id)
-        else:
-            raise
-    pf_state = None
-    if isinstance(state_resp, dict):
-        if isinstance(state_resp.get('data'), dict):
-            pf_state = state_resp['data'].get('state')
-        pf_state = pf_state or state_resp.get('state')
+    if pf_listing_id:
+        pf_listing = find_pf_listing_in_cache_by_id(pf_listing_id)
+    if not pf_listing:
+        pf_listing = find_pf_listing_in_cache_by_reference(listing.reference)
+    if not pf_listing and listing.reference:
+        pf_listing = find_pf_listing_by_reference(client, listing.reference)
+    if not pf_listing and pf_listing_id:
+        try:
+            pf_listing = _normalize_pf_listing(client.get_listing(pf_listing_id))
+        except PropertyFinderAPIError:
+            pf_listing = None
 
+    if not pf_listing:
+        return jsonify({'success': False, 'error': 'Listing is not synced to PropertyFinder'}), 400
+
+    pf_listing_id = str(pf_listing.get('id')) if pf_listing.get('id') else pf_listing_id
+    if pf_listing_id and pf_listing_id != listing.pf_listing_id:
+        listing.pf_listing_id = pf_listing_id
+        listing.updated_at = datetime.utcnow()
+        db.session.commit()
+
+    pf_state = extract_pf_state_from_listing(pf_listing)
     if not pf_state:
         return jsonify({'success': False, 'error': 'Unable to determine PropertyFinder listing state'}), 500
 
@@ -1461,36 +1516,31 @@ def sync_pf_status_form(listing_id):
     listing = LocalListing.query.get_or_404(listing_id)
     client = get_client()
     pf_listing_id = listing.pf_listing_id
-    if not pf_listing_id:
-        lookup = find_pf_listing_by_reference(client, listing.reference) if listing.reference else None
-        if lookup and lookup.get('id'):
-            pf_listing_id = str(lookup.get('id'))
-            listing.pf_listing_id = pf_listing_id
-            listing.updated_at = datetime.utcnow()
-            db.session.commit()
-        else:
-            flash('This listing is not synced to PropertyFinder', 'warning')
-            return redirect(request.referrer or url_for('listings'))
+    pf_listing = None
 
-    try:
-        state_resp = client.get_listing_state_safe(pf_listing_id)
-    except PropertyFinderAPIError:
-        lookup = find_pf_listing_by_reference(client, listing.reference) if listing.reference else None
-        if lookup and lookup.get('id'):
-            new_id = str(lookup.get('id'))
-            if new_id != listing.pf_listing_id:
-                listing.pf_listing_id = new_id
-                listing.updated_at = datetime.utcnow()
-                db.session.commit()
-            state_resp = client.get_listing_state_safe(new_id)
-        else:
-            raise
-    pf_state = None
-    if isinstance(state_resp, dict):
-        if isinstance(state_resp.get('data'), dict):
-            pf_state = state_resp['data'].get('state')
-        pf_state = pf_state or state_resp.get('state')
+    if pf_listing_id:
+        pf_listing = find_pf_listing_in_cache_by_id(pf_listing_id)
+    if not pf_listing:
+        pf_listing = find_pf_listing_in_cache_by_reference(listing.reference)
+    if not pf_listing and listing.reference:
+        pf_listing = find_pf_listing_by_reference(client, listing.reference)
+    if not pf_listing and pf_listing_id:
+        try:
+            pf_listing = _normalize_pf_listing(client.get_listing(pf_listing_id))
+        except PropertyFinderAPIError:
+            pf_listing = None
 
+    if not pf_listing:
+        flash('This listing is not synced to PropertyFinder', 'warning')
+        return redirect(request.referrer or url_for('listings'))
+
+    pf_listing_id = str(pf_listing.get('id')) if pf_listing.get('id') else pf_listing_id
+    if pf_listing_id and pf_listing_id != listing.pf_listing_id:
+        listing.pf_listing_id = pf_listing_id
+        listing.updated_at = datetime.utcnow()
+        db.session.commit()
+
+    pf_state = extract_pf_state_from_listing(pf_listing)
     if not pf_state:
         flash('Unable to determine PropertyFinder listing state', 'error')
         return redirect(request.referrer or url_for('listings'))
