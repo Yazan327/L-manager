@@ -274,6 +274,17 @@ def map_pf_state_to_local_status(pf_state: str):
     return None
 
 
+@app.route('/api/version', methods=['GET'])
+def api_version():
+    """API: Return build/version info for deployment verification"""
+    git_sha = os.environ.get('RAILWAY_GIT_COMMIT_SHA') or os.environ.get('GIT_COMMIT')
+    build_time = os.environ.get('BUILD_TIME') or os.environ.get('RAILWAY_DEPLOYMENT_ID')
+    return jsonify({
+        'git_sha': git_sha,
+        'build_time': build_time
+    })
+
+
 def api_error_handler(f):
     """Decorator to handle API errors"""
     @wraps(f)

@@ -1162,6 +1162,14 @@ except Exception as e:
 
 # ==================== GLOBAL ERROR HANDLER ====================
 
+@app.errorhandler(404)
+def handle_not_found(e):
+    """Return JSON for API 404s and plain text for UI routes."""
+    if request.path.startswith('/api/'):
+        return jsonify({'success': False, 'error': 'NotFound: 404 Not Found'}), 404
+    return 'Page not found', 404
+
+
 @app.errorhandler(Exception)
 def handle_exception(e):
     """Log all unhandled exceptions"""
@@ -4666,6 +4674,17 @@ def api_get_config():
         'api_key_preview': key_preview,
         'api_secret_preview': secret_preview,
         'api_base_url': Config.API_BASE_URL
+    })
+
+
+@app.route('/api/version', methods=['GET'])
+def api_version():
+    """API: Return build/version info for deployment verification"""
+    git_sha = os.environ.get('RAILWAY_GIT_COMMIT_SHA') or os.environ.get('GIT_COMMIT')
+    build_time = os.environ.get('BUILD_TIME') or os.environ.get('RAILWAY_DEPLOYMENT_ID')
+    return jsonify({
+        'git_sha': git_sha,
+        'build_time': build_time
     })
 
 
