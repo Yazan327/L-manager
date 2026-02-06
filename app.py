@@ -5470,7 +5470,7 @@ def api_local_sync_pf_status(listing_id):
         listing.status = new_status
         listing.updated_at = datetime.utcnow()
         db.session.commit()
-        msg = f'PF state: {pf_state}. Local status updated from {old_status or \"draft\"} to {new_status}.'
+        msg = f'PF state: {pf_state}. Local status updated from {old_status or "draft"} to {new_status}.'
         return jsonify({'success': True, 'pf_state': pf_state, 'status': new_status, 'message': msg})
     else:
         msg = f'PF state: {pf_state}. Local status is already up to date.'
