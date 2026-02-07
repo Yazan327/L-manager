@@ -1383,6 +1383,10 @@ def permission_required(permission):
                 flash('Your session has expired. Please log in again.', 'warning')
                 return redirect(url_for('login'))
             
+            if is_system_admin(user):
+                g.user = user
+                return f(*args, **kwargs)
+            
             if not user.has_permission(permission):
                 flash(f'You do not have permission to access this feature.', 'error')
                 return redirect(url_for('index'))
@@ -1429,12 +1433,27 @@ def load_user():
 @app.context_processor
 def inject_user():
     """Make user and workspace available in all templates"""
+    sys_admin = False
+    try:
+        sys_admin = is_system_admin(g.user)
+    except Exception:
+        sys_admin = False
     return dict(
         current_user=g.user,
         current_workspace=getattr(g, 'workspace', None),
         is_workspace_context=getattr(g, 'is_workspace_context', False),
-        is_admin_context=getattr(g, 'is_admin_context', False)
+        is_admin_context=getattr(g, 'is_admin_context', False),
+        is_system_admin=sys_admin
     )
+
+
+def is_system_admin(user):
+    """Check if user has SYSTEM_ADMIN role via permission service."""
+    if not user:
+        return False
+    from src.services.permissions import get_permission_service
+    service = get_permission_service()
+    return service.is_system_admin(user)
 
 
 def get_active_workspace():
@@ -1446,7 +1465,7 @@ def get_active_workspace():
         ws_id = session.get('active_workspace_id') or session.get('current_workspace_id')
         if ws_id:
             return Workspace.query.get(ws_id)
-        if g.user and g.user.role != 'admin':
+        if g.user and not is_system_admin(g.user):
             memberships = WorkspaceMember.query.filter_by(user_id=g.user.id).all()
             if len(memberships) == 1:
                 return Workspace.query.get(memberships[0].workspace_id)
@@ -1484,7 +1503,7 @@ def require_active_workspace(f):
         if not ws:
             if request.path.startswith('/api/'):
                 return jsonify({'success': False, 'error': 'workspace_required'}), 400
-            if g.user and g.user.role == 'admin':
+            if g.user and is_system_admin(g.user):
                 flash('Select a workspace to continue.', 'warning')
                 return redirect(url_for('system_admin_page'))
             flash('You are not assigned to any workspace.', 'warning')
@@ -2654,6 +2673,9 @@ def logout():
 @require_active_workspace
 def users_page():
     """User management page (workspace-scoped)"""
+    ws = get_active_workspace()
+    if ws:
+        return redirect(url_for('workspace_users', workspace_slug=ws.slug))
     ws_id = get_active_workspace_id()
     memberships = WorkspaceMember.query.filter_by(workspace_id=ws_id).all()
     user_ids = [m.user_id for m in memberships]
@@ -2968,6 +2990,12 @@ def reset_password(token):
 @permission_required('manage_users')
 def permissions_page():
     """Permission Center - manage user permissions"""
+    if not is_system_admin(g.user):
+        ws = get_active_workspace()
+        if ws:
+            return redirect(url_for('workspace_dashboard', workspace_slug=ws.slug))
+        flash('Access denied. System administrators only.', 'error')
+        return redirect(url_for('index'))
     users = User.query.filter(User.role != 'admin').order_by(User.name).all()
     pf_users = PFCache.get_cache('users', workspace_id=get_active_workspace_id()) or []
     return render_template('permissions.html',
@@ -3038,10 +3066,15 @@ def require_workspace_access(f):
             user_id=g.user.id
         ).first()
         
-        # System admins can access any workspace
-        is_system_admin = g.user.role == 'admin'
+        # System admins can access only after explicit enter
+        sys_admin = is_system_admin(g.user)
+        if sys_admin:
+            active_ws_id = session.get('active_workspace_id')
+            if active_ws_id != workspace.id:
+                flash('Enter the workspace to access it.', 'warning')
+                return redirect(url_for('system_admin_page'))
         
-        if not membership and not is_system_admin:
+        if not membership and not sys_admin:
             flash('You do not have access to this workspace.', 'error')
             return redirect(url_for('login'))
         
@@ -3155,7 +3188,7 @@ def workspace_auth(workspace_slug):
 @require_workspace_access
 def workspace_users(workspace_slug):
     """Workspace-scoped users page - only for workspace admins"""
-    if not g.workspace.is_admin(g.user.id) and g.user.role != 'admin':
+    if not g.workspace.is_admin(g.user.id) and not is_system_admin(g.user):
         flash('Access denied. Workspace admin only.', 'error')
         return redirect(url_for('workspace_dashboard', workspace_slug=workspace_slug))
 
@@ -3182,7 +3215,7 @@ def workspace_users(workspace_slug):
 @require_workspace_access
 def workspace_settings(workspace_slug):
     """Workspace-scoped settings page"""
-    if not g.workspace.is_admin(g.user.id) and g.user.role != 'admin':
+    if not g.workspace.is_admin(g.user.id) and not is_system_admin(g.user):
         flash('Access denied. Workspace admin only.', 'error')
         return redirect(url_for('workspace_dashboard', workspace_slug=workspace_slug))
 
@@ -3214,8 +3247,8 @@ def workspace_settings(workspace_slug):
 @login_required
 def workspaces_page():
     """Workspace management page - only for admins"""
-    if g.user.role != 'admin':
-        flash('Access denied. Admin only.', 'error')
+    if not is_system_admin(g.user):
+        flash('Access denied. System administrators only.', 'error')
         return redirect(url_for('index'))
     
     # Models imported at top
@@ -3234,7 +3267,7 @@ def api_list_workspaces():
     """List workspaces for current user"""
     # Models imported at top
     
-    if g.user.role == 'admin':
+    if is_system_admin(g.user):
         # Admins see all workspaces
         workspaces = Workspace.query.filter_by(is_active=True).all()
     else:
@@ -3256,7 +3289,7 @@ def api_list_workspaces():
 @login_required
 def api_create_workspace():
     """Create a new workspace"""
-    if g.user.role != 'admin':
+    if not is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Admin only'}), 403
     
     # Models imported at top
@@ -3309,7 +3342,7 @@ def api_update_workspace(workspace_id):
     # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     
-    if not workspace.is_admin(g.user.id) and g.user.role != 'admin':
+    if not workspace.is_admin(g.user.id) and not is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     data = request.get_json()
@@ -3322,7 +3355,7 @@ def api_update_workspace(workspace_id):
         workspace.color = data['color']
     if 'logo_url' in data:
         workspace.logo_url = data['logo_url']
-    if 'is_active' in data and g.user.role == 'admin':
+    if 'is_active' in data and is_system_admin(g.user):
         workspace.is_active = data['is_active']
     
     db.session.commit()
@@ -3337,7 +3370,7 @@ def api_update_workspace(workspace_id):
 @login_required
 def api_delete_workspace(workspace_id):
     """Delete a workspace"""
-    if g.user.role != 'admin':
+    if not is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Admin only'}), 403
     
     # Models imported at top
@@ -3355,7 +3388,7 @@ def api_get_workspace_members(workspace_id):
     """Get workspace members"""
     # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
-    if not workspace.get_member(g.user.id) and g.user.role != 'admin':
+    if not workspace.get_member(g.user.id) and not is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Access denied'}), 403
     
     return jsonify({
@@ -3371,7 +3404,7 @@ def api_add_workspace_member(workspace_id):
     # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     
-    if not workspace.is_admin(g.user.id) and g.user.role != 'admin':
+    if not workspace.is_admin(g.user.id) and not is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     data = request.get_json()
@@ -3416,7 +3449,7 @@ def api_update_workspace_member(workspace_id, member_id):
     if member.workspace_id != workspace_id:
         return jsonify({'success': False, 'error': 'Member not in this workspace'}), 400
     
-    if not workspace.is_admin(g.user.id) and g.user.role != 'admin':
+    if not workspace.is_admin(g.user.id) and not is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     data = request.get_json()
@@ -3450,7 +3483,7 @@ def api_remove_workspace_member(workspace_id, member_id):
     if member.workspace_id != workspace_id:
         return jsonify({'success': False, 'error': 'Member not in this workspace'}), 400
     
-    if not workspace.is_admin(g.user.id) and g.user.role != 'admin':
+    if not workspace.is_admin(g.user.id) and not is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     # Prevent removing the last owner
@@ -3478,7 +3511,7 @@ def connections_page(workspace_id):
     workspace = Workspace.query.get_or_404(workspace_id)
     
     # Check access
-    if not workspace.get_member(g.user.id) and g.user.role != 'admin':
+    if not workspace.get_member(g.user.id) and not is_system_admin(g.user):
         flash('Access denied.', 'error')
         return redirect(url_for('index'))
     
@@ -3493,10 +3526,10 @@ def api_get_connections(workspace_id):
     """Get workspace connections"""
     # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
-    if not workspace.get_member(g.user.id) and g.user.role != 'admin':
+    if not workspace.get_member(g.user.id) and not is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Access denied'}), 403
     
-    include_secrets = workspace.is_admin(g.user.id) or g.user.role == 'admin'
+    include_secrets = workspace.is_admin(g.user.id) or is_system_admin(g.user)
     
     return jsonify({
         'success': True,
@@ -3512,7 +3545,7 @@ def api_create_connection(workspace_id):
     workspace = Workspace.query.get_or_404(workspace_id)
     
     member = workspace.get_member(g.user.id)
-    if not (member and member.can_manage_connections()) and g.user.role != 'admin':
+    if not (member and member.can_manage_connections()) and not is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     data = request.get_json()
@@ -3559,7 +3592,7 @@ def api_update_connection(workspace_id, connection_id):
         return jsonify({'success': False, 'error': 'Connection not in this workspace'}), 400
     
     member = workspace.get_member(g.user.id)
-    if not (member and member.can_manage_connections()) and g.user.role != 'admin':
+    if not (member and member.can_manage_connections()) and not is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     data = request.get_json()
@@ -3591,7 +3624,7 @@ def api_delete_connection(workspace_id, connection_id):
         return jsonify({'success': False, 'error': 'Connection not in this workspace'}), 400
     
     member = workspace.get_member(g.user.id)
-    if not (member and member.can_manage_connections()) and g.user.role != 'admin':
+    if not (member and member.can_manage_connections()) and not is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     db.session.delete(connection)
@@ -3665,7 +3698,7 @@ def api_switch_workspace(workspace_id):
     workspace = Workspace.query.get_or_404(workspace_id)
     
     # Check access
-    if g.user.role != 'admin':
+    if not is_system_admin(g.user):
         member = WorkspaceMember.query.filter_by(
             workspace_id=workspace_id,
             user_id=g.user.id
@@ -3690,7 +3723,7 @@ def enter_workspace(workspace_id):
         flash('Workspace is not active.', 'error')
         return redirect(url_for('system_admin_page'))
 
-    if g.user.role != 'admin':
+    if not is_system_admin(g.user):
         member = WorkspaceMember.query.filter_by(
             workspace_id=workspace_id,
             user_id=g.user.id
@@ -3701,6 +3734,18 @@ def enter_workspace(workspace_id):
 
     session['active_workspace_id'] = workspace_id
     return redirect(url_for('workspace_dashboard', workspace_slug=workspace.slug))
+
+
+@app.route('/workspaces/exit', methods=['POST'])
+@login_required
+def exit_workspace():
+    """Exit workspace context for system admins"""
+    if not is_system_admin(g.user):
+        flash('Access denied.', 'error')
+        return redirect(url_for('index'))
+    session.pop('active_workspace_id', None)
+    session.pop('current_workspace_id', None)
+    return redirect(url_for('system_admin_page'))
 
 
 # ==================== BITRIX24-STYLE PERMISSION SYSTEM APIs ====================
@@ -3730,7 +3775,7 @@ def workspace_admin_page(workspace_id):
     service = get_permission_service()
     
     # Check if user can access workspace admin
-    if not service.is_workspace_admin(g.user, workspace_id):
+    if not service.is_workspace_admin(g.user, workspace_id) and not is_system_admin(g.user):
         flash('Access denied. Workspace administrators only.', 'error')
         return redirect(url_for('index'))
     
@@ -4295,7 +4340,7 @@ def index():
         return redirect(url_for('workspace_dashboard', workspace_slug=ws.slug))
 
     # System admins land on system admin UI unless they explicitly enter a workspace
-    if g.user.role == 'admin':
+    if is_system_admin(g.user):
         return redirect(url_for('system_admin_page'))
     
     # No workspace found - show error or redirect to login
@@ -4308,7 +4353,9 @@ def index():
 def listings():
     """List all listings page - uses local database"""
     ws_id = get_active_workspace_id()
-    if not ws_id and g.user.role == 'admin':
+    if ws_id:
+        return redirect(url_for('workspace_listings', workspace_slug=get_active_workspace().slug))
+    if not ws_id and is_system_admin(g.user):
         flash('Select a workspace to continue.', 'warning')
         return redirect(url_for('system_admin_page'))
     if not ws_id:
@@ -4559,6 +4606,9 @@ def bulk_upload():
 @require_active_workspace
 def insights():
     """Insights and analytics page - loads without API calls, data fetched on demand"""
+    ws = get_active_workspace()
+    if ws:
+        return redirect(url_for('workspace_insights', workspace_slug=ws.slug))
     ws_id = get_active_workspace_id()
     # Get local listings only (no API call)
     local_listings = scope_query(LocalListing.query, ws_id).all()
@@ -4711,6 +4761,9 @@ def api_pf_listings():
 @require_active_workspace
 def settings():
     """Settings page"""
+    ws = get_active_workspace()
+    if ws:
+        return redirect(url_for('workspace_settings', workspace_slug=ws.slug))
     # Get PF users for default agent dropdown
     ws_id = get_active_workspace_id()
     pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
@@ -6583,6 +6636,9 @@ def api_local_stats():
 @require_active_workspace
 def auth_page():
     """PropertyFinder authentication page"""
+    ws = get_active_workspace()
+    if ws:
+        return redirect(url_for('workspace_auth', workspace_slug=ws.slug))
     pf_session = PFSession.query.first()
     return render_template('auth.html', session=pf_session)
 
@@ -6641,6 +6697,9 @@ from database import Lead, Customer
 @require_active_workspace
 def leads_page():
     """Leads management page"""
+    ws = get_active_workspace()
+    if ws:
+        return redirect(url_for('workspace_leads', workspace_slug=ws.slug))
     return render_template('leads.html')
 
 
@@ -7416,6 +7475,9 @@ def api_create_contact_from_lead(lead_id):
 @require_active_workspace
 def tasks_page():
     """Tasks management page - Trello-like boards"""
+    ws = get_active_workspace()
+    if ws:
+        return redirect(url_for('workspace_tasks', workspace_slug=ws.slug))
     return render_template('tasks.html')
 
 
@@ -8506,6 +8568,9 @@ PROCESSED_IMAGES_DIR = UPLOAD_FOLDER / 'processed'
 @require_active_workspace
 def image_editor():
     """Image editor page"""
+    ws = get_active_workspace()
+    if ws:
+        return redirect(url_for('workspace_image_editor', workspace_slug=ws.slug))
     # Get all image settings
     ws_id = get_active_workspace_id()
     settings = {
@@ -9273,6 +9338,9 @@ def api_move_listings_to_folder():
 @require_active_workspace
 def loops_page():
     """Loop management page"""
+    ws = get_active_workspace()
+    if ws:
+        return redirect(url_for('workspace_loops', workspace_slug=ws.slug))
     ws_id = get_active_workspace_id()
     loops = LoopConfig.query.filter_by(workspace_id=ws_id).order_by(LoopConfig.created_at.desc()).all()
     
