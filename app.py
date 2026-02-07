@@ -3114,7 +3114,24 @@ def workspace_insights(workspace_slug):
 @require_workspace_access
 def workspace_image_editor(workspace_slug):
     """Workspace-scoped image editor"""
-    return render_template('image_editor.html')
+    ws_id = g.workspace.id if g.workspace else get_active_workspace_id()
+    settings = {
+        'image_default_ratio': AppSettings.get('image_default_ratio', '', workspace_id=ws_id),
+        'image_default_size': AppSettings.get('image_default_size', 'full_hd', workspace_id=ws_id),
+        'image_quality': AppSettings.get('image_quality', '90', workspace_id=ws_id),
+        'image_format': AppSettings.get('image_format', 'JPEG', workspace_id=ws_id),
+        'image_qr_enabled': AppSettings.get('image_qr_enabled', 'false', workspace_id=ws_id),
+        'image_qr_data': AppSettings.get('image_default_qr_data', '', workspace_id=ws_id),
+        'image_qr_position': AppSettings.get('image_qr_position', 'bottom_right', workspace_id=ws_id),
+        'image_qr_size_percent': AppSettings.get('image_qr_size_percent', '12', workspace_id=ws_id),
+        'image_qr_color': AppSettings.get('image_qr_color', '#000000', workspace_id=ws_id),
+        'image_logo_enabled': AppSettings.get('image_logo_enabled', 'false', workspace_id=ws_id),
+        'image_logo_position': AppSettings.get('image_logo_position', 'bottom_left', workspace_id=ws_id),
+        'image_logo_size': AppSettings.get('image_logo_size', '15', workspace_id=ws_id),
+        'image_logo_opacity': AppSettings.get('image_logo_opacity', '80', workspace_id=ws_id),
+        'image_default_logo': AppSettings.get('image_default_logo', '', workspace_id=ws_id),
+    }
+    return render_template('image_editor.html', settings=settings)
 
 
 @app.route('/<workspace_slug>/loops')
@@ -3141,8 +3158,23 @@ def workspace_users(workspace_slug):
     if not g.workspace.is_admin(g.user.id) and g.user.role != 'admin':
         flash('Access denied. Workspace admin only.', 'error')
         return redirect(url_for('workspace_dashboard', workspace_slug=workspace_slug))
-    
-    return render_template('users.html')
+
+    ws_id = g.workspace.id
+    memberships = WorkspaceMember.query.filter_by(workspace_id=ws_id).all()
+    user_ids = [m.user_id for m in memberships]
+    users = User.query.filter(User.id.in_(user_ids)).order_by(User.created_at.desc()).all()
+    pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
+    workspace = Workspace.query.get(ws_id)
+    can_manage_members = _is_workspace_admin(g.user.id, ws_id)
+
+    return render_template('users.html',
+                           users=[u.to_dict() for u in users],
+                           roles=User.ROLES,
+                           all_permissions=User.ALL_PERMISSIONS,
+                           pf_users=pf_users,
+                           workspace=workspace.to_dict() if workspace else None,
+                           workspace_memberships={m.user_id: m for m in memberships},
+                           can_manage_members=can_manage_members)
 
 
 @app.route('/<workspace_slug>/settings')
@@ -3153,8 +3185,27 @@ def workspace_settings(workspace_slug):
     if not g.workspace.is_admin(g.user.id) and g.user.role != 'admin':
         flash('Access denied. Workspace admin only.', 'error')
         return redirect(url_for('workspace_dashboard', workspace_slug=workspace_slug))
-    
-    return render_template('settings.html')
+
+    ws_id = g.workspace.id
+    pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
+    app_settings = AppSettings.get_all(workspace_id=ws_id)
+
+    return render_template('settings.html', 
+        config={
+            'api_base_url': Config.API_BASE_URL,
+            'has_api_key': bool(Config.API_KEY),
+            'has_api_secret': bool(Config.API_SECRET),
+            'has_legacy_token': bool(Config.API_TOKEN),
+            'agency_id': Config.AGENCY_ID,
+            'debug': Config.DEBUG,
+            'bulk_batch_size': Config.BULK_BATCH_SIZE,
+            'bulk_delay': Config.BULK_DELAY_SECONDS,
+            'default_agent_email': app_settings.get('default_agent_email', Config.DEFAULT_AGENT_EMAIL),
+            'default_owner_email': app_settings.get('default_owner_email', Config.DEFAULT_OWNER_EMAIL),
+        },
+        app_settings=app_settings,
+        pf_users=pf_users
+    )
 
 
 # ==================== WORKSPACES MANAGEMENT (ADMIN ONLY) ====================
