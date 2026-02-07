@@ -22,7 +22,10 @@ from werkzeug.utils import secure_filename
 from api import PropertyFinderClient, PropertyFinderAPIError, Config
 from models import PropertyListing, PropertyType, OfferingType, Location, Price
 from utils import BulkListingManager
-from database import db, LocalListing, PFSession, User, ListingFolder, AppSettings, PFCache
+from database import (
+    db, LocalListing, PFSession, User, ListingFolder, AppSettings, PFCache,
+    Workspace, WorkspaceMember, WorkspaceConnection
+)
 from images import ImageProcessor
 
 # Setup paths for templates and static files
@@ -160,7 +163,56 @@ def load_user():
 @app.context_processor
 def inject_user():
     """Make user available in all templates"""
-    return dict(current_user=g.user)
+    return dict(current_user=g.user, current_workspace=getattr(g, 'workspace', None))
+
+
+def get_active_workspace():
+    """Resolve active workspace for current request/session."""
+    try:
+        ws = getattr(g, 'workspace', None)
+        if ws:
+            return ws
+        ws_id = session.get('active_workspace_id') or session.get('current_workspace_id')
+        if ws_id:
+            return Workspace.query.get(ws_id)
+        if g.user and g.user.role != 'admin':
+            memberships = WorkspaceMember.query.filter_by(user_id=g.user.id).all()
+            if len(memberships) == 1:
+                return Workspace.query.get(memberships[0].workspace_id)
+    except Exception:
+        return None
+    return None
+
+
+def get_active_workspace_id():
+    ws = get_active_workspace()
+    return ws.id if ws else None
+
+
+def scope_query(query, workspace_id):
+    """Apply workspace filter if workspace_id is provided."""
+    if workspace_id:
+        return query.filter_by(workspace_id=workspace_id)
+    return query
+
+
+def require_active_workspace(f):
+    """Decorator to ensure an active workspace context is available."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        ws = get_active_workspace()
+        if not ws:
+            if request.path.startswith('/api/'):
+                return jsonify({'success': False, 'error': 'workspace_required'}), 400
+            if g.user and g.user.role == 'admin':
+                flash('Select a workspace to continue.', 'warning')
+                return redirect(url_for('system_admin_page'))
+            flash('You are not assigned to any workspace.', 'warning')
+            return redirect(url_for('logout'))
+        g.workspace = ws
+        session['current_workspace_id'] = ws.id
+        return f(*args, **kwargs)
+    return decorated
 
 
 # ==================== CACHE ====================
@@ -244,8 +296,26 @@ app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max
 
 
-def get_client():
+def get_client(workspace_id=None):
     """Get PropertyFinder API client"""
+    workspace_id = workspace_id if workspace_id is not None else get_active_workspace_id()
+    if workspace_id:
+        conn = WorkspaceConnection.query.filter_by(
+            workspace_id=workspace_id,
+            provider='propertyfinder',
+            is_active=True
+        ).first()
+        if conn:
+            creds = conn.get_credentials()
+            api_key = creds.get('api_key')
+            api_secret = creds.get('api_secret')
+            base_url = creds.get('base_url') or Config.API_BASE_URL
+            if api_key and api_secret:
+                if Config.DEBUG:
+                    print(f"[DEBUG] Using workspace PF credentials (workspace_id={workspace_id})")
+                return PropertyFinderClient(api_key=api_key, api_secret=api_secret, base_url=base_url)
+    if Config.DEBUG and workspace_id:
+        print(f"[DEBUG] No workspace PF credentials found (workspace_id={workspace_id}); using env")
     return PropertyFinderClient()
 
 

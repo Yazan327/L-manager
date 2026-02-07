@@ -598,6 +598,73 @@ class WorkspaceConnection(db.Model):
         return data
 
 
+class WorkspaceInvite(db.Model):
+    """Workspace invite tokens for onboarding users."""
+    __tablename__ = 'workspace_invites'
+    __table_args__ = (
+        db.Index('idx_workspace_invites_workspace', 'workspace_id'),
+        db.Index('idx_workspace_invites_email', 'email'),
+        db.Index('idx_workspace_invites_token', 'token_hash'),
+    )
+    
+    id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id'), nullable=False)
+    email = db.Column(db.String(120), nullable=False)
+    role = db.Column(db.String(20), default='member')
+    token_hash = db.Column(db.String(128), nullable=False)
+    invited_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    expires_at = db.Column(db.DateTime, nullable=True)
+    accepted_at = db.Column(db.DateTime, nullable=True)
+    revoked_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    workspace = db.relationship('Workspace', foreign_keys=[workspace_id])
+    invited_by = db.relationship('User', foreign_keys=[invited_by_id])
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'workspace_id': self.workspace_id,
+            'email': self.email,
+            'role': self.role,
+            'invited_by_id': self.invited_by_id,
+            'expires_at': self.expires_at.isoformat() if self.expires_at else None,
+            'accepted_at': self.accepted_at.isoformat() if self.accepted_at else None,
+            'revoked_at': self.revoked_at.isoformat() if self.revoked_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+class PasswordResetToken(db.Model):
+    """Password reset tokens (link-only)."""
+    __tablename__ = 'password_reset_tokens'
+    __table_args__ = (
+        db.Index('idx_password_reset_user', 'user_id'),
+        db.Index('idx_password_reset_token', 'token_hash'),
+    )
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    token_hash = db.Column(db.String(128), nullable=False)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    expires_at = db.Column(db.DateTime, nullable=True)
+    used_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    user = db.relationship('User', foreign_keys=[user_id])
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'created_by_id': self.created_by_id,
+            'expires_at': self.expires_at.isoformat() if self.expires_at else None,
+            'used_at': self.used_at.isoformat() if self.used_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
 # ==================== BITRIX24-STYLE PERMISSION SYSTEM ====================
 
 class SystemRole(db.Model):
@@ -1177,10 +1244,22 @@ class ListingFolder(db.Model):
         }
     
     @classmethod
-    def get_all_with_counts(cls):
-        """Get all folders with listing counts"""
-        folders = cls.query.order_by(cls.name).all()
-        return [f.to_dict() for f in folders]
+    def get_all_with_counts(cls, workspace_id=None):
+        """Get all folders with listing counts (workspace-aware)."""
+        query = cls.query.order_by(cls.name)
+        if workspace_id:
+            query = query.filter_by(workspace_id=workspace_id)
+        folders = query.all()
+        results = []
+        for folder in folders:
+            data = folder.to_dict()
+            if workspace_id:
+                data['listing_count'] = LocalListing.query.filter_by(
+                    folder_id=folder.id,
+                    workspace_id=workspace_id
+                ).count()
+            results.append(data)
+        return results
 
 
 # ==================== LISTINGS ====================
@@ -1200,6 +1279,7 @@ class LocalListing(db.Model):
         db.Index('idx_listings_price', 'price'),
         db.Index('idx_listings_bedrooms', 'bedrooms'),
         db.Index('idx_listings_assigned_agent', 'assigned_agent'),
+        db.Index('idx_listings_assigned_to_id', 'assigned_to_id'),
         db.Index('idx_listings_pf_listing_id', 'pf_listing_id'),
         db.Index('idx_listings_created_at', 'created_at'),
         db.Index('idx_listings_updated_at', 'updated_at'),
@@ -1251,14 +1331,18 @@ class LocalListing(db.Model):
     images = db.Column(db.Text)  # JSON array of URLs
     video_tour = db.Column(db.String(500))
     video_360 = db.Column(db.String(500))
+    original_images = db.Column(db.Text)  # JSON array of original image paths
     
     # Amenities
     amenities = db.Column(db.Text)  # Comma-separated list
     
     # Assignment
     assigned_agent = db.Column(db.String(100))
+    assigned_to_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     owner_id = db.Column(db.String(100))
     owner_name = db.Column(db.String(100))
+
+    assigned_to = db.relationship('User', foreign_keys=[assigned_to_id])
     
     # Additional
     developer = db.Column(db.String(100))
@@ -1338,6 +1422,37 @@ class LocalListing(db.Model):
                 result.append(url)
         
         return result
+
+    def _parse_original_images(self):
+        """Parse original_images list and return URLs"""
+        import json
+        
+        if not self.original_images:
+            return []
+        
+        images = []
+        try:
+            parsed = json.loads(self.original_images)
+            if isinstance(parsed, list):
+                images = parsed
+        except (json.JSONDecodeError, TypeError):
+            images = self.original_images.split('|') if self.original_images else []
+        
+        result = []
+        for img in images:
+            if not img:
+                continue
+            if isinstance(img, str):
+                img = img.strip()
+                if not img or img.lower() == 'none':
+                    continue
+                if img.startswith('http'):
+                    result.append(img)
+                elif img.startswith('/'):
+                    result.append(img)
+                else:
+                    result.append('/uploads/' + img.lstrip('/'))
+        return result
     
     def to_dict(self):
         """Convert to dictionary"""
@@ -1371,6 +1486,8 @@ class LocalListing(db.Model):
             'video_360': self.video_360,
             'amenities': self.amenities.split(',') if self.amenities else [],
             'assigned_agent': self.assigned_agent,
+            'assigned_to_id': self.assigned_to_id,
+            'assigned_to_name': self.assigned_to.name if self.assigned_to else None,
             'owner_id': self.owner_id,
             'owner_name': self.owner_name,
             'developer': self.developer,
@@ -1385,6 +1502,7 @@ class LocalListing(db.Model):
             'synced_at': self.synced_at.isoformat() if self.synced_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'original_images': self._parse_original_images(),
         }
     
     @classmethod
@@ -1497,6 +1615,7 @@ class LocalListing(db.Model):
             video_360=video_360,
             amenities=amenities,
             assigned_agent=assigned_agent,
+            assigned_to_id=data.get('assigned_to_id'),
             owner_id=data.get('owner_id'),
             owner_name=data.get('owner_name') or data.get('ownerName'),
             developer=data.get('developer'),
@@ -1740,20 +1859,42 @@ class PFCache(db.Model):
     """Cache PropertyFinder API data in database for fast access"""
     __tablename__ = 'pf_cache'
     __table_args__ = (
+        db.UniqueConstraint('workspace_id', 'cache_type', name='uq_pf_cache_workspace_type'),
         db.Index('idx_pf_cache_type', 'cache_type'),
+        db.Index('idx_pf_cache_workspace', 'workspace_id'),
     )
     
     id = db.Column(db.Integer, primary_key=True)
     cache_type = db.Column(db.String(50), nullable=False)  # 'listings', 'users', 'leads'
     data = db.Column(db.Text)  # JSON serialized data
     count = db.Column(db.Integer, default=0)
+    workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id'), nullable=True, index=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     @classmethod
-    def get_cache(cls, cache_type):
-        """Get cached data by type"""
+    def _resolve_workspace_id(cls, workspace_id):
+        if workspace_id is not None:
+            return workspace_id
+        try:
+            from flask import has_request_context, g, session
+            if has_request_context():
+                ws = getattr(g, 'workspace', None)
+                if ws:
+                    return ws.id
+                if session.get('active_workspace_id'):
+                    return session.get('active_workspace_id')
+                if session.get('current_workspace_id'):
+                    return session.get('current_workspace_id')
+        except Exception:
+            pass
+        return None
+
+    @classmethod
+    def get_cache(cls, cache_type, workspace_id=None):
+        """Get cached data by type (workspace-aware)"""
         import json
-        cache = cls.query.filter_by(cache_type=cache_type).first()
+        workspace_id = cls._resolve_workspace_id(workspace_id)
+        cache = cls.query.filter_by(cache_type=cache_type, workspace_id=workspace_id).first()
         if cache and cache.data:
             try:
                 return json.loads(cache.data)
@@ -1762,12 +1903,13 @@ class PFCache(db.Model):
         return []
     
     @classmethod
-    def set_cache(cls, cache_type, data):
-        """Set cache data by type"""
+    def set_cache(cls, cache_type, data, workspace_id=None):
+        """Set cache data by type (workspace-aware)"""
         import json
-        cache = cls.query.filter_by(cache_type=cache_type).first()
+        workspace_id = cls._resolve_workspace_id(workspace_id)
+        cache = cls.query.filter_by(cache_type=cache_type, workspace_id=workspace_id).first()
         if not cache:
-            cache = cls(cache_type=cache_type)
+            cache = cls(cache_type=cache_type, workspace_id=workspace_id)
             db.session.add(cache)
         
         cache.data = json.dumps(data, default=str)
@@ -1777,24 +1919,25 @@ class PFCache(db.Model):
         return cache
     
     @classmethod
-    def get_last_update(cls, cache_type=None):
-        """Get the last update time"""
+    def get_last_update(cls, cache_type=None, workspace_id=None):
+        """Get the last update time (workspace-aware)"""
+        workspace_id = cls._resolve_workspace_id(workspace_id)
         if cache_type:
-            cache = cls.query.filter_by(cache_type=cache_type).first()
+            cache = cls.query.filter_by(cache_type=cache_type, workspace_id=workspace_id).first()
             return cache.updated_at if cache else None
         else:
             # Get the most recent update time across all cache types (for 'listings')
-            cache = cls.query.filter_by(cache_type='listings').first()
+            cache = cls.query.filter_by(cache_type='listings', workspace_id=workspace_id).first()
             return cache.updated_at if cache else None
     
     @classmethod
-    def get_all_cached_data(cls):
-        """Get all cached data as a dictionary"""
+    def get_all_cached_data(cls, workspace_id=None):
+        """Get all cached data as a dictionary (workspace-aware)"""
         return {
-            'listings': cls.get_cache('listings'),
-            'users': cls.get_cache('users'),
-            'leads': cls.get_cache('leads'),
-            'last_updated': cls.get_last_update()
+            'listings': cls.get_cache('listings', workspace_id=workspace_id),
+            'users': cls.get_cache('users', workspace_id=workspace_id),
+            'leads': cls.get_cache('leads', workspace_id=workspace_id),
+            'last_updated': cls.get_last_update(workspace_id=workspace_id)
         }
 
 
@@ -2105,10 +2248,16 @@ class Customer(db.Model):
 class AppSettings(db.Model):
     """Application settings stored in database"""
     __tablename__ = 'app_settings'
+    __table_args__ = (
+        db.UniqueConstraint('workspace_id', 'key', name='uq_app_settings_workspace_key'),
+        db.Index('idx_app_settings_workspace', 'workspace_id'),
+        db.Index('idx_app_settings_key', 'key'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
-    key = db.Column(db.String(100), unique=True, nullable=False)
+    key = db.Column(db.String(100), nullable=False)
     value = db.Column(db.Text)
+    workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id'), nullable=True, index=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Default settings
@@ -2143,38 +2292,63 @@ class AppSettings(db.Model):
     }
     
     @classmethod
-    def get(cls, key, default=None):
-        """Get a setting value"""
-        setting = cls.query.filter_by(key=key).first()
+    def _resolve_workspace_id(cls, workspace_id):
+        if workspace_id is not None:
+            return workspace_id
+        try:
+            from flask import has_request_context, g, session
+            if has_request_context():
+                ws = getattr(g, 'workspace', None)
+                if ws:
+                    return ws.id
+                if session.get('active_workspace_id'):
+                    return session.get('active_workspace_id')
+                if session.get('current_workspace_id'):
+                    return session.get('current_workspace_id')
+        except Exception:
+            pass
+        return None
+
+    @classmethod
+    def get(cls, key, default=None, workspace_id=None):
+        """Get a setting value (workspace-aware)"""
+        workspace_id = cls._resolve_workspace_id(workspace_id)
+        if workspace_id is not None:
+            setting = cls.query.filter_by(key=key, workspace_id=workspace_id).first()
+            if setting:
+                return setting.value
+        setting = cls.query.filter_by(key=key, workspace_id=None).first()
         if setting:
             return setting.value
         return default if default is not None else cls.DEFAULTS.get(key, '')
     
     @classmethod
-    def set(cls, key, value):
-        """Set a setting value"""
-        setting = cls.query.filter_by(key=key).first()
+    def set(cls, key, value, workspace_id=None):
+        """Set a setting value (workspace-aware)"""
+        workspace_id = cls._resolve_workspace_id(workspace_id)
+        setting = cls.query.filter_by(key=key, workspace_id=workspace_id).first()
         if not setting:
-            setting = cls(key=key)
+            setting = cls(key=key, workspace_id=workspace_id)
             db.session.add(setting)
         setting.value = str(value) if value is not None else ''
         db.session.commit()
         return setting
     
     @classmethod
-    def get_all(cls):
-        """Get all settings as dictionary"""
+    def get_all(cls, workspace_id=None):
+        """Get all settings as dictionary (workspace-aware)"""
+        workspace_id = cls._resolve_workspace_id(workspace_id)
         settings = {}
         for key, default in cls.DEFAULTS.items():
-            settings[key] = cls.get(key, default)
+            settings[key] = cls.get(key, default, workspace_id=workspace_id)
         return settings
     
     @classmethod
-    def init_defaults(cls):
-        """Initialize default settings if not exist"""
+    def init_defaults(cls, workspace_id=None):
+        """Initialize default settings if not exist (workspace-aware)."""
         for key, default in cls.DEFAULTS.items():
-            if not cls.query.filter_by(key=key).first():
-                cls.set(key, default)
+            if not cls.query.filter_by(key=key, workspace_id=workspace_id).first():
+                cls.set(key, default, workspace_id=workspace_id)
 
 
 # ==================== LISTING LOOP SYSTEM ====================

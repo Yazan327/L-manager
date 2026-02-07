@@ -303,6 +303,16 @@
                         <i class="fas fa-times"></i>
                     </button>
                 </div>
+
+                <!-- Load Originals -->
+                <div>
+                    <button @click="loadOriginalsFromListing()" 
+                            :disabled="!selectedListing || loadingOriginals"
+                            class="px-3 py-2 bg-white border rounded-lg text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                        <i class="fas fa-cloud-download-alt mr-2"></i>
+                        <span x-text="loadingOriginals ? 'Loading...' : 'Load Originals'"></span>
+                    </button>
+                </div>
                 
                 <!-- Mode Toggle -->
                 <div class="flex items-center gap-2 bg-white rounded-lg border px-1 py-1">
@@ -339,6 +349,10 @@
             <div x-show="assignMessage" class="mt-3 p-3 rounded-lg" :class="assignSuccess ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'">
                 <i :class="assignSuccess ? 'fas fa-check-circle' : 'fas fa-exclamation-circle'" class="mr-2"></i>
                 <span x-text="assignMessage"></span>
+            </div>
+            <div x-show="originalsMessage" class="mt-2 p-3 rounded-lg" :class="originalsSuccess ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'">
+                <i :class="originalsSuccess ? 'fas fa-check-circle' : 'fas fa-info-circle'" class="mr-2"></i>
+                <span x-text="originalsMessage"></span>
             </div>
         </div>
         
@@ -472,6 +486,9 @@ function imageEditor() {
         assigning: false,
         assignMessage: '',
         assignSuccess: false,
+        loadingOriginals: false,
+        originalsMessage: '',
+        originalsSuccess: false,
         
         settings: {
             ratio: '{{ settings.image_default_ratio or "" }}',
@@ -544,6 +561,78 @@ function imageEditor() {
             this.listingSearch = '';
             this.listingResults = [];
         },
+
+        async loadOriginalsFromListing() {
+            if (!this.selectedListing) return;
+            this.loadingOriginals = true;
+            this.originalsMessage = '';
+            this.originalsSuccess = false;
+            try {
+                const response = await fetch(`/api/listings/${this.selectedListing.id}/original-images`, {
+                    headers: { 'Accept': 'application/json' }
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    this.originalsMessage = data.error || 'Failed to load originals';
+                    this.originalsSuccess = false;
+                    return;
+                }
+                const urls = data.originals || [];
+                if (urls.length === 0) {
+                    this.originalsMessage = 'No original images found for this listing.';
+                    this.originalsSuccess = false;
+                    return;
+                }
+                let added = 0;
+                for (const url of urls) {
+                    const didAdd = await this.addImageFromUrl(url);
+                    if (didAdd) added += 1;
+                }
+                this.originalsMessage = `Loaded ${added} original image${added === 1 ? '' : 's'} from listing.`;
+                this.originalsSuccess = true;
+            } catch (e) {
+                this.originalsMessage = `Failed to load originals: ${e.message}`;
+                this.originalsSuccess = false;
+            } finally {
+                this.loadingOriginals = false;
+                setTimeout(() => { this.originalsMessage = ''; }, 6000);
+            }
+        },
+
+        async addImageFromUrl(url) {
+            if (!url) return false;
+            if (this.images.some(img => img.sourceUrl === url)) {
+                return false;
+            }
+            try {
+                const response = await fetch(url, { credentials: 'same-origin' });
+                if (!response.ok) {
+                    return false;
+                }
+                const blob = await response.blob();
+                const dataUrl = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(blob);
+                });
+                const name = url.split('/').pop() || 'original';
+                this.images.push({
+                    name,
+                    original: dataUrl,
+                    processed: null,
+                    processing: false,
+                    error: null,
+                    metadata: null,
+                    fromOriginalStore: true,
+                    sourceUrl: url
+                });
+                return true;
+            } catch (e) {
+                console.error('Failed to load original image', e);
+                return false;
+            }
+        },
         
         // Select all processed images
         selectAll() {
@@ -584,6 +673,9 @@ function imageEditor() {
             const imagesToAssign = this.selectedImages
                 .filter(i => this.images[i]?.processed)
                 .map(i => this.images[i].processed);
+            const originalsToAssign = this.selectedImages
+                .filter(i => this.images[i]?.processed && this.images[i]?.original && !this.images[i]?.fromOriginalStore)
+                .map(i => this.images[i].original);
             
             if (imagesToAssign.length === 0) {
                 this.assignMessage = 'No processed images selected';
@@ -591,7 +683,7 @@ function imageEditor() {
                 return;
             }
             
-            await this.assignImagesToListing(imagesToAssign);
+            await this.assignImagesToListing(imagesToAssign, originalsToAssign);
         },
         
         // Assign all processed images to listing
@@ -601,6 +693,9 @@ function imageEditor() {
             const imagesToAssign = this.images
                 .filter(img => img.processed)
                 .map(img => img.processed);
+            const originalsToAssign = this.images
+                .filter(img => img.processed && img.original && !img.fromOriginalStore)
+                .map(img => img.original);
             
             if (imagesToAssign.length === 0) {
                 this.assignMessage = 'No processed images to assign';
@@ -608,11 +703,11 @@ function imageEditor() {
                 return;
             }
             
-            await this.assignImagesToListing(imagesToAssign);
+            await this.assignImagesToListing(imagesToAssign, originalsToAssign);
         },
         
         // Core assignment function
-        async assignImagesToListing(imageDataArray) {
+        async assignImagesToListing(imageDataArray, originalsArray) {
             this.assigning = true;
             this.assignMessage = '';
             
@@ -622,7 +717,8 @@ function imageEditor() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         images: imageDataArray,
-                        mode: this.assignMode
+                        mode: this.assignMode,
+                        originals: originalsArray || []
                     })
                 });
                 
@@ -676,7 +772,9 @@ function imageEditor() {
                             processed: null,
                             processing: false,
                             error: null,
-                            metadata: null
+                            metadata: null,
+                            fromOriginalStore: false,
+                            sourceUrl: null
                         });
                     };
                     reader.readAsDataURL(file);

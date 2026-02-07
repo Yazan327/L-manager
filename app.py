@@ -5,6 +5,9 @@ PropertyFinder Dashboard - Web UI for managing listings
 import os
 import sys
 import json
+import hashlib
+import secrets
+import shutil
 from pathlib import Path
 from functools import wraps
 from datetime import datetime, timedelta
@@ -27,7 +30,7 @@ from database import (
     LoopConfig, LoopListing, DuplicatedListing, LoopExecutionLog, 
     Lead, LeadComment, Contact, Customer,
     TaskBoard, TaskLabel, Task, TaskComment, BoardMember, BOARD_PERMISSIONS, task_assignee_association,
-    Workspace, WorkspaceMember, WorkspaceConnection,
+    Workspace, WorkspaceMember, WorkspaceConnection, WorkspaceInvite, PasswordResetToken,
     SystemRole, UserSystemRole, WorkspaceRole, ModulePermission, ObjectACL, FeatureFlag, AuditLog
 )
 from images import ImageProcessor
@@ -398,7 +401,7 @@ with app.app_context():
             print(f"[MIGRATION] workspaces tables creation skipped or failed: {e}")
         
         # Migration: Add workspace_id columns to existing tables
-        workspace_tables = ['listing_folders', 'listings', 'crm_leads', 'contacts', 'loop_configs', 'task_boards']
+        workspace_tables = ['listing_folders', 'listings', 'crm_leads', 'contacts', 'loop_configs', 'task_boards', 'app_settings', 'pf_cache']
         for table_name in workspace_tables:
             try:
                 with db.engine.connect() as conn:
@@ -411,6 +414,106 @@ with app.app_context():
                         print(f"[MIGRATION] workspace_id column added to {table_name}")
             except Exception as e:
                 print(f"[MIGRATION] workspace_id column for {table_name} skipped or failed: {e}")
+
+        # Migration: Add assigned_to_id and original_images to listings
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='listings' AND column_name='assigned_to_id'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Adding assigned_to_id column to listings...")
+                    conn.execute(text("ALTER TABLE listings ADD COLUMN assigned_to_id INTEGER REFERENCES users(id)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_listings_assigned_to_id ON listings(assigned_to_id)"))
+                    conn.commit()
+                    print("[MIGRATION] assigned_to_id column added to listings")
+        except Exception as e:
+            print(f"[MIGRATION] assigned_to_id column migration skipped or failed: {e}")
+
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='listings' AND column_name='original_images'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Adding original_images column to listings...")
+                    conn.execute(text("ALTER TABLE listings ADD COLUMN original_images TEXT"))
+                    conn.commit()
+                    print("[MIGRATION] original_images column added to listings")
+        except Exception as e:
+            print(f"[MIGRATION] original_images column migration skipped or failed: {e}")
+        
+        # Migration: Update app_settings constraints for workspace scoping
+        try:
+            with db.engine.connect() as conn:
+                # Drop old unique constraint on key if present
+                conn.execute(text("ALTER TABLE app_settings DROP CONSTRAINT IF EXISTS app_settings_key_key"))
+                # Ensure index on key
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_app_settings_key ON app_settings(key)"))
+                # Add unique constraint on (workspace_id, key)
+                conn.execute(text("ALTER TABLE app_settings ADD CONSTRAINT uq_app_settings_workspace_key UNIQUE (workspace_id, key)"))
+                conn.commit()
+                print("[MIGRATION] app_settings workspace constraints updated")
+        except Exception as e:
+            print(f"[MIGRATION] app_settings constraints update skipped or failed: {e}")
+        
+        # Migration: Update pf_cache constraints for workspace scoping
+        try:
+            with db.engine.connect() as conn:
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_pf_cache_type ON pf_cache(cache_type)"))
+                conn.execute(text("ALTER TABLE pf_cache ADD CONSTRAINT uq_pf_cache_workspace_type UNIQUE (workspace_id, cache_type)"))
+                conn.commit()
+                print("[MIGRATION] pf_cache workspace constraints updated")
+        except Exception as e:
+            print(f"[MIGRATION] pf_cache constraints update skipped or failed: {e}")
+
+        # Migration: Create workspace_invites table
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='workspace_invites'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating workspace_invites table...")
+                    conn.execute(text("""
+                        CREATE TABLE workspace_invites (
+                            id SERIAL PRIMARY KEY,
+                            workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                            email VARCHAR(120) NOT NULL,
+                            role VARCHAR(20) DEFAULT 'member',
+                            token_hash VARCHAR(128) NOT NULL,
+                            invited_by_id INTEGER REFERENCES users(id),
+                            expires_at TIMESTAMP,
+                            accepted_at TIMESTAMP,
+                            revoked_at TIMESTAMP,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX idx_workspace_invites_workspace ON workspace_invites(workspace_id)"))
+                    conn.execute(text("CREATE INDEX idx_workspace_invites_email ON workspace_invites(email)"))
+                    conn.execute(text("CREATE INDEX idx_workspace_invites_token ON workspace_invites(token_hash)"))
+                    conn.commit()
+                    print("[MIGRATION] workspace_invites table created successfully")
+        except Exception as e:
+            print(f"[MIGRATION] workspace_invites table creation skipped or failed: {e}")
+
+        # Migration: Create password_reset_tokens table
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='password_reset_tokens'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating password_reset_tokens table...")
+                    conn.execute(text("""
+                        CREATE TABLE password_reset_tokens (
+                            id SERIAL PRIMARY KEY,
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            token_hash VARCHAR(128) NOT NULL,
+                            created_by_id INTEGER REFERENCES users(id),
+                            expires_at TIMESTAMP,
+                            used_at TIMESTAMP,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX idx_password_reset_user ON password_reset_tokens(user_id)"))
+                    conn.execute(text("CREATE INDEX idx_password_reset_token ON password_reset_tokens(token_hash)"))
+                    conn.commit()
+                    print("[MIGRATION] password_reset_tokens table created successfully")
+        except Exception as e:
+            print(f"[MIGRATION] password_reset_tokens table creation skipped or failed: {e}")
         
         # ==================== BITRIX24-STYLE PERMISSION SYSTEM MIGRATION ====================
         
@@ -746,15 +849,37 @@ with app.app_context():
         except Exception as e:
             print(f"[BACKFILL] Workspace initialization failed: {e}")
             db.session.rollback()
+
+        # Backfill: Assign workspace_id to existing records if missing
+        try:
+            default_ws = Workspace.query.filter_by(is_active=True).order_by(Workspace.id.asc()).first()
+            if default_ws:
+                default_ws_id = default_ws.id
+                db.session.execute(text("UPDATE listings SET workspace_id = :ws_id WHERE workspace_id IS NULL"), {'ws_id': default_ws_id})
+                db.session.execute(text("UPDATE crm_leads SET workspace_id = :ws_id WHERE workspace_id IS NULL"), {'ws_id': default_ws_id})
+                db.session.execute(text("UPDATE contacts SET workspace_id = :ws_id WHERE workspace_id IS NULL"), {'ws_id': default_ws_id})
+                db.session.execute(text("UPDATE listing_folders SET workspace_id = :ws_id WHERE workspace_id IS NULL"), {'ws_id': default_ws_id})
+                db.session.execute(text("UPDATE loop_configs SET workspace_id = :ws_id WHERE workspace_id IS NULL"), {'ws_id': default_ws_id})
+                db.session.execute(text("UPDATE task_boards SET workspace_id = :ws_id WHERE workspace_id IS NULL"), {'ws_id': default_ws_id})
+                db.session.execute(text("UPDATE app_settings SET workspace_id = :ws_id WHERE workspace_id IS NULL"), {'ws_id': default_ws_id})
+                db.session.execute(text("UPDATE pf_cache SET workspace_id = :ws_id WHERE workspace_id IS NULL"), {'ws_id': default_ws_id})
+                db.session.commit()
+                print(f"[BACKFILL] Assigned workspace_id={default_ws_id} to existing records")
+        except Exception as e:
+            print(f"[BACKFILL] Workspace_id backfill failed: {e}")
+            db.session.rollback()
         
-        # Initialize default settings
-        AppSettings.init_defaults()
+        default_ws_id = get_default_workspace_id()
+        
+        # Initialize default settings (workspace-scoped)
+        AppSettings.init_defaults(workspace_id=default_ws_id)
         
         # Set defaults from .env if not already set in DB
-        if not AppSettings.get('default_agent_email'):
-            AppSettings.set('default_agent_email', Config.DEFAULT_AGENT_EMAIL)
-        if not AppSettings.get('default_owner_email'):
-            AppSettings.set('default_owner_email', Config.DEFAULT_OWNER_EMAIL)
+        if default_ws_id:
+            if not AppSettings.get('default_agent_email', workspace_id=default_ws_id):
+                AppSettings.set('default_agent_email', Config.DEFAULT_AGENT_EMAIL, workspace_id=default_ws_id)
+            if not AppSettings.get('default_owner_email', workspace_id=default_ws_id):
+                AppSettings.set('default_owner_email', Config.DEFAULT_OWNER_EMAIL, workspace_id=default_ws_id)
         
         # Create default admin user if no users exist
         if User.query.count() == 0:
@@ -776,11 +901,11 @@ with app.app_context():
         # Skip auto-sync in production to avoid slow startup
         # Users can manually sync from the dashboard
         if not IS_PRODUCTION:
-            first_run = AppSettings.get('first_run_completed') != 'true'
+            first_run = AppSettings.get('first_run_completed', workspace_id=default_ws_id) != 'true'
             if first_run and Config.validate():
                 print("\n🔄 First run detected - syncing PropertyFinder data...")
                 try:
-                    client = PropertyFinderClient()
+                    client = get_client(workspace_id=default_ws_id)
                     
                     # Fetch listings
                     all_listings = []
@@ -796,14 +921,14 @@ with app.app_context():
                         page += 1
                         if page > 50:  # Support up to 2500 listings
                             break
-                    PFCache.set_cache('listings', all_listings)
+                    PFCache.set_cache('listings', all_listings, workspace_id=default_ws_id)
                     print(f"   ✓ Synced {len(all_listings)} listings")
                     
                     # Fetch users
                     try:
                         users_result = client.get_users(per_page=50)
                         users = users_result.get('data', [])
-                        PFCache.set_cache('users', users)
+                        PFCache.set_cache('users', users, workspace_id=default_ws_id)
                         print(f"   ✓ Synced {len(users)} users")
                     except:
                         pass
@@ -812,13 +937,13 @@ with app.app_context():
                     try:
                         leads_result = client.get_leads(per_page=100)
                         leads = leads_result.get('results', [])
-                        PFCache.set_cache('leads', leads)
+                        PFCache.set_cache('leads', leads, workspace_id=default_ws_id)
                         print(f"   ✓ Synced {len(leads)} leads")
                     except:
                         pass
                     
-                    AppSettings.set('first_run_completed', 'true')
-                    AppSettings.set('last_sync_at', datetime.now().isoformat())
+                    AppSettings.set('first_run_completed', 'true', workspace_id=default_ws_id)
+                    AppSettings.set('last_sync_at', datetime.now().isoformat(), workspace_id=default_ws_id)
                     print("   ✓ First run sync complete!\n")
                 except Exception as e:
                     print(f"   ⚠ First run sync failed: {e}\n")
@@ -852,6 +977,9 @@ def execute_loop_job(loop_id):
                 return
             
             listing = loop_listing.listing
+            if loop.workspace_id and listing and listing.workspace_id != loop.workspace_id:
+                print(f"[LOOP] Listing {listing.id} not in workspace {loop.workspace_id}, skipping")
+                return
             print(f"[LOOP] Executing loop '{loop.name}' for listing {listing.reference}")
             
             success = False
@@ -859,7 +987,7 @@ def execute_loop_job(loop_id):
             pf_id = None
             
             try:
-                client = PropertyFinderClient()
+                client = get_client(workspace_id=loop.workspace_id)
                 
                 if loop.loop_type == 'duplicate':
                     # Create a duplicate listing
@@ -946,9 +1074,11 @@ def create_duplicate_listing(loop, original_listing, client):
                     db.session.commit()
         
         # Get or create "Duplicated" folder
-        dup_folder = ListingFolder.query.filter_by(name='Duplicated').first()
+        ws_id = loop.workspace_id or original_listing.workspace_id
+        dup_folder = ListingFolder.query.filter_by(name='Duplicated', workspace_id=ws_id).first()
         if not dup_folder:
             dup_folder = ListingFolder(
+                workspace_id=ws_id,
                 name='Duplicated',
                 color='#9333ea',  # Purple
                 icon='copy',
@@ -962,6 +1092,7 @@ def create_duplicate_listing(loop, original_listing, client):
         dup_reference = f"{original_listing.reference}-DUP-{uuid.uuid4().hex[:6].upper()}"
         
         duplicate = LocalListing(
+            workspace_id=ws_id,
             reference=dup_reference,
             folder_id=dup_folder.id,
             emirate=original_listing.emirate,
@@ -991,6 +1122,8 @@ def create_duplicate_listing(loop, original_listing, client):
             video_360=original_listing.video_360,
             amenities=original_listing.amenities,
             assigned_agent=original_listing.assigned_agent,
+            assigned_to_id=original_listing.assigned_to_id,
+            original_images=original_listing.original_images,
             developer=original_listing.developer,
             permit_number=original_listing.permit_number,
             available_from=original_listing.available_from,
@@ -1116,39 +1249,51 @@ def check_and_run_loops():
 
 
 def auto_refresh_pf_data():
-    """Background job to automatically refresh PropertyFinder data"""
+    """Background job to automatically refresh PropertyFinder data (per-workspace)."""
     with app.app_context():
         try:
-            # Check if auto-sync is enabled (use existing settings names)
-            auto_sync_enabled = AppSettings.get('auto_sync_enabled', 'true') == 'true'
-            if not auto_sync_enabled:
+            workspaces = Workspace.query.filter_by(is_active=True).all()
+            if not workspaces:
                 return
             
-            # Get sync interval (use existing setting name, default: 30 minutes)
-            sync_interval = int(AppSettings.get('sync_interval_minutes', '30'))
-            
-            # Check if cache is stale
-            last_updated = PFCache.get_last_update('listings')
-            if last_updated:
-                age_minutes = (datetime.now() - last_updated).total_seconds() / 60
-                if age_minutes < sync_interval:
-                    print(f"[AUTO-REFRESH] Cache is fresh ({age_minutes:.1f}m old), skipping")
-                    return
-            
-            print("[AUTO-REFRESH] Refreshing PropertyFinder data...")
-            get_cached_pf_data(force_refresh=True, quick_load=False)
-            status_result = sync_local_listing_statuses_from_pf_cache()
-            if status_result.get('matched'):
-                print(f"[AUTO-REFRESH] Status sync: matched={status_result.get('matched')}, updated={status_result.get('updated')}")
+            for ws in workspaces:
+                ws_id = ws.id
+                
+                # Check if auto-sync is enabled (workspace-scoped)
+                auto_sync_enabled = AppSettings.get('auto_sync_enabled', 'true', workspace_id=ws_id) == 'true'
+                if not auto_sync_enabled:
+                    continue
+                
+                # Get sync interval (use existing setting name, default: 30 minutes)
+                try:
+                    sync_interval = int(AppSettings.get('sync_interval_minutes', '30', workspace_id=ws_id))
+                except Exception:
+                    sync_interval = 30
+                
+                # Check if cache is stale
+                last_updated = PFCache.get_last_update('listings', workspace_id=ws_id)
+                if last_updated:
+                    age_minutes = (datetime.now() - last_updated).total_seconds() / 60
+                    if age_minutes < sync_interval:
+                        print(f"[AUTO-REFRESH] Cache is fresh ({age_minutes:.1f}m old), skipping (workspace_id={ws_id})")
+                        continue
+                
+                print(f"[AUTO-REFRESH] Refreshing PropertyFinder data (workspace_id={ws_id})...")
+                get_cached_pf_data(force_refresh=True, quick_load=False, workspace_id=ws_id)
+                status_result = sync_local_listing_statuses_from_pf_cache(workspace_id=ws_id)
+                if status_result.get('matched'):
+                    print(f"[AUTO-REFRESH] Status sync (workspace_id={ws_id}): matched={status_result.get('matched')}, updated={status_result.get('updated')}")
 
-            # Fetch credits (account-level analytics)
-            try:
-                client = get_client()
-                credits = client.get_credits()
-                _pf_cache['credits'] = credits
-                PFCache.set_cache('credits', credits)
-            except Exception as e:
-                print(f"[AUTO-REFRESH] Credits sync failed: {e}")
+                # Fetch credits (account-level analytics)
+                try:
+                    client = get_client(workspace_id=ws_id)
+                    credits = client.get_credits()
+                    cache = _get_pf_cache(workspace_id=ws_id)
+                    cache['credits'] = credits
+                    PFCache.set_cache('credits', credits, workspace_id=ws_id)
+                except Exception as e:
+                    print(f"[AUTO-REFRESH] Credits sync failed (workspace_id={ws_id}): {e}")
+            
             print("[AUTO-REFRESH] Complete")
             
         except Exception as e:
@@ -1292,59 +1437,256 @@ def inject_user():
     )
 
 
+def get_active_workspace():
+    """Resolve active workspace for current request/session."""
+    try:
+        ws = getattr(g, 'workspace', None)
+        if ws:
+            return ws
+        ws_id = session.get('active_workspace_id') or session.get('current_workspace_id')
+        if ws_id:
+            return Workspace.query.get(ws_id)
+        if g.user and g.user.role != 'admin':
+            memberships = WorkspaceMember.query.filter_by(user_id=g.user.id).all()
+            if len(memberships) == 1:
+                return Workspace.query.get(memberships[0].workspace_id)
+    except Exception:
+        return None
+    return None
+
+
+def get_active_workspace_id():
+    ws = get_active_workspace()
+    return ws.id if ws else None
+
+
+def get_default_workspace_id():
+    """Fallback workspace for non-authenticated contexts (e.g., webhooks)."""
+    try:
+        ws = Workspace.query.filter_by(is_active=True).order_by(Workspace.id.asc()).first()
+        return ws.id if ws else None
+    except Exception:
+        return None
+
+
+def scope_query(query, workspace_id):
+    """Apply workspace filter if workspace_id is provided."""
+    if workspace_id:
+        return query.filter_by(workspace_id=workspace_id)
+    return query
+
+
+def require_active_workspace(f):
+    """Decorator to ensure an active workspace context is available."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        ws = get_active_workspace()
+        if not ws:
+            if request.path.startswith('/api/'):
+                return jsonify({'success': False, 'error': 'workspace_required'}), 400
+            if g.user and g.user.role == 'admin':
+                flash('Select a workspace to continue.', 'warning')
+                return redirect(url_for('system_admin_page'))
+            flash('You are not assigned to any workspace.', 'warning')
+            return redirect(url_for('logout'))
+        g.workspace = ws
+        g.is_workspace_context = True
+        session['current_workspace_id'] = ws.id
+        return f(*args, **kwargs)
+    return decorated
+
+
+# ==================== INVITE/RESET HELPERS ====================
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
+
+
+def _generate_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _public_base_url():
+    if APP_PUBLIC_URL:
+        return APP_PUBLIC_URL.rstrip('/')
+    return request.url_root.rstrip('/')
+
+
+def _is_workspace_admin(user_id, workspace_id):
+    member = WorkspaceMember.query.filter_by(workspace_id=workspace_id, user_id=user_id).first()
+    return member and member.role in ('owner', 'admin')
+
+
+def _validate_assignee(workspace_id, assignee_id):
+    if not assignee_id:
+        return None
+    try:
+        assignee_id = int(assignee_id)
+    except (TypeError, ValueError):
+        return None
+    member = WorkspaceMember.query.filter_by(workspace_id=workspace_id, user_id=assignee_id).first()
+    if not member:
+        return None
+    return assignee_id
+
+
+def _normalize_upload_path(path):
+    """Normalize stored upload paths to a relative path (e.g., listings/123/file.jpg)."""
+    if not path or not isinstance(path, str):
+        return None
+    path = path.strip()
+    if not path:
+        return None
+    if path.startswith('http') and '/uploads/' in path:
+        path = path.split('/uploads/', 1)[1]
+    if path.startswith('/uploads/'):
+        path = path[len('/uploads/'):]
+    if path.startswith('/'):
+        path = path.lstrip('/')
+    return path or None
+
+
+def _load_original_images_raw(listing):
+    """Return a list of stored original image paths (relative to uploads/)."""
+    if not listing or not listing.original_images:
+        return []
+    try:
+        parsed = json.loads(listing.original_images)
+        images = parsed if isinstance(parsed, list) else []
+    except (TypeError, json.JSONDecodeError):
+        images = listing.original_images.split('|') if listing.original_images else []
+    result = []
+    for img in images:
+        if isinstance(img, str):
+            normalized = _normalize_upload_path(img)
+            if normalized:
+                result.append(normalized)
+    return result
+
+
+def _merge_unique_paths(existing, new_items):
+    """Merge two lists of paths while preserving order and uniqueness."""
+    seen = set()
+    merged = []
+    for item in (existing or []) + (new_items or []):
+        if not item:
+            continue
+        if item in seen:
+            continue
+        seen.add(item)
+        merged.append(item)
+    return merged
+
+
+def _get_invite_by_token(token):
+    token_hash = _hash_token(token)
+    return WorkspaceInvite.query.filter_by(token_hash=token_hash).first()
+
+
+def _invite_is_valid(invite):
+    if not invite or invite.accepted_at or invite.revoked_at:
+        return False
+    if invite.expires_at and invite.expires_at < datetime.utcnow():
+        return False
+    return True
+
+
+def _accept_invite(invite, user):
+    if user.email.lower() != invite.email.lower():
+        return False, 'This invite was sent to a different email.'
+    membership = WorkspaceMember.query.filter_by(
+        workspace_id=invite.workspace_id,
+        user_id=user.id
+    ).first()
+    if not membership:
+        membership = WorkspaceMember(
+            workspace_id=invite.workspace_id,
+            user_id=user.id,
+            role=invite.role or 'member',
+            invited_by_id=invite.invited_by_id
+        )
+        db.session.add(membership)
+    invite.accepted_at = datetime.utcnow()
+    db.session.commit()
+    return True, None
+
+
 # ==================== CACHE ====================
 # In-memory cache for PropertyFinder data (backed by DB for persistence)
-_pf_cache = {
-    'listings': None,  # None = not loaded yet, [] = empty
-    'users': None,
-    'leads': None,
-    'locations': None,
-    'credits': None,
-    'last_updated': None,
-    'cache_duration': 1800,  # 30 minutes in seconds (was 5 min)
-    'db_loaded': False,  # Track if we've loaded from DB
-}
+_pf_cache = {}
 
-def get_cached_listings():
-    """Get cached listings - lazy load from DB"""
-    global _pf_cache
-    if _pf_cache['listings'] is None:
+def _resolve_pf_workspace_id(workspace_id=None):
+    if workspace_id is not None:
+        return workspace_id
+    try:
+        return get_active_workspace_id()
+    except Exception:
+        return None
+
+def _get_pf_cache(workspace_id=None):
+    ws_id = _resolve_pf_workspace_id(workspace_id)
+    key = str(ws_id) if ws_id is not None else 'global'
+    cache = _pf_cache.get(key)
+    if not cache:
+        cache = {
+            'listings': None,  # None = not loaded yet, [] = empty
+            'users': None,
+            'leads': None,
+            'locations': None,
+            'credits': None,
+            'last_updated': None,
+            'cache_duration': 1800,  # 30 minutes in seconds (was 5 min)
+            'db_loaded': False,  # Track if we've loaded from DB
+            'error': None,
+            'workspace_id': ws_id
+        }
+        _pf_cache[key] = cache
+    return cache
+
+def get_cached_listings(workspace_id=None):
+    """Get cached listings - lazy load from DB (workspace-aware)."""
+    cache = _get_pf_cache(workspace_id)
+    ws_id = cache['workspace_id']
+    if cache['listings'] is None:
         # Load from DB cache
-        db_data = PFCache.get_cache('listings')
-        _pf_cache['listings'] = db_data if db_data else []
-        _pf_cache['last_updated'] = PFCache.get_last_update('listings')
-        _pf_cache['db_loaded'] = True
-        print(f"[Cache] Loaded {len(_pf_cache['listings'])} listings from DB cache")
-    return _pf_cache['listings']
+        db_data = PFCache.get_cache('listings', workspace_id=ws_id)
+        cache['listings'] = db_data if db_data else []
+        cache['last_updated'] = PFCache.get_last_update('listings', workspace_id=ws_id)
+        cache['db_loaded'] = True
+        print(f"[Cache] Loaded {len(cache['listings'])} listings from DB cache (workspace_id={ws_id})")
+    return cache['listings']
 
-def get_cached_users():
-    """Get cached users - lazy load from DB"""
-    global _pf_cache
-    if _pf_cache['users'] is None:
-        _pf_cache['users'] = PFCache.get_cache('users') or []
-    return _pf_cache['users']
+def get_cached_users(workspace_id=None):
+    """Get cached users - lazy load from DB (workspace-aware)."""
+    cache = _get_pf_cache(workspace_id)
+    ws_id = cache['workspace_id']
+    if cache['users'] is None:
+        cache['users'] = PFCache.get_cache('users', workspace_id=ws_id) or []
+    return cache['users']
 
-def get_cached_leads():
-    """Get cached leads - lazy load from DB"""
-    global _pf_cache
-    if _pf_cache['leads'] is None:
-        _pf_cache['leads'] = PFCache.get_cache('leads') or []
-    return _pf_cache['leads']
+def get_cached_leads(workspace_id=None):
+    """Get cached leads - lazy load from DB (workspace-aware)."""
+    cache = _get_pf_cache(workspace_id)
+    ws_id = cache['workspace_id']
+    if cache['leads'] is None:
+        cache['leads'] = PFCache.get_cache('leads', workspace_id=ws_id) or []
+    return cache['leads']
 
-def get_cached_locations():
-    """Get cached locations - lazy load from DB"""
-    global _pf_cache
-    if _pf_cache['locations'] is None:
-        cached = PFCache.get_cache('locations')
-        _pf_cache['locations'] = cached if isinstance(cached, dict) else {}
-    return _pf_cache['locations']
+def get_cached_locations(workspace_id=None):
+    """Get cached locations - lazy load from DB (workspace-aware)."""
+    cache = _get_pf_cache(workspace_id)
+    ws_id = cache['workspace_id']
+    if cache['locations'] is None:
+        cached = PFCache.get_cache('locations', workspace_id=ws_id)
+        cache['locations'] = cached if isinstance(cached, dict) else {}
+    return cache['locations']
 
-def build_location_map(listings, force_refresh=False):
-    """Build a map of location IDs to names - uses cache only, no API calls for performance"""
-    global _pf_cache
+def build_location_map(listings, force_refresh=False, workspace_id=None):
+    """Build a map of location IDs to names - uses cache only, no API calls for performance."""
+    cache = _get_pf_cache(workspace_id)
+    ws_id = cache['workspace_id']
     
     # Get existing location cache from DB
-    location_map = get_cached_locations()
+    location_map = get_cached_locations(workspace_id=ws_id)
     
     # If we have any cache, just return it - don't make slow API calls
     if location_map and not force_refresh:
@@ -1364,11 +1706,11 @@ def build_location_map(listings, force_refresh=False):
     if not missing_ids:
         return location_map
     
-    print(f"[Locations] Fetching {len(missing_ids)} missing location(s)...")
+    print(f"[Locations] Fetching {len(missing_ids)} missing location(s)... (workspace_id={ws_id})")
     
     # Fetch location names from API - limit to 3 quick searches only
     try:
-        client = get_client()
+        client = get_client(workspace_id=ws_id)
         # Only search the main emirates to avoid too many API calls
         search_terms = ['Dubai', 'Abu Dhabi', 'Sharjah']
         
@@ -1391,55 +1733,58 @@ def build_location_map(listings, force_refresh=False):
                 pass
         
         # Save to cache
-        _pf_cache['locations'] = location_map
-        PFCache.set_cache('locations', location_map)
+        cache['locations'] = location_map
+        PFCache.set_cache('locations', location_map, workspace_id=ws_id)
         
     except Exception as e:
         print(f"Error building location map: {e}")
     
     return location_map
 
-def load_cache_from_db():
-    """Load cached data from database on first access - LAZY loading"""
-    global _pf_cache
+def load_cache_from_db(workspace_id=None):
+    """Load cached data from database on first access - LAZY loading (workspace-aware)."""
+    cache = _get_pf_cache(workspace_id)
+    ws_id = cache['workspace_id']
     # Only load last_updated, not the actual data (get from listings cache specifically)
-    if _pf_cache['last_updated'] is None:
-        _pf_cache['last_updated'] = PFCache.get_last_update('listings')
+    if cache['last_updated'] is None:
+        cache['last_updated'] = PFCache.get_last_update('listings', workspace_id=ws_id)
 
-def get_cached_pf_data(force_refresh=False, quick_load=False):
-    """Get PropertyFinder data with caching (DB-backed)
+def get_cached_pf_data(force_refresh=False, quick_load=False, workspace_id=None):
+    """Get PropertyFinder data with caching (DB-backed, workspace-aware).
     
     Args:
         force_refresh: If True, fetch fresh data from API
         quick_load: If True, only fetch first page of listings (faster)
+        workspace_id: Workspace to scope cache/data
     """
-    global _pf_cache
+    cache = _get_pf_cache(workspace_id)
+    ws_id = cache['workspace_id']
     
     # Load timestamp from DB on first access
-    load_cache_from_db()
+    load_cache_from_db(workspace_id=ws_id)
     
     # Check if cache is valid (don't refresh if we have data and it's recent)
-    if not force_refresh and _pf_cache['last_updated']:
-        age = (datetime.now() - _pf_cache['last_updated']).total_seconds()
+    if not force_refresh and cache['last_updated']:
+        age = (datetime.now() - cache['last_updated']).total_seconds()
         # Use lazy loading - only load listings when needed
-        cached_listings = get_cached_listings()
-        if age < _pf_cache['cache_duration'] and cached_listings:
+        cached_listings = get_cached_listings(workspace_id=ws_id)
+        if age < cache['cache_duration'] and cached_listings:
             # Load the rest lazily for return
             return {
                 'listings': cached_listings,
-                'users': get_cached_users(),
-                'leads': get_cached_leads(),
-                'credits': _pf_cache['credits'],
-                'last_updated': _pf_cache['last_updated'],
+                'users': get_cached_users(workspace_id=ws_id),
+                'leads': get_cached_leads(workspace_id=ws_id),
+                'credits': cache['credits'],
+                'last_updated': cache['last_updated'],
                 'error': None
             }
     
     # If we have data from DB but it's older, return it immediately (background refresh later)
-    has_cached_data = len(get_cached_listings()) > 0
+    has_cached_data = len(get_cached_listings(workspace_id=ws_id)) > 0
     
     # Fetch fresh data
     try:
-        client = get_client()
+        client = get_client(workspace_id=ws_id)
         
         # Fetch listings (paginated) - increased limits for large portfolios
         all_listings = []
@@ -1458,14 +1803,14 @@ def get_cached_pf_data(force_refresh=False, quick_load=False):
                 break
             page += 1
         
-        _pf_cache['listings'] = all_listings
-        PFCache.set_cache('listings', all_listings)
+        cache['listings'] = all_listings
+        PFCache.set_cache('listings', all_listings, workspace_id=ws_id)
         
         # Fetch users (single page only)
         try:
             users_result = client.get_users(per_page=50)
-            _pf_cache['users'] = users_result.get('data', [])
-            PFCache.set_cache('users', _pf_cache['users'])
+            cache['users'] = users_result.get('data', [])
+            PFCache.set_cache('users', cache['users'], workspace_id=ws_id)
         except:
             pass
         
@@ -1488,40 +1833,50 @@ def get_cached_pf_data(force_refresh=False, quick_load=False):
                         break
                     leads_page += 1
                 
-                _pf_cache['leads'] = all_leads
-                PFCache.set_cache('leads', all_leads)
+                cache['leads'] = all_leads
+                PFCache.set_cache('leads', all_leads, workspace_id=ws_id)
                 
                 # Sync leads to CRM (in background ideally)
-                sync_pf_leads_to_db(all_leads)
+                sync_pf_leads_to_db(all_leads, workspace_id=ws_id)
             except:
-                _pf_cache['leads'] = []
+                cache['leads'] = []
         
         # Skip credits fetch for performance (fetch on-demand if needed)
         
-        _pf_cache['last_updated'] = datetime.now()
-        _pf_cache['error'] = None
-        AppSettings.set('last_sync_at', datetime.now().isoformat())
+        cache['last_updated'] = datetime.now()
+        cache['error'] = None
+        AppSettings.set('last_sync_at', datetime.now().isoformat(), workspace_id=ws_id)
         
     except PropertyFinderAPIError as e:
-        _pf_cache['error'] = f"API Error: {e.message}"
+        cache['error'] = f"API Error: {e.message}"
         if has_cached_data:
-            return _pf_cache
+            return cache
     except Exception as e:
-        _pf_cache['error'] = f"Error: {str(e)}"
+        cache['error'] = f"Error: {str(e)}"
         if has_cached_data:
-            return _pf_cache
+            return cache
     
-    return _pf_cache
+    return cache
 
 
-def sync_pf_leads_to_db(pf_leads):
-    """Sync PropertyFinder leads to CRM database"""
+def sync_pf_leads_to_db(pf_leads, workspace_id=None):
+    """Sync PropertyFinder leads to CRM database (workspace-aware)."""
     from database import Lead
     from dateutil import parser as date_parser
     
+    ws_id = _resolve_pf_workspace_id(workspace_id)
+    
     # Build a map of PF agent email -> L-Manager user for auto-assignment
-    pf_users = PFCache.get_cache('users') or []
-    lm_users = User.query.filter_by(is_active=True).all()
+    pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
+    if ws_id:
+        lm_users = User.query.join(
+            WorkspaceMember, WorkspaceMember.user_id == User.id
+        ).filter(
+            WorkspaceMember.workspace_id == ws_id,
+            User.is_active == True
+        ).all()
+    else:
+        lm_users = User.query.filter_by(is_active=True).all()
     
     # Map PF agent email to L-Manager user
     email_to_lm_user = {u.email.lower(): u for u in lm_users}
@@ -1543,7 +1898,14 @@ def sync_pf_leads_to_db(pf_leads):
                 continue
             
             # Check if already exists
-            existing = Lead.query.filter_by(source='propertyfinder', source_id=pf_id).first()
+            if ws_id:
+                existing = Lead.query.filter_by(
+                    source='propertyfinder',
+                    source_id=pf_id,
+                    workspace_id=ws_id
+                ).first()
+            else:
+                existing = Lead.query.filter_by(source='propertyfinder', source_id=pf_id).first()
             
             # Extract contact info from sender - new structure has contacts array
             sender = pf_lead.get('sender', {})
@@ -1613,7 +1975,8 @@ def sync_pf_leads_to_db(pf_leads):
                 pf_agent_id=pf_agent_id_str,
                 pf_agent_name=public_profile.get('name', ''),
                 assigned_to_id=assigned_to_id,  # Auto-assigned if email matches
-                received_at=received_at
+                received_at=received_at,
+                workspace_id=ws_id
             )
             db.session.add(lead)
             imported += 1
@@ -1659,8 +2022,26 @@ def handle_exception(e):
     return redirect(url_for('index'))
 
 
-def get_client():
+def get_client(workspace_id=None):
     """Get PropertyFinder API client"""
+    workspace_id = workspace_id if workspace_id is not None else get_active_workspace_id()
+    if workspace_id:
+        conn = WorkspaceConnection.query.filter_by(
+            workspace_id=workspace_id,
+            provider='propertyfinder',
+            is_active=True
+        ).first()
+        if conn:
+            creds = conn.get_credentials()
+            api_key = creds.get('api_key')
+            api_secret = creds.get('api_secret')
+            base_url = creds.get('base_url') or Config.API_BASE_URL
+            if api_key and api_secret:
+                if Config.DEBUG:
+                    print(f"[DEBUG] Using workspace PF credentials (workspace_id={workspace_id})")
+                return PropertyFinderClient(api_key=api_key, api_secret=api_secret, base_url=base_url)
+    if Config.DEBUG and workspace_id:
+        print(f"[DEBUG] No workspace PF credentials found (workspace_id={workspace_id}); using env")
     return PropertyFinderClient()
 
 
@@ -1682,8 +2063,9 @@ def resolve_assigned_agent_id(local_listing, client):
 
     target_email = assigned.lower()
 
+    ws_id = local_listing.workspace_id or get_active_workspace_id()
     # Try cached users first
-    users = PFCache.get_cache('users') or []
+    users = PFCache.get_cache('users', workspace_id=ws_id) or []
     if not users:
         users = []
         page = 1
@@ -1705,7 +2087,7 @@ def resolve_assigned_agent_id(local_listing, client):
             page += 1
 
         if users:
-            PFCache.set_cache('users', users)
+            PFCache.set_cache('users', users, workspace_id=ws_id)
 
     matched = None
     for user in users:
@@ -1899,23 +2281,23 @@ def extract_pf_state_from_listing(listing: dict):
     return state
 
 
-def find_pf_listing_in_cache_by_reference(reference: str):
-    """Find PF listing in cached listings by reference."""
+def find_pf_listing_in_cache_by_reference(reference: str, workspace_id=None):
+    """Find PF listing in cached listings by reference (workspace-aware)."""
     ref = str(reference or '').strip().lower()
     if not ref:
         return None
-    for listing in get_cached_listings() or []:
+    for listing in get_cached_listings(workspace_id=workspace_id) or []:
         if _pf_listing_reference(listing).lower() == ref:
             return listing
     return None
 
 
-def find_pf_listing_in_cache_by_id(pf_listing_id: str):
-    """Find PF listing in cached listings by PF listing id."""
+def find_pf_listing_in_cache_by_id(pf_listing_id: str, workspace_id=None):
+    """Find PF listing in cached listings by PF listing id (workspace-aware)."""
     if not pf_listing_id:
         return None
     target = str(pf_listing_id)
-    for listing in get_cached_listings() or []:
+    for listing in get_cached_listings(workspace_id=workspace_id) or []:
         if str(listing.get('id')) == target:
             return listing
     return None
@@ -1935,9 +2317,10 @@ def find_pf_listing_by_reference(client, reference: str):
     return listings[0]
 
 
-def sync_local_listing_statuses_from_pf_cache():
-    """Sync LocalListing.status using cached PF listings (no extra API calls)."""
-    pf_listings = get_cached_listings() or []
+def sync_local_listing_statuses_from_pf_cache(workspace_id=None):
+    """Sync LocalListing.status using cached PF listings (no extra API calls, workspace-aware)."""
+    ws_id = _resolve_pf_workspace_id(workspace_id)
+    pf_listings = get_cached_listings(workspace_id=ws_id) or []
     if not pf_listings:
         return {'matched': 0, 'updated': 0, 'changed': 0}
 
@@ -1957,7 +2340,10 @@ def sync_local_listing_statuses_from_pf_cache():
     updated = 0
     changed = 0
 
-    for local in LocalListing.query.all():
+    query = LocalListing.query
+    if ws_id:
+        query = query.filter_by(workspace_id=ws_id)
+    for local in query.all():
         pf_listing = None
         if local.pf_listing_id:
             pf_listing = pf_by_id.get(str(local.pf_listing_id))
@@ -2265,15 +2651,24 @@ def logout():
 
 @app.route('/users')
 @permission_required('manage_users')
+@require_active_workspace
 def users_page():
-    """User management page"""
-    users = User.query.order_by(User.created_at.desc()).all()
-    pf_users = PFCache.get_cache('users') or []
+    """User management page (workspace-scoped)"""
+    ws_id = get_active_workspace_id()
+    memberships = WorkspaceMember.query.filter_by(workspace_id=ws_id).all()
+    user_ids = [m.user_id for m in memberships]
+    users = User.query.filter(User.id.in_(user_ids)).order_by(User.created_at.desc()).all()
+    pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
+    workspace = Workspace.query.get(ws_id)
+    can_manage_members = _is_workspace_admin(g.user.id, ws_id)
     return render_template('users.html', 
-                           users=[u.to_dict() for u in users], 
+                           users=[u.to_dict() for u in users],
                            roles=User.ROLES,
                            all_permissions=User.ALL_PERMISSIONS,
-                           pf_users=pf_users)
+                           pf_users=pf_users,
+                           workspace=workspace.to_dict() if workspace else None,
+                           workspace_memberships={m.user_id: m for m in memberships},
+                           can_manage_members=can_manage_members)
 
 
 @app.route('/users/create', methods=['POST'])
@@ -2309,6 +2704,19 @@ def create_user():
         user.set_custom_permissions(custom_perms)
     
     db.session.add(user)
+    db.session.flush()
+
+    ws_id = get_active_workspace_id()
+    if ws_id:
+        existing_member = WorkspaceMember.query.filter_by(workspace_id=ws_id, user_id=user.id).first()
+        if not existing_member:
+            member_role = 'admin' if role == 'admin' else 'member'
+            db.session.add(WorkspaceMember(
+                workspace_id=ws_id,
+                user_id=user.id,
+                role=member_role,
+                invited_by_id=g.user.id
+            ))
     db.session.commit()
     
     flash(f'User "{name}" created successfully.', 'success')
@@ -2374,12 +2782,194 @@ def delete_user(user_id):
     return redirect(url_for('users_page'))
 
 
+# ==================== WORKSPACE INVITES & PASSWORD RESET ====================
+
+@app.route('/api/workspaces/<int:workspace_id>/invites', methods=['POST'])
+@login_required
+def api_create_workspace_invite(workspace_id):
+    """Create an invite link for a workspace"""
+    workspace = Workspace.query.get_or_404(workspace_id)
+    if not _is_workspace_admin(g.user.id, workspace_id):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    data = request.get_json() or {}
+    email = (data.get('email') or '').strip().lower()
+    role = (data.get('role') or 'member').strip()
+    expires_in = int(data.get('expires_in', 7 * 24 * 3600))
+    
+    if not email:
+        return jsonify({'success': False, 'error': 'Email is required'}), 400
+    if role not in WorkspaceMember.ROLES:
+        return jsonify({'success': False, 'error': 'Invalid role'}), 400
+    
+    existing_user = User.query.filter_by(email=email).first()
+    if existing_user:
+        existing_member = WorkspaceMember.query.filter_by(workspace_id=workspace_id, user_id=existing_user.id).first()
+        if existing_member:
+            return jsonify({'success': False, 'error': 'User is already a member of this workspace'}), 400
+    
+    token = _generate_token()
+    invite = WorkspaceInvite(
+        workspace_id=workspace_id,
+        email=email,
+        role=role,
+        token_hash=_hash_token(token),
+        invited_by_id=g.user.id,
+        expires_at=datetime.utcnow() + timedelta(seconds=expires_in)
+    )
+    db.session.add(invite)
+    db.session.commit()
+    
+    invite_link = f"{_public_base_url()}/invite/{token}"
+    return jsonify({
+        'success': True,
+        'invite': invite.to_dict(),
+        'invite_link': invite_link
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>/invites', methods=['GET'])
+@login_required
+def api_list_workspace_invites(workspace_id):
+    """List pending invites for a workspace"""
+    if not _is_workspace_admin(g.user.id, workspace_id):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    invites = WorkspaceInvite.query.filter_by(workspace_id=workspace_id).order_by(WorkspaceInvite.created_at.desc()).all()
+    pending = []
+    for inv in invites:
+        if inv.accepted_at or inv.revoked_at:
+            continue
+        if inv.expires_at and inv.expires_at < datetime.utcnow():
+            continue
+        pending.append(inv.to_dict())
+    return jsonify({'success': True, 'invites': pending})
+
+
+@app.route('/api/workspaces/<int:workspace_id>/invites/<int:invite_id>/revoke', methods=['POST'])
+@login_required
+def api_revoke_workspace_invite(workspace_id, invite_id):
+    """Revoke a workspace invite"""
+    if not _is_workspace_admin(g.user.id, workspace_id):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    invite = WorkspaceInvite.query.filter_by(id=invite_id, workspace_id=workspace_id).first_or_404()
+    invite.revoked_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+@app.route('/invite/<token>', methods=['GET', 'POST'])
+def accept_invite(token):
+    """Accept a workspace invite"""
+    invite = _get_invite_by_token(token)
+    if not _invite_is_valid(invite):
+        return render_template('invite_accept.html', error='This invite link is invalid or expired.')
+    
+    workspace = Workspace.query.get(invite.workspace_id)
+    if request.method == 'GET':
+        if g.user:
+            ok, err = _accept_invite(invite, g.user)
+            if not ok:
+                return render_template('invite_accept.html', error=err)
+            flash('You have joined the workspace.', 'success')
+            return redirect(url_for('workspace_dashboard', workspace_slug=workspace.slug))
+        
+        existing_user = User.query.filter_by(email=invite.email).first()
+        return render_template(
+            'invite_accept.html',
+            invite=invite,
+            workspace=workspace,
+            existing_user=bool(existing_user),
+            login_next=url_for('login', next=request.path)
+        )
+    
+    # POST: create user + accept invite
+    name = (request.form.get('name') or '').strip()
+    password = request.form.get('password') or ''
+    
+    if not name or not password:
+        return render_template('invite_accept.html', invite=invite, workspace=workspace, error='Name and password are required.')
+    
+    existing_user = User.query.filter_by(email=invite.email).first()
+    if existing_user:
+        return render_template('invite_accept.html', invite=invite, workspace=workspace, error='This email already exists. Please log in to accept the invite.')
+    
+    user = User(email=invite.email, name=name, role='user')
+    user.set_password(password)
+    db.session.add(user)
+    db.session.flush()
+    
+    membership = WorkspaceMember(
+        workspace_id=invite.workspace_id,
+        user_id=user.id,
+        role=invite.role or 'member',
+        invited_by_id=invite.invited_by_id
+    )
+    db.session.add(membership)
+    invite.accepted_at = datetime.utcnow()
+    db.session.commit()
+    
+    session['user_id'] = user.id
+    flash('Account created and workspace joined.', 'success')
+    return redirect(url_for('workspace_dashboard', workspace_slug=workspace.slug))
+
+
+@app.route('/api/workspaces/<int:workspace_id>/members/<int:member_id>/reset-password', methods=['POST'])
+@login_required
+def api_create_reset_link(workspace_id, member_id):
+    """Create a password reset link for a workspace member"""
+    if not _is_workspace_admin(g.user.id, workspace_id):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    
+    member = WorkspaceMember.query.filter_by(id=member_id, workspace_id=workspace_id).first_or_404()
+    token = _generate_token()
+    reset = PasswordResetToken(
+        user_id=member.user_id,
+        token_hash=_hash_token(token),
+        created_by_id=g.user.id,
+        expires_at=datetime.utcnow() + timedelta(hours=24)
+    )
+    db.session.add(reset)
+    db.session.commit()
+    
+    reset_link = f"{_public_base_url()}/reset/{token}"
+    return jsonify({'success': True, 'reset_link': reset_link})
+
+
+@app.route('/reset/<token>', methods=['GET', 'POST'])
+def reset_password(token):
+    """Reset password using a token"""
+    token_hash = _hash_token(token)
+    reset = PasswordResetToken.query.filter_by(token_hash=token_hash).first()
+    if not reset or reset.used_at or (reset.expires_at and reset.expires_at < datetime.utcnow()):
+        return render_template('reset_password.html', error='This reset link is invalid or expired.')
+    
+    if request.method == 'GET':
+        return render_template('reset_password.html')
+    
+    password = request.form.get('password') or ''
+    if not password:
+        return render_template('reset_password.html', error='Password is required.')
+    
+    user = User.query.get(reset.user_id)
+    if not user:
+        return render_template('reset_password.html', error='User not found.')
+    
+    user.set_password(password)
+    reset.used_at = datetime.utcnow()
+    db.session.commit()
+    
+    flash('Password updated successfully.', 'success')
+    return redirect(url_for('login'))
+
+
 @app.route('/permissions')
 @permission_required('manage_users')
 def permissions_page():
     """Permission Center - manage user permissions"""
     users = User.query.filter(User.role != 'admin').order_by(User.name).all()
-    pf_users = PFCache.get_cache('users') or []
+    pf_users = PFCache.get_cache('users', workspace_id=get_active_workspace_id()) or []
     return render_template('permissions.html',
                            users=[u.to_dict() for u in users],
                            sections=User.SECTIONS,
@@ -2458,6 +3048,7 @@ def require_workspace_access(f):
         g.workspace = workspace
         g.workspace_membership = membership
         g.is_workspace_context = True
+        session['current_workspace_id'] = workspace.id
         
         return f(workspace_slug, *args, **kwargs)
     return decorated_function
@@ -2470,13 +3061,14 @@ def require_workspace_access(f):
 def workspace_dashboard(workspace_slug):
     """Workspace-scoped dashboard"""
     try:
-        # Get stats for this workspace (TODO: filter by workspace_id when data is scoped)
+        ws_id = g.workspace.id
+        base_query = scope_query(LocalListing.query, ws_id)
         stats = {
-            'total': LocalListing.query.count(),
-            'published': LocalListing.query.filter_by(status='published').count(),
-            'draft': LocalListing.query.filter_by(status='draft').count(),
+            'total': base_query.count(),
+            'published': base_query.filter_by(status='published').count(),
+            'draft': base_query.filter_by(status='draft').count(),
         }
-        recent = LocalListing.query.order_by(LocalListing.updated_at.desc()).limit(5).all()
+        recent = base_query.order_by(LocalListing.updated_at.desc()).limit(5).all()
         return render_template('index.html', stats=stats, recent_listings=[l.to_dict() for l in recent])
     except Exception as e:
         print(f"[ERROR] Workspace dashboard error: {e}")
@@ -2490,44 +3082,7 @@ def workspace_dashboard(workspace_slug):
 @require_workspace_access
 def workspace_listings(workspace_slug):
     """Workspace-scoped listings page"""
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 25, type=int)
-    status = request.args.get('status')
-    sort_by = request.args.get('sort_by', 'updated_at')
-    sort_order = request.args.get('sort_order', 'desc')
-    folder = request.args.get('folder')
-    
-    query = LocalListing.query
-    # TODO: Filter by workspace_id when listings are scoped
-    
-    if status:
-        query = query.filter_by(status=status)
-    if folder:
-        query = query.filter_by(folder_id=int(folder))
-    
-    if sort_order == 'desc':
-        query = query.order_by(getattr(LocalListing, sort_by).desc())
-    else:
-        query = query.order_by(getattr(LocalListing, sort_by).asc())
-    
-    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
-    listings = pagination.items
-    
-    folders = ListingFolder.query.order_by(ListingFolder.name).all()
-    
-    return render_template('listings.html',
-                           listings=[l.to_dict() for l in listings],
-                           folders=[f.to_dict() for f in folders],
-                           pagination={
-                               'page': page,
-                               'per_page': per_page,
-                               'total': pagination.total,
-                               'pages': pagination.pages
-                           },
-                           current_status=status,
-                           current_folder=folder,
-                           page=page,
-                           per_page=per_page)
+    return _render_listings_page(g.workspace.id)
 
 
 @app.route('/<workspace_slug>/leads')
@@ -2686,6 +3241,9 @@ def api_create_workspace():
     )
     db.session.add(member)
     db.session.commit()
+
+    # Initialize default settings for this workspace
+    AppSettings.init_defaults(workspace_id=workspace.id)
     
     return jsonify({
         'success': True,
@@ -2746,6 +3304,8 @@ def api_get_workspace_members(workspace_id):
     """Get workspace members"""
     # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
+    if not workspace.get_member(g.user.id) and g.user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
     
     return jsonify({
         'success': True,
@@ -2882,6 +3442,8 @@ def api_get_connections(workspace_id):
     """Get workspace connections"""
     # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
+    if not workspace.get_member(g.user.id) and g.user.role != 'admin':
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
     
     include_secrets = workspace.is_admin(g.user.id) or g.user.role == 'admin'
     
@@ -3066,6 +3628,28 @@ def api_switch_workspace(workspace_id):
         'success': True,
         'workspace': workspace.to_dict()
     })
+
+
+@app.route('/workspaces/<int:workspace_id>/enter', methods=['POST'])
+@login_required
+def enter_workspace(workspace_id):
+    """Enter a workspace (sets active workspace for system admins)"""
+    workspace = Workspace.query.get_or_404(workspace_id)
+    if not workspace.is_active:
+        flash('Workspace is not active.', 'error')
+        return redirect(url_for('system_admin_page'))
+
+    if g.user.role != 'admin':
+        member = WorkspaceMember.query.filter_by(
+            workspace_id=workspace_id,
+            user_id=g.user.id
+        ).first()
+        if not member:
+            flash('You do not have access to this workspace.', 'error')
+            return redirect(url_for('system_admin_page'))
+
+    session['active_workspace_id'] = workspace_id
+    return redirect(url_for('workspace_dashboard', workspace_slug=workspace.slug))
 
 
 # ==================== BITRIX24-STYLE PERMISSION SYSTEM APIs ====================
@@ -3418,12 +4002,16 @@ def api_update_workspace_role(workspace_id, role_id):
 @login_required
 def api_get_module_permissions(workspace_id, role_id):
     """Get module permissions for a workspace role"""
-    from src.database.models import ModulePermission
+    from src.database.models import ModulePermission, WorkspaceRole
     from src.services.permissions import get_permission_service
     
     service = get_permission_service()
     if not service.is_workspace_member(g.user, workspace_id):
         return jsonify({'success': False, 'error': 'Access denied'}), 403
+    
+    role = WorkspaceRole.query.get_or_404(role_id)
+    if role.workspace_id not in (None, workspace_id):
+        return jsonify({'success': False, 'error': 'Role not in this workspace'}), 400
     
     perms = ModulePermission.query.filter_by(workspace_role_id=role_id).all()
     return jsonify({
@@ -3651,28 +4239,13 @@ def profile():
 @login_required
 def index():
     """Dashboard home page - redirects to workspace if user has one"""
-    # Check if user has a workspace membership
-    membership = WorkspaceMember.query.filter_by(user_id=g.user.id).first()
-    if membership:
-        workspace = Workspace.query.get(membership.workspace_id)
-        if workspace and workspace.is_active:
-            return redirect(url_for('workspace_dashboard', workspace_slug=workspace.slug))
-    
-    # If admin with no workspace, show admin dashboard
+    ws = get_active_workspace()
+    if ws and ws.is_active:
+        return redirect(url_for('workspace_dashboard', workspace_slug=ws.slug))
+
+    # System admins land on system admin UI unless they explicitly enter a workspace
     if g.user.role == 'admin':
-        try:
-            stats = {
-                'total': LocalListing.query.count(),
-                'published': LocalListing.query.filter_by(status='published').count(),
-                'draft': LocalListing.query.filter_by(status='draft').count(),
-            }
-            recent = LocalListing.query.order_by(LocalListing.updated_at.desc()).limit(5).all()
-            return render_template('index.html', stats=stats, recent_listings=[l.to_dict() for l in recent])
-        except Exception as e:
-            print(f"[ERROR] Index route error: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
+        return redirect(url_for('system_admin_page'))
     
     # No workspace found - show error or redirect to login
     flash('You are not assigned to any workspace. Please contact your administrator.', 'warning')
@@ -3683,6 +4256,17 @@ def index():
 @login_required
 def listings():
     """List all listings page - uses local database"""
+    ws_id = get_active_workspace_id()
+    if not ws_id and g.user.role == 'admin':
+        flash('Select a workspace to continue.', 'warning')
+        return redirect(url_for('system_admin_page'))
+    if not ws_id:
+        flash('You are not assigned to any workspace.', 'warning')
+        return redirect(url_for('logout'))
+    return _render_listings_page(ws_id)
+
+
+def _render_listings_page(workspace_id):
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 25, type=int)
     status = request.args.get('status')
@@ -3691,11 +4275,15 @@ def listings():
     search = request.args.get('search', '').strip()
     folder_id = request.args.get('folder_id', type=int)  # Folder filter
     show_duplicates = request.args.get('show_duplicates', '0') == '1'  # Hide duplicates by default
+    assigned_to_filter = request.args.get('assigned_to_id')
     
-    query = LocalListing.query
+    query = scope_query(LocalListing.query, workspace_id)
     
     # Get the Duplicated folder ID
-    duplicated_folder = ListingFolder.query.filter_by(name='Duplicated').first()
+    duplicated_folder = ListingFolder.query.filter_by(
+        name='Duplicated',
+        workspace_id=workspace_id
+    ).first()
     
     # Filter by folder
     if folder_id is not None:
@@ -3717,6 +4305,17 @@ def listings():
     # Filter by status
     if status:
         query = query.filter_by(status=status)
+
+    # Filter by assignee
+    if assigned_to_filter:
+        if assigned_to_filter == 'unassigned':
+            query = query.filter(LocalListing.assigned_to_id.is_(None))
+        else:
+            try:
+                assignee_id = int(assigned_to_filter)
+                query = query.filter_by(assigned_to_id=assignee_id)
+            except (TypeError, ValueError):
+                pass
     
     # Search filter
     if search:
@@ -3753,9 +4352,13 @@ def listings():
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     
     # Get all folders for sidebar
-    folders = ListingFolder.get_all_with_counts()
-    current_folder = ListingFolder.query.get(folder_id) if folder_id else None
-    uncategorized_count = LocalListing.query.filter(LocalListing.folder_id.is_(None)).count()
+    folders = ListingFolder.get_all_with_counts(workspace_id=workspace_id)
+    current_folder = None
+    if folder_id:
+        current_folder = ListingFolder.query.filter_by(id=folder_id, workspace_id=workspace_id).first()
+    uncategorized_count = scope_query(LocalListing.query, workspace_id).filter(
+        LocalListing.folder_id.is_(None)
+    ).count()
     
     # Count duplicates (for showing toggle info)
     duplicates_count = duplicated_folder.listings.count() if duplicated_folder else 0
@@ -3781,40 +4384,51 @@ def listings():
                          sort_by=sort_by,
                          sort_order=sort_order,
                          search=search,
-                         status=status or '')
+                         status=status or '',
+                         assigned_to_id=assigned_to_filter or '',
+                         current_user_id=g.user.id if g.user else None,
+                         workspace_members=[
+                             m.user.to_dict() for m in WorkspaceMember.query.filter_by(workspace_id=workspace_id).all()
+                         ])
 
 @app.route('/listings/new')
 @permission_required('create')
+@require_active_workspace
 def new_listing():
     """New listing form page"""
     property_types = [
         {'code': pt.value, 'name': pt.name.replace('_', ' ').title()} 
         for pt in PropertyType
     ]
+    ws_id = get_active_workspace_id()
+    members = WorkspaceMember.query.filter_by(workspace_id=ws_id).all() if ws_id else []
     return render_template('listing_form.html', 
                          listing=None, 
                          property_types=property_types,
-                         edit_mode=False)
+                         edit_mode=False,
+                         workspace_members=[m.user.to_dict() for m in members])
 
 
 @app.route('/listings/<listing_id>')
 @login_required
+@require_active_workspace
 @api_error_handler
 def view_listing(listing_id):
     """View single listing page - checks local DB first, then PropertyFinder API"""
     # Try local database first (for integer IDs)
     try:
         local_id = int(listing_id)
-        local_listing = LocalListing.query.get(local_id)
+        ws_id = get_active_workspace_id()
+        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
         if local_listing:
             listing_dict = local_listing.to_dict()
             # If synced to PF, fetch current PF state for display (best-effort)
             if local_listing.pf_listing_id:
                 try:
-                    client = get_client()
-                    pf_listing = find_pf_listing_in_cache_by_id(local_listing.pf_listing_id)
+                    client = get_client(workspace_id=ws_id)
+                    pf_listing = find_pf_listing_in_cache_by_id(local_listing.pf_listing_id, workspace_id=ws_id)
                     if not pf_listing:
-                        pf_listing = find_pf_listing_in_cache_by_reference(local_listing.reference)
+                        pf_listing = find_pf_listing_in_cache_by_reference(local_listing.reference, workspace_id=ws_id)
                     if not pf_listing:
                         pf_listing = _normalize_pf_listing(client.get_listing(local_listing.pf_listing_id))
                     state = extract_pf_state_from_listing(pf_listing)
@@ -3829,13 +4443,14 @@ def view_listing(listing_id):
         pass  # Not an integer ID, try API
     
     # Try PropertyFinder API
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     listing = client.get_listing(listing_id)
     return render_template('listing_detail.html', listing=listing.get('data', listing))
 
 
 @app.route('/listings/<listing_id>/edit')
 @permission_required('edit')
+@require_active_workspace
 @api_error_handler
 def edit_listing(listing_id):
     """Edit listing form page - checks local DB first, then PropertyFinder API"""
@@ -3843,22 +4458,26 @@ def edit_listing(listing_id):
         {'code': pt.value, 'name': pt.name.replace('_', ' ').title()} 
         for pt in PropertyType
     ]
+    ws_id = get_active_workspace_id()
+    members = WorkspaceMember.query.filter_by(workspace_id=ws_id).all() if ws_id else []
     
     # Try local database first (for integer IDs)
     try:
         local_id = int(listing_id)
-        local_listing = LocalListing.query.get(local_id)
+        ws_id = get_active_workspace_id()
+        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
         if local_listing:
             # Pass the model object directly so template can use get_images()
             return render_template('listing_form.html', 
                                  listing=local_listing,
                                  property_types=property_types,
-                                 edit_mode=True)
+                                 edit_mode=True,
+                                 workspace_members=[m.user.to_dict() for m in members])
     except (ValueError, TypeError):
         pass  # Not an integer ID, try API
     
     # Try PropertyFinder API
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     listing = client.get_listing(listing_id)
     # Transform API response to local field names for form compatibility
     api_listing = listing.get('data', listing)
@@ -3866,15 +4485,17 @@ def edit_listing(listing_id):
     return render_template('listing_form.html', 
                          listing=transformed,
                          property_types=property_types,
-                         edit_mode=True)
+                         edit_mode=True,
+                         workspace_members=[m.user.to_dict() for m in members])
 
 
 @app.route('/bulk')
 @permission_required('bulk_upload')
+@require_active_workspace
 def bulk_upload():
     """Bulk upload page"""
     # Get settings for defaults
-    app_settings = AppSettings.get_all()
+    app_settings = AppSettings.get_all(workspace_id=get_active_workspace_id())
     return render_template('bulk_upload.html', defaults={
         'agent_email': Config.DEFAULT_AGENT_EMAIL,
         'owner_email': Config.DEFAULT_OWNER_EMAIL,
@@ -3884,10 +4505,12 @@ def bulk_upload():
 
 @app.route('/insights')
 @login_required
+@require_active_workspace
 def insights():
     """Insights and analytics page - loads without API calls, data fetched on demand"""
+    ws_id = get_active_workspace_id()
     # Get local listings only (no API call)
-    local_listings = LocalListing.query.all()
+    local_listings = scope_query(LocalListing.query, ws_id).all()
     local_data = [listing.to_dict() for listing in local_listings]
     
     # Return empty PF data - user will load on demand
@@ -3903,9 +4526,12 @@ def insights():
 
 
 @app.route('/api/pf/refresh', methods=['POST'])
+@login_required
+@require_active_workspace
 def api_refresh_pf_data():
     """API: Force refresh PropertyFinder data cache"""
-    cache = get_cached_pf_data(force_refresh=True)
+    ws_id = get_active_workspace_id()
+    cache = get_cached_pf_data(force_refresh=True, workspace_id=ws_id)
     return jsonify({
         'success': cache.get('error') is None,
         'listings_count': len(cache['listings']),
@@ -3916,21 +4542,25 @@ def api_refresh_pf_data():
 
 
 @app.route('/api/pf/insights', methods=['GET'])
+@login_required
+@require_active_workspace
 def api_pf_insights():
     """API: Get all PropertyFinder data for insights page (on-demand loading)"""
     user_id = request.args.get('user_id')
     force_refresh = request.args.get('refresh', 'false').lower() == 'true'
+    ws_id = get_active_workspace_id()
     
     # FAST PATH: Always try cache first (DB-backed, survives restarts)
-    cached_listings = get_cached_listings()  # Loads from DB if not in memory
-    cached_users = get_cached_users()
-    cached_leads = get_cached_leads()
+    cached_listings = get_cached_listings(workspace_id=ws_id)  # Loads from DB if not in memory
+    cached_users = get_cached_users(workspace_id=ws_id)
+    cached_leads = get_cached_leads(workspace_id=ws_id)
     
     # If we have cached data and not forcing refresh, return immediately (no API calls)
     if cached_listings and not force_refresh:
         print(f"[Insights] Returning {len(cached_listings)} cached listings (no API call)")
         # Get last_updated from DB if not in memory
-        last_updated = _pf_cache.get('last_updated') or PFCache.get_last_update('listings')
+        cache_obj = _get_pf_cache(workspace_id=ws_id)
+        last_updated = cache_obj.get('last_updated') or PFCache.get_last_update('listings', workspace_id=ws_id)
         cache = {
             'listings': cached_listings,
             'users': cached_users,
@@ -3941,17 +4571,17 @@ def api_pf_insights():
     elif force_refresh:
         # User explicitly requested refresh - fetch from API
         print(f"[Insights] Force refresh requested, fetching from API...")
-        cache = get_cached_pf_data(force_refresh=True, quick_load=False)
+        cache = get_cached_pf_data(force_refresh=True, quick_load=False, workspace_id=ws_id)
     else:
         # No cache at all - do quick initial load
         print(f"[Insights] No cache found, doing quick API load...")
-        cache = get_cached_pf_data(force_refresh=True, quick_load=True)
+        cache = get_cached_pf_data(force_refresh=True, quick_load=True, workspace_id=ws_id)
     
     listings = cache.get('listings', [])
     leads = cache.get('leads', [])
     
     # Get cached location map (no API calls - just use what we have)
-    location_map = get_cached_locations()
+    location_map = get_cached_locations(workspace_id=ws_id)
     
     # Filter by user if specified
     if user_id:
@@ -3975,10 +4605,13 @@ def api_pf_insights():
 
 
 @app.route('/api/pf/locations/refresh', methods=['POST'])
+@login_required
+@require_active_workspace
 def api_refresh_locations():
     """API: Refresh location cache from API (on-demand)"""
-    listings = get_cached_listings()
-    location_map = build_location_map(listings, force_refresh=True)
+    ws_id = get_active_workspace_id()
+    listings = get_cached_listings(workspace_id=ws_id)
+    location_map = build_location_map(listings, force_refresh=True, workspace_id=ws_id)
     return jsonify({
         'success': True,
         'count': len(location_map),
@@ -3987,10 +4620,13 @@ def api_refresh_locations():
 
 
 @app.route('/api/pf/users', methods=['GET'])
+@login_required
+@require_active_workspace
 def api_pf_users():
     """API: Get PropertyFinder users (lightweight, for agent dropdown)"""
     try:
-        client = get_client()
+        ws_id = get_active_workspace_id()
+        client = get_client(workspace_id=ws_id)
         users_result = client.get_users(per_page=50)
         users = users_result.get('data', [])
         return jsonify({
@@ -4006,9 +4642,12 @@ def api_pf_users():
 
 
 @app.route('/api/pf/listings', methods=['GET'])
+@login_required
+@require_active_workspace
 def api_pf_listings():
     """API: Get cached PropertyFinder listings"""
-    cache = get_cached_pf_data()
+    ws_id = get_active_workspace_id()
+    cache = get_cached_pf_data(workspace_id=ws_id)
     return jsonify({
         'listings': cache['listings'],
         'count': len(cache['listings']),
@@ -4018,11 +4657,13 @@ def api_pf_listings():
 
 @app.route('/settings')
 @permission_required('settings')
+@require_active_workspace
 def settings():
     """Settings page"""
     # Get PF users for default agent dropdown
-    pf_users = PFCache.get_cache('users') or []
-    app_settings = AppSettings.get_all()
+    ws_id = get_active_workspace_id()
+    pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
+    app_settings = AppSettings.get_all(workspace_id=ws_id)
     
     return render_template('settings.html', 
         config={
@@ -4044,10 +4685,12 @@ def settings():
 
 @app.route('/api/settings', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_settings():
     """API: Get all app settings"""
-    settings = AppSettings.get_all()
-    last_sync = PFCache.get_last_update()
+    ws_id = get_active_workspace_id()
+    settings = AppSettings.get_all(workspace_id=ws_id)
+    last_sync = PFCache.get_last_update(workspace_id=ws_id)
     return jsonify({
         'success': True,
         'settings': settings,
@@ -4057,6 +4700,7 @@ def api_get_settings():
 
 @app.route('/api/storage', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_storage_info():
     """API: Get storage usage information"""
     import shutil
@@ -4170,6 +4814,7 @@ def api_storage_info():
 
 @app.route('/api/storage/files', methods=['GET'])
 @permission_required('settings')
+@require_active_workspace
 def api_storage_files():
     """API: Get all files in storage with linked listing info"""
     def get_all_files(path):
@@ -4197,7 +4842,8 @@ def api_storage_files():
         all_files = get_all_files(str(UPLOAD_FOLDER))
     
     # Build a map of image URLs to listings for quick lookup
-    listings = LocalListing.query.all()
+    ws_id = get_active_workspace_id()
+    listings = LocalListing.query.filter_by(workspace_id=ws_id).all()
     image_to_listing = {}
     
     for listing in listings:
@@ -4233,6 +4879,7 @@ def api_storage_files():
 
 @app.route('/storage')
 @permission_required('settings')
+@require_active_workspace
 def storage_page():
     """Storage management page"""
     return render_template('storage.html')
@@ -4240,6 +4887,7 @@ def storage_page():
 
 @app.route('/api/storage/delete', methods=['POST'])
 @permission_required('settings')
+@require_active_workspace
 def api_storage_delete_files():
     """API: Delete specific files from storage and update DB references"""
     data = request.get_json() or {}
@@ -4253,6 +4901,7 @@ def api_storage_delete_files():
     deleted_files = []
     deleted_size = 0
     updated_listings = []
+    ws_id = get_active_workspace_id()
     errors = []
     
     for file_path in files_to_delete:
@@ -4283,7 +4932,7 @@ def api_storage_delete_files():
                 
                 # Update database - remove this image from any listings
                 if update_db:
-                    listings = LocalListing.query.all()
+                    listings = LocalListing.query.filter_by(workspace_id=ws_id).all()
                     for listing in listings:
                         if listing.images:
                             images = listing.get_images()
@@ -4338,6 +4987,7 @@ def api_storage_delete_files():
 
 @app.route('/api/storage/cleanup', methods=['POST'])
 @permission_required('settings')
+@require_active_workspace
 def api_storage_cleanup():
     """API: Clean up unused storage"""
     data = request.get_json() or {}
@@ -4365,7 +5015,8 @@ def api_storage_cleanup():
         # Clean orphaned listing images (images not referenced by any listing)
         if cleanup_type in ['orphaned', 'all']:
             # Get all image URLs from listings
-            all_listings = LocalListing.query.all()
+            ws_id = get_active_workspace_id()
+            all_listings = LocalListing.query.filter_by(workspace_id=ws_id).all()
             referenced_images = set()
             
             for listing in all_listings:
@@ -4374,6 +5025,9 @@ def api_storage_cleanup():
                         # Extract filename from URL
                         if '/uploads/' in img_url:
                             referenced_images.add(img_url.split('/uploads/')[-1])
+                if listing.original_images:
+                    for orig_path in _load_original_images_raw(listing):
+                        referenced_images.add(orig_path)
             
             # Check listing images folder
             if LISTING_IMAGES_FOLDER.exists():
@@ -4414,26 +5068,30 @@ def api_storage_cleanup():
 
 @app.route('/api/settings', methods=['POST'])
 @permission_required('settings')
+@require_active_workspace
 def api_update_settings():
     """API: Update app settings"""
     data = request.get_json()
+    ws_id = get_active_workspace_id()
     
     allowed_keys = ['sync_interval_minutes', 'auto_sync_enabled', 'default_agent_email', 
                     'default_owner_email', 'default_pf_agent_id']
     
     for key in allowed_keys:
         if key in data:
-            AppSettings.set(key, data[key])
+            AppSettings.set(key, data[key], workspace_id=ws_id)
     
-    return jsonify({'success': True, 'settings': AppSettings.get_all()})
+    return jsonify({'success': True, 'settings': AppSettings.get_all(workspace_id=get_active_workspace_id())})
 
 
 @app.route('/api/sync', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_manual_sync():
     """API: Trigger manual sync of PropertyFinder data"""
     try:
-        client = get_client()
+        ws_id = get_active_workspace_id()
+        client = get_client(workspace_id=ws_id)
         
         # Fetch listings
         all_listings = []
@@ -4449,14 +5107,14 @@ def api_manual_sync():
             page += 1
             if page > 50:  # Support up to 2500 listings
                 break
-        PFCache.set_cache('listings', all_listings)
+        PFCache.set_cache('listings', all_listings, workspace_id=ws_id)
         
         # Fetch users
         users = []
         try:
             users_result = client.get_users(per_page=50)
             users = users_result.get('data', [])
-            PFCache.set_cache('users', users)
+            PFCache.set_cache('users', users, workspace_id=ws_id)
         except:
             pass
         
@@ -4465,11 +5123,11 @@ def api_manual_sync():
         try:
             leads_result = client.get_leads(per_page=100)
             leads = leads_result.get('results', [])
-            PFCache.set_cache('leads', leads)
+            PFCache.set_cache('leads', leads, workspace_id=ws_id)
         except:
             pass
         
-        AppSettings.set('last_sync_at', datetime.now().isoformat())
+        AppSettings.set('last_sync_at', datetime.now().isoformat(), workspace_id=ws_id)
         
         return jsonify({
             'success': True,
@@ -4486,23 +5144,27 @@ def api_manual_sync():
 
 @app.route('/api/listings', methods=['GET'])
 @api_error_handler
+@login_required
+@require_active_workspace
 def api_get_listings():
     """API: Get all listings"""
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 25, type=int)
     
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     result = client.get_listings(page=page, per_page=per_page)
     return jsonify(result)
 
 
 @app.route('/api/listings', methods=['POST'])
 @api_error_handler
+@login_required
+@require_active_workspace
 def api_create_listing():
     """API: Create a new listing"""
     data = request.get_json()
     
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     result = client.create_listing(data)
     
     return jsonify({'success': True, 'data': result}), 201
@@ -4510,20 +5172,24 @@ def api_create_listing():
 
 @app.route('/api/listings/<listing_id>', methods=['GET'])
 @api_error_handler
+@login_required
+@require_active_workspace
 def api_get_listing(listing_id):
     """API: Get a single listing"""
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     result = client.get_listing(listing_id)
     return jsonify(result)
 
 
 @app.route('/api/listings/<listing_id>', methods=['PUT', 'PATCH'])
 @api_error_handler
+@login_required
+@require_active_workspace
 def api_update_listing(listing_id):
     """API: Update a listing"""
     data = request.get_json()
     
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     if request.method == 'PUT':
         result = client.update_listing(listing_id, data)
     else:
@@ -4534,23 +5200,28 @@ def api_update_listing(listing_id):
 
 @app.route('/api/listings/<listing_id>', methods=['DELETE'])
 @api_error_handler
+@login_required
+@require_active_workspace
 def api_delete_listing(listing_id):
     """API: Delete a listing"""
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     result = client.delete_listing(listing_id)
     return jsonify({'success': True, 'message': 'Listing deleted'})
 
 
 @app.route('/api/listings/<listing_id>/publish', methods=['POST'])
 @api_error_handler
+@login_required
+@require_active_workspace
 def api_publish_listing(listing_id):
     """API: Publish a listing"""
-    client = get_client()
+    ws_id = get_active_workspace_id()
+    client = get_client(workspace_id=ws_id)
     
     # Check if this is a local listing ID (integer)
     try:
         local_id = int(listing_id)
-        local_listing = LocalListing.query.get(local_id)
+        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
         if local_listing:
             media_warnings = []
             if local_listing.pf_listing_id:
@@ -4694,14 +5365,17 @@ def api_publish_listing(listing_id):
 
 @app.route('/api/listings/<listing_id>/unpublish', methods=['POST'])
 @api_error_handler
+@login_required
+@require_active_workspace
 def api_unpublish_listing(listing_id):
     """API: Unpublish a listing"""
-    client = get_client()
+    ws_id = get_active_workspace_id()
+    client = get_client(workspace_id=ws_id)
     
     # Check if this is a local listing ID (integer)
     try:
         local_id = int(listing_id)
-        local_listing = LocalListing.query.get(local_id)
+        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
         if local_listing and local_listing.pf_listing_id:
             # Use the PF listing ID instead
             client.unpublish_listing(local_listing.pf_listing_id)
@@ -4735,6 +5409,8 @@ def api_unpublish_listing(listing_id):
 
 @app.route('/api/bulk/upload', methods=['POST'])
 @api_error_handler
+@login_required
+@require_active_workspace
 def api_bulk_upload():
     """API: Bulk upload listings from file"""
     if 'file' not in request.files:
@@ -4753,7 +5429,7 @@ def api_bulk_upload():
     
     publish = request.form.get('publish', 'false').lower() == 'true'
     
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     manager = BulkListingManager(client)
     
     try:
@@ -4780,6 +5456,8 @@ def api_bulk_upload():
 
 @app.route('/api/bulk/create', methods=['POST'])
 @api_error_handler
+@login_required
+@require_active_workspace
 def api_bulk_create():
     """API: Bulk create listings from JSON array"""
     data = request.get_json()
@@ -4789,7 +5467,7 @@ def api_bulk_create():
     if not listings:
         return jsonify({'error': 'No listings provided'}), 400
     
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     manager = BulkListingManager(client)
     result = manager.create_listings_from_list(listings, publish=publish)
     
@@ -4805,9 +5483,11 @@ def api_bulk_create():
 
 @app.route('/api/reference/<ref_type>', methods=['GET'])
 @api_error_handler
+@login_required
+@require_active_workspace
 def api_reference_data(ref_type):
     """API: Get reference data"""
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     
     if ref_type == 'property-types':
         result = client.get_property_types()
@@ -4826,9 +5506,11 @@ def api_reference_data(ref_type):
 
 @app.route('/api/account', methods=['GET'])
 @api_error_handler
+@login_required
+@require_active_workspace
 def api_account():
     """API: Get account info"""
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     result = client.get_account()
     return jsonify(result)
 
@@ -4864,10 +5546,12 @@ def api_version():
 
 
 @app.route('/api/test-connection', methods=['GET', 'POST'])
+@login_required
+@require_active_workspace
 def api_test_pf_connection():
     """API: Test the Enterprise API connection"""
     try:
-        client = get_client()
+        client = get_client(workspace_id=get_active_workspace_id())
         result = client.test_connection()
         return jsonify(result)
     except Exception as e:
@@ -4880,16 +5564,18 @@ def api_test_pf_connection():
 
 @app.route('/api/pf/webhooks', methods=['GET'])
 @permission_required('settings')
+@require_active_workspace
 def api_pf_list_webhooks():
     """API: List PropertyFinder webhooks"""
     event_type = request.args.get('eventType') or request.args.get('event_type')
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     result = client.list_webhooks(event_type=event_type)
     return jsonify(result)
 
 
 @app.route('/api/pf/webhooks', methods=['POST'])
 @permission_required('settings')
+@require_active_workspace
 def api_pf_create_webhook():
     """API: Create PropertyFinder webhook subscription"""
     data = request.get_json() or {}
@@ -4908,49 +5594,56 @@ def api_pf_create_webhook():
                 return jsonify({'success': False, 'error': 'APP_PUBLIC_URL or PF_WEBHOOK_URL is required'}), 400
             url = f"{APP_PUBLIC_URL}/webhooks/propertyfinder"
 
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     result = client.create_webhook(event_id=event_id, url=url, secret=secret)
     return jsonify({'success': True, 'data': result})
 
 
 @app.route('/api/pf/webhooks/<event_id>', methods=['DELETE'])
 @permission_required('settings')
+@require_active_workspace
 def api_pf_delete_webhook(event_id):
     """API: Delete PropertyFinder webhook subscription"""
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     result = client.delete_webhook(event_id)
     return jsonify({'success': True, 'data': result})
 
 
 @app.route('/api/users', methods=['GET'])
 @api_error_handler
+@login_required
+@require_active_workspace
 def api_get_users():
     """API: Get users (agents) from PF"""
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('perPage', 15, type=int)
     
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     result = client.get_users(page=page, per_page=per_page)
     return jsonify(result)
 
 
 @app.route('/api/locations', methods=['GET'])
 @api_error_handler
+@login_required
+@require_active_workspace
 def api_get_locations():
     """API: Search locations"""
     search = request.args.get('search', '')
     page = request.args.get('page', 1, type=int)
     
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     result = client.get_locations(search=search, page=page)
     return jsonify(result)
 
 
 @app.route('/api/credits', methods=['GET'])
 @api_error_handler
+@login_required
+@require_active_workspace
 def api_get_credits():
     """API: Get credits info"""
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     result = client.get_credits()
     return jsonify(result)
 
@@ -4958,10 +5651,19 @@ def api_get_credits():
 # ==================== FORM HANDLERS ====================
 
 @app.route('/listings/create', methods=['POST'])
+@require_active_workspace
 @api_error_handler
 def create_listing_form():
     """Handle listing creation form submission - saves locally first"""
     form = request.form
+    ws_id = get_active_workspace_id()
+    
+    assigned_to_id = None
+    if form.get('assigned_to_id'):
+        assigned_to_id = _validate_assignee(ws_id, form.get('assigned_to_id'))
+        if not assigned_to_id:
+            flash('Assigned user must be a member of this workspace.', 'error')
+            return redirect(url_for('new_listing'))
     
     # Auto-generate reference if not provided
     reference = form.get('reference')
@@ -4970,6 +5672,7 @@ def create_listing_form():
     
     # Create local listing first
     local_listing = LocalListing(
+        workspace_id=ws_id,
         emirate=form.get('emirate'),
         city=form.get('city'),
         category=form.get('category'),
@@ -4978,6 +5681,7 @@ def create_listing_form():
         location=form.get('location'),
         location_id=form.get('location_id') if form.get('location_id') else None,
         assigned_agent=form.get('assigned_agent'),
+        assigned_to_id=assigned_to_id,
         reference=reference,
         bedrooms=form.get('bedrooms'),
         bathrooms=form.get('bathrooms'),
@@ -5019,6 +5723,7 @@ def create_listing_form():
 
 
 @app.route('/listings/<listing_id>/update', methods=['POST'])
+@require_active_workspace
 @api_error_handler
 def update_listing_form(listing_id):
     """Handle listing update form submission"""
@@ -5026,7 +5731,8 @@ def update_listing_form(listing_id):
     # Check if this is a local listing first
     try:
         local_id = int(listing_id)
-        local_listing = LocalListing.query.get(local_id)
+        ws_id = get_active_workspace_id()
+        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
         if local_listing:
             # Update local listing
             form = request.form
@@ -5040,6 +5746,15 @@ def update_listing_form(listing_id):
             local_listing.location_id = form.get('location_id') if form.get('location_id') else None
             local_listing.assigned_agent = form.get('assigned_agent')
             local_listing.reference = form.get('reference')
+            
+            if form.get('assigned_to_id'):
+                assigned_to_id = _validate_assignee(ws_id, form.get('assigned_to_id'))
+                if not assigned_to_id:
+                    flash('Assigned user must be a member of this workspace.', 'error')
+                    return redirect(url_for('edit_listing', listing_id=listing_id))
+                local_listing.assigned_to_id = assigned_to_id
+            else:
+                local_listing.assigned_to_id = None
             
             # Specifications
             local_listing.bedrooms = form.get('bedrooms')
@@ -5090,7 +5805,7 @@ def update_listing_form(listing_id):
     # PropertyFinder listing
     data = build_listing_from_form(request.form)
     
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     result = client.update_listing(listing_id, data)
     
     flash('Listing updated successfully!', 'success')
@@ -5098,10 +5813,11 @@ def update_listing_form(listing_id):
 
 
 @app.route('/listings/<listing_id>/delete', methods=['POST'])
+@require_active_workspace
 @api_error_handler
 def delete_listing_form(listing_id):
     """Handle listing deletion"""
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     client.delete_listing(listing_id)
     
     flash('Listing deleted successfully!', 'success')
@@ -5110,11 +5826,13 @@ def delete_listing_form(listing_id):
 
 @app.route('/listings/<listing_id>/duplicate', methods=['POST'])
 @login_required
+@require_active_workspace
 def duplicate_listing(listing_id):
     """Duplicate an existing listing with a new reference ID"""
     try:
         local_id = int(listing_id)
-        original = LocalListing.query.get(local_id)
+        ws_id = get_active_workspace_id()
+        original = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
         
         if not original:
             flash('Listing not found', 'error')
@@ -5122,6 +5840,7 @@ def duplicate_listing(listing_id):
         
         # Create a new listing with copied data
         new_listing = LocalListing(
+            workspace_id=original.workspace_id,
             # Property basics
             reference=generate_reference_id(),  # New reference
             category=original.category,
@@ -5159,12 +5878,14 @@ def duplicate_listing(listing_id):
             images=original.images,
             video_tour=original.video_tour,
             video_360=original.video_360,
+            original_images=original.original_images,
             
             # Amenities
             amenities=original.amenities,
             
             # Assignment
             assigned_agent=original.assigned_agent,
+            assigned_to_id=original.assigned_to_id,
             owner_id=original.owner_id,
             owner_name=original.owner_name,
             
@@ -5194,11 +5915,13 @@ def duplicate_listing(listing_id):
 
 @app.route('/listings/<listing_id>/send-to-pf', methods=['POST'])
 @login_required
+@require_active_workspace
 def send_to_pf_draft(listing_id):
     """Send listing to PropertyFinder as draft (without publishing)"""
     try:
         local_id = int(listing_id)
-        local_listing = LocalListing.query.get(local_id)
+        ws_id = get_active_workspace_id()
+        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
         
         if not local_listing:
             flash('Listing not found', 'error')
@@ -5209,7 +5932,7 @@ def send_to_pf_draft(listing_id):
             flash(f'Listing already on PropertyFinder (ID: {local_listing.pf_listing_id})', 'info')
             return redirect(url_for('view_listing', listing_id=listing_id))
         
-        client = get_client()
+        client = get_client(workspace_id=ws_id)
 
         # Preflight: resolve assigned agent and validate location
         ok, error = resolve_assigned_agent_id(local_listing, client)
@@ -5302,15 +6025,17 @@ def send_to_pf_draft(listing_id):
 
 
 @app.route('/listings/<listing_id>/publish', methods=['POST'])
+@require_active_workspace
 @api_error_handler
 def publish_listing_form(listing_id):
     """Handle listing publish from web form"""
     # Check if this is a local listing
     try:
         local_id = int(listing_id)
-        local_listing = LocalListing.query.get(local_id)
+        ws_id = get_active_workspace_id()
+        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
         if local_listing:
-            client = get_client()
+            client = get_client(workspace_id=ws_id)
             
             # Check if already synced to PropertyFinder
             if local_listing.pf_listing_id:
@@ -5396,7 +6121,7 @@ def publish_listing_form(listing_id):
         pass  # Not an integer ID, continue with PF listing
     
     # PropertyFinder listing
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     result = client.publish_listing(listing_id)
     
     flash('Listing published successfully!', 'success')
@@ -5404,20 +6129,22 @@ def publish_listing_form(listing_id):
 
 
 @app.route('/listings/<listing_id>/unpublish', methods=['POST'])
+@require_active_workspace
 @api_error_handler
 def unpublish_listing_form(listing_id):
     """Handle listing unpublish from web form"""
     # Check if this is a local listing
     try:
         local_id = int(listing_id)
-        local_listing = LocalListing.query.get(local_id)
+        ws_id = get_active_workspace_id()
+        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
         if local_listing:
             if not local_listing.pf_listing_id:
                 flash('This listing is not published on PropertyFinder', 'warning')
                 return redirect(url_for('view_listing', listing_id=listing_id))
             
             # Unpublish on PropertyFinder
-            client = get_client()
+            client = get_client(workspace_id=ws_id)
             client.unpublish_listing(local_listing.pf_listing_id)
 
             pf_state = None
@@ -5450,7 +6177,7 @@ def unpublish_listing_form(listing_id):
         pass  # Not an integer ID, continue with PF listing
     
     # PropertyFinder listing
-    client = get_client()
+    client = get_client(workspace_id=get_active_workspace_id())
     result = client.unpublish_listing(listing_id)
     
     flash('Listing unpublished successfully!', 'success')
@@ -5459,24 +6186,26 @@ def unpublish_listing_form(listing_id):
 
 @app.route('/listings/<listing_id>/sync-pf-status', methods=['POST'])
 @login_required
+@require_active_workspace
 @api_error_handler
 def sync_pf_status_form(listing_id):
     """Sync local listing status with PropertyFinder state"""
     try:
         local_id = int(listing_id)
-        local_listing = LocalListing.query.get(local_id)
+        ws_id = get_active_workspace_id()
+        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
         if not local_listing:
             flash('Listing not found', 'error')
             return redirect(request.referrer or url_for('listings'))
 
-        client = get_client()
+        client = get_client(workspace_id=ws_id)
         pf_listing_id = local_listing.pf_listing_id
         pf_listing = None
 
         if pf_listing_id:
-            pf_listing = find_pf_listing_in_cache_by_id(pf_listing_id)
+            pf_listing = find_pf_listing_in_cache_by_id(pf_listing_id, workspace_id=ws_id)
         if not pf_listing:
-            pf_listing = find_pf_listing_in_cache_by_reference(local_listing.reference)
+            pf_listing = find_pf_listing_in_cache_by_reference(local_listing.reference, workspace_id=ws_id)
         if not pf_listing and local_listing.reference:
             pf_listing = find_pf_listing_by_reference(client, local_listing.reference)
         if not pf_listing and pf_listing_id:
@@ -5576,13 +6305,16 @@ def build_listing_from_form(form):
 # ==================== LOCAL DATABASE API ====================
 
 @app.route('/api/local/listings', methods=['GET'])
+@login_required
+@require_active_workspace
 def api_local_get_listings():
     """Get all local listings"""
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 25, type=int)
     status = request.args.get('status')
     
-    query = LocalListing.query
+    ws_id = get_active_workspace_id()
+    query = scope_query(LocalListing.query, ws_id)
     if status:
         query = query.filter_by(status=status)
     
@@ -5601,16 +6333,20 @@ def api_local_get_listings():
 
 
 @app.route('/api/local/listings', methods=['POST'])
+@login_required
+@require_active_workspace
 def api_local_create_listing():
     """Create a local listing"""
     data = request.get_json()
+    ws_id = get_active_workspace_id()
     
     # Check if reference already exists
-    existing = LocalListing.query.filter_by(reference=data.get('reference')).first()
+    existing = LocalListing.query.filter_by(reference=data.get('reference'), workspace_id=ws_id).first()
     if existing:
         return jsonify({'error': 'Reference already exists'}), 400
     
     listing = LocalListing.from_dict(data)
+    listing.workspace_id = ws_id
     db.session.add(listing)
     db.session.commit()
     
@@ -5618,21 +6354,33 @@ def api_local_create_listing():
 
 
 @app.route('/api/local/listings/<int:listing_id>', methods=['GET'])
+@login_required
+@require_active_workspace
 def api_local_get_listing(listing_id):
     """Get a single local listing"""
-    listing = LocalListing.query.get_or_404(listing_id)
+    ws_id = get_active_workspace_id()
+    listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first_or_404()
     return jsonify({'data': listing.to_dict()})
 
 
 @app.route('/api/local/listings/<int:listing_id>', methods=['PUT'])
+@login_required
+@require_active_workspace
 def api_local_update_listing(listing_id):
     """Update a local listing"""
-    listing = LocalListing.query.get_or_404(listing_id)
+    ws_id = get_active_workspace_id()
+    listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first_or_404()
     data = request.get_json()
+    
+    if 'assigned_to_id' in data:
+        assigned_to_id = _validate_assignee(ws_id, data.get('assigned_to_id'))
+        if data.get('assigned_to_id') and not assigned_to_id:
+            return jsonify({'success': False, 'error': 'Assigned user must be in this workspace'}), 400
+        listing.assigned_to_id = assigned_to_id
     
     # Update fields
     for key, value in data.items():
-        if hasattr(listing, key) and key not in ['id', 'created_at']:
+        if hasattr(listing, key) and key not in ['id', 'created_at', 'assigned_to_id']:
             if key == 'images' and isinstance(value, list):
                 value = '|'.join(value)
             elif key == 'amenities' and isinstance(value, list):
@@ -5646,28 +6394,42 @@ def api_local_update_listing(listing_id):
 
 
 @app.route('/api/local/listings/<int:listing_id>', methods=['DELETE'])
+@login_required
+@require_active_workspace
 def api_local_delete_listing(listing_id):
     """Delete a local listing"""
-    listing = LocalListing.query.get_or_404(listing_id)
+    ws_id = get_active_workspace_id()
+    listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first_or_404()
     db.session.delete(listing)
     db.session.commit()
+
+    # Remove listing image folder (including originals)
+    try:
+        listing_dir = LISTING_IMAGES_FOLDER / str(listing_id)
+        if listing_dir.exists():
+            shutil.rmtree(listing_dir, ignore_errors=True)
+    except Exception as e:
+        print(f"[ListingDelete] Failed to remove listing folder {listing_id}: {e}")
     
     return jsonify({'success': True, 'message': 'Listing deleted'})
 
 
 @app.route('/api/local/listings/<int:listing_id>/sync-pf-status', methods=['POST'])
+@login_required
+@require_active_workspace
 @api_error_handler
 def api_local_sync_pf_status(listing_id):
     """Sync local listing status with PropertyFinder state"""
-    listing = LocalListing.query.get_or_404(listing_id)
-    client = get_client()
+    ws_id = get_active_workspace_id()
+    listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first_or_404()
+    client = get_client(workspace_id=ws_id)
     pf_listing_id = listing.pf_listing_id
     pf_listing = None
 
     if pf_listing_id:
-        pf_listing = find_pf_listing_in_cache_by_id(pf_listing_id)
+        pf_listing = find_pf_listing_in_cache_by_id(pf_listing_id, workspace_id=ws_id)
     if not pf_listing:
-        pf_listing = find_pf_listing_in_cache_by_reference(listing.reference)
+        pf_listing = find_pf_listing_in_cache_by_reference(listing.reference, workspace_id=ws_id)
     if not pf_listing and listing.reference:
         pf_listing = find_pf_listing_by_reference(client, listing.reference)
     if not pf_listing and pf_listing_id:
@@ -5703,10 +6465,13 @@ def api_local_sync_pf_status(listing_id):
 
 
 @app.route('/api/local/listings/bulk', methods=['POST'])
+@login_required
+@require_active_workspace
 def api_local_bulk_create():
     """Bulk create local listings"""
     data = request.get_json()
     listings_data = data.get('listings', [])
+    ws_id = get_active_workspace_id()
     
     created = []
     errors = []
@@ -5714,11 +6479,12 @@ def api_local_bulk_create():
     for idx, item in enumerate(listings_data):
         try:
             # Check for duplicate reference
-            if LocalListing.query.filter_by(reference=item.get('reference')).first():
+            if LocalListing.query.filter_by(reference=item.get('reference'), workspace_id=ws_id).first():
                 errors.append({'index': idx, 'error': 'Reference already exists', 'reference': item.get('reference')})
                 continue
             
             listing = LocalListing.from_dict(item)
+            listing.workspace_id = ws_id
             db.session.add(listing)
             db.session.flush()
             created.append(listing.to_dict())
@@ -5736,14 +6502,18 @@ def api_local_bulk_create():
 
 
 @app.route('/api/local/stats', methods=['GET'])
+@login_required
+@require_active_workspace
 def api_local_stats():
     """Get local listings statistics"""
-    total = LocalListing.query.count()
-    published = LocalListing.query.filter_by(status='published').count()
-    draft = LocalListing.query.filter_by(status='draft').count()
+    ws_id = get_active_workspace_id()
+    base_query = scope_query(LocalListing.query, ws_id)
+    total = base_query.count()
+    published = base_query.filter_by(status='published').count()
+    draft = base_query.filter_by(status='draft').count()
     
-    for_sale = LocalListing.query.filter_by(offering_type='sale').count()
-    for_rent = LocalListing.query.filter_by(offering_type='rent').count()
+    for_sale = base_query.filter_by(offering_type='sale').count()
+    for_rent = base_query.filter_by(offering_type='rent').count()
     
     return jsonify({
         'total': total,
@@ -5759,6 +6529,7 @@ def api_local_stats():
 @app.route('/auth')
 @login_required
 @permission_required('settings')
+@require_active_workspace
 def auth_page():
     """PropertyFinder authentication page"""
     pf_session = PFSession.query.first()
@@ -5816,6 +6587,7 @@ from database import Lead, Customer
 
 @app.route('/leads')
 @login_required
+@require_active_workspace
 def leads_page():
     """Leads management page"""
     return render_template('leads.html')
@@ -5823,13 +6595,15 @@ def leads_page():
 
 @app.route('/api/leads/config', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_leads_config():
     """Get lead configuration (statuses, sources, team members)"""
     import json
     
     # Get custom statuses and sources from settings
-    statuses_json = AppSettings.get('lead_statuses')
-    sources_json = AppSettings.get('lead_sources')
+    ws_id = get_active_workspace_id()
+    statuses_json = AppSettings.get('lead_statuses', workspace_id=ws_id)
+    sources_json = AppSettings.get('lead_sources', workspace_id=ws_id)
     
     try:
         statuses = json.loads(statuses_json) if statuses_json else []
@@ -5842,7 +6616,12 @@ def api_get_leads_config():
         sources = []
     
     # Get all users for assignment
-    users = User.query.filter_by(is_active=True).all()
+    users = User.query.join(
+        WorkspaceMember, WorkspaceMember.user_id == User.id
+    ).filter(
+        WorkspaceMember.workspace_id == ws_id,
+        User.is_active == True
+    ).all()
     team_members = [{'id': u.id, 'name': u.name, 'email': u.email, 'role': u.role} for u in users]
     
     return jsonify({
@@ -5854,22 +6633,25 @@ def api_get_leads_config():
 
 @app.route('/api/leads/config', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_update_leads_config():
     """Update lead configuration (statuses, sources)"""
     import json
     data = request.get_json()
+    ws_id = get_active_workspace_id()
     
     if 'statuses' in data:
-        AppSettings.set('lead_statuses', json.dumps(data['statuses']))
+        AppSettings.set('lead_statuses', json.dumps(data['statuses']), workspace_id=ws_id)
     
     if 'sources' in data:
-        AppSettings.set('lead_sources', json.dumps(data['sources']))
+        AppSettings.set('lead_sources', json.dumps(data['sources']), workspace_id=ws_id)
     
     return jsonify({'success': True})
 
 
 @app.route('/api/leads', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_leads():
     """Get leads based on user permissions.
     
@@ -5880,7 +6662,11 @@ def api_get_leads():
     from sqlalchemy.orm import joinedload
     
     # Use joinedload to prevent N+1 query problem (each lead would query user separately)
-    query = Lead.query.options(joinedload(Lead.assigned_to)).order_by(Lead.created_at.desc())
+    ws_id = get_active_workspace_id()
+    query = scope_query(
+        Lead.query.options(joinedload(Lead.assigned_to)).order_by(Lead.created_at.desc()),
+        ws_id
+    )
     
     # Filter by assignment for non-admin users
     if g.user.role != 'admin':
@@ -5893,11 +6679,14 @@ def api_get_leads():
 
 @app.route('/api/leads', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_create_lead():
     """Create a new lead"""
     data = request.get_json()
+    ws_id = get_active_workspace_id()
     
     lead = Lead(
+        workspace_id=ws_id,
         name=data.get('name'),
         email=data.get('email'),
         phone=data.get('phone'),
@@ -5922,17 +6711,21 @@ def api_create_lead():
 
 @app.route('/api/leads/<int:lead_id>', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_lead(lead_id):
     """Get a single lead"""
-    lead = Lead.query.get_or_404(lead_id)
+    ws_id = get_active_workspace_id()
+    lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first_or_404()
     return jsonify({'lead': lead.to_dict()})
 
 
 @app.route('/api/leads/<int:lead_id>', methods=['PATCH'])
 @login_required
+@require_active_workspace
 def api_update_lead(lead_id):
     """Update a lead"""
-    lead = Lead.query.get_or_404(lead_id)
+    ws_id = get_active_workspace_id()
+    lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first_or_404()
     data = request.get_json()
     
     for field in ['name', 'email', 'phone', 'whatsapp', 'source', 'message', 
@@ -5949,9 +6742,11 @@ def api_update_lead(lead_id):
 
 @app.route('/api/leads/<int:lead_id>', methods=['DELETE'])
 @login_required
+@require_active_workspace
 def api_delete_lead(lead_id):
     """Delete a lead"""
-    lead = Lead.query.get_or_404(lead_id)
+    ws_id = get_active_workspace_id()
+    lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first_or_404()
     db.session.delete(lead)
     db.session.commit()
     return jsonify({'success': True})
@@ -5959,6 +6754,7 @@ def api_delete_lead(lead_id):
 
 @app.route('/api/leads/bulk-delete', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_bulk_delete_leads():
     """Delete multiple leads at once"""
     data = request.get_json()
@@ -5967,9 +6763,10 @@ def api_bulk_delete_leads():
     if not lead_ids:
         return jsonify({'success': False, 'error': 'No leads selected'}), 400
     
+    ws_id = get_active_workspace_id()
     deleted = 0
     for lead_id in lead_ids:
-        lead = Lead.query.get(lead_id)
+        lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first()
         if lead:
             db.session.delete(lead)
             deleted += 1
@@ -5980,6 +6777,7 @@ def api_bulk_delete_leads():
 
 @app.route('/api/leads/bulk-update', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_bulk_update_leads():
     """Bulk update status, source, or assigned person for multiple leads"""
     data = request.get_json()
@@ -5999,9 +6797,10 @@ def api_bulk_update_leads():
     if not updates:
         return jsonify({'success': False, 'error': 'No updates provided'}), 400
     
+    ws_id = get_active_workspace_id()
     updated = 0
     for lead_id in lead_ids:
-        lead = Lead.query.get(lead_id)
+        lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first()
         if lead:
             for field, value in updates.items():
                 setattr(lead, field, value)
@@ -6013,12 +6812,14 @@ def api_bulk_update_leads():
 
 @app.route('/api/leads/cleanup-sources', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_cleanup_lead_sources():
     """Fix leads with invalid source IDs (like source_12345...) by setting them to 'other'"""
     import json
     
     # Get valid sources
-    sources_json = AppSettings.get('lead_sources')
+    ws_id = get_active_workspace_id()
+    sources_json = AppSettings.get('lead_sources', workspace_id=ws_id)
     try:
         valid_sources = json.loads(sources_json) if sources_json else []
         valid_source_ids = {s['id'] for s in valid_sources}
@@ -6031,7 +6832,7 @@ def api_cleanup_lead_sources():
     
     # Find and fix leads with invalid sources
     fixed = 0
-    leads = Lead.query.all()
+    leads = Lead.query.filter_by(workspace_id=ws_id).all()
     for lead in leads:
         if lead.source and lead.source not in valid_source_ids:
             lead.source = 'other'
@@ -6043,10 +6844,12 @@ def api_cleanup_lead_sources():
 
 @app.route('/api/leads/<int:lead_id>/comments', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_lead_comments(lead_id):
     """Get all comments for a lead"""
     try:
-        lead = Lead.query.get_or_404(lead_id)
+        ws_id = get_active_workspace_id()
+        lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first_or_404()
         comments = LeadComment.query.filter_by(lead_id=lead_id).order_by(LeadComment.created_at.desc()).all()
         return jsonify({'comments': [c.to_dict() for c in comments]})
     except Exception as e:
@@ -6056,9 +6859,11 @@ def api_get_lead_comments(lead_id):
 
 @app.route('/api/leads/<int:lead_id>/comments', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_add_lead_comment(lead_id):
     """Add a comment to a lead"""
-    lead = Lead.query.get_or_404(lead_id)
+    ws_id = get_active_workspace_id()
+    lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first_or_404()
     data = request.get_json()
     
     content = data.get('content', '').strip()
@@ -6078,8 +6883,11 @@ def api_add_lead_comment(lead_id):
 
 @app.route('/api/leads/<int:lead_id>/comments/<int:comment_id>', methods=['DELETE'])
 @login_required
+@require_active_workspace
 def api_delete_lead_comment(lead_id, comment_id):
     """Delete a comment from a lead"""
+    ws_id = get_active_workspace_id()
+    Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first_or_404()
     comment = LeadComment.query.filter_by(id=comment_id, lead_id=lead_id).first_or_404()
     
     # Only allow deletion by comment author or admin
@@ -6094,11 +6902,13 @@ def api_delete_lead_comment(lead_id, comment_id):
 
 @app.route('/api/leads/refresh-agents', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_refresh_lead_agents():
     """Refresh agent names for all PF leads based on listing's assignedTo"""
+    ws_id = get_active_workspace_id()
     # Get PF users and listings
-    pf_users = PFCache.get_cache('users') or []
-    pf_listings = PFCache.get_cache('listings') or []
+    pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
+    pf_listings = PFCache.get_cache('listings', workspace_id=ws_id) or []
     
     user_map = {u.get('publicProfile', {}).get('id'): u for u in pf_users}
     listing_map = {l.get('id'): l for l in pf_listings}
@@ -6107,7 +6917,7 @@ def api_refresh_lead_agents():
             listing_map[l.get('reference')] = l
     
     # Update all PF leads
-    leads = Lead.query.filter_by(source='propertyfinder').all()
+    leads = Lead.query.filter_by(source='propertyfinder', workspace_id=ws_id).all()
     updated = 0
     
     for lead in leads:
@@ -6145,6 +6955,7 @@ def api_refresh_lead_agents():
 
 @app.route('/api/leads/auto-assign', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_auto_assign_leads():
     """Auto-assign unassigned leads to L-Manager users based on PF agent email matching.
     
@@ -6155,8 +6966,9 @@ def api_auto_assign_leads():
     if g.user.role != 'admin':
         return jsonify({'success': False, 'error': 'Admin only'}), 403
     
+    ws_id = get_active_workspace_id()
     # Get PF users to map agent ID to email
-    pf_users = PFCache.get_cache('users') or []
+    pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
     pf_agent_email_map = {}
     for pf_user in pf_users:
         pf_id = pf_user.get('publicProfile', {}).get('id')
@@ -6165,14 +6977,20 @@ def api_auto_assign_leads():
             pf_agent_email_map[str(pf_id)] = pf_email
     
     # Get L-Manager users by email
-    lm_users = User.query.filter_by(is_active=True).all()
+    lm_users = User.query.join(
+        WorkspaceMember, WorkspaceMember.user_id == User.id
+    ).filter(
+        WorkspaceMember.workspace_id == ws_id,
+        User.is_active == True
+    ).all()
     email_to_lm_user = {u.email.lower(): u for u in lm_users}
     
     # Find unassigned leads that have a PF agent
     unassigned_leads = Lead.query.filter(
         Lead.assigned_to_id.is_(None),
         Lead.pf_agent_id.isnot(None),
-        Lead.pf_agent_id != ''
+        Lead.pf_agent_id != '',
+        Lead.workspace_id == ws_id
     ).all()
     
     assigned_count = 0
@@ -6201,12 +7019,14 @@ def api_auto_assign_leads():
 
 @app.route('/api/leads/sync-pf', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_sync_leads_from_pf():
     """Sync leads from PropertyFinder"""
     from dateutil import parser as date_parser
     
     try:
-        client = get_client()
+        ws_id = get_active_workspace_id()
+        client = get_client(workspace_id=ws_id)
         # Fetch all leads with pagination
         all_pf_leads = []
         page = 1
@@ -6224,11 +7044,16 @@ def api_sync_leads_from_pf():
                 break
         
         # Get PF users to map agent names and emails
-        pf_users = PFCache.get_cache('users') or []
+        pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
         user_map = {u.get('publicProfile', {}).get('id'): u for u in pf_users}
         
         # Build map of PF agent email -> L-Manager user for auto-assignment
-        lm_users = User.query.filter_by(is_active=True).all()
+        lm_users = User.query.join(
+            WorkspaceMember, WorkspaceMember.user_id == User.id
+        ).filter(
+            WorkspaceMember.workspace_id == ws_id,
+            User.is_active == True
+        ).all()
         email_to_lm_user = {u.email.lower(): u for u in lm_users}
         
         # Map PF agent ID to their email
@@ -6240,7 +7065,7 @@ def api_sync_leads_from_pf():
                 pf_agent_email_map[str(pf_id)] = pf_email
         
         # Get PF listings to map listing owners (assignedTo)
-        pf_listings = PFCache.get_cache('listings') or []
+        pf_listings = PFCache.get_cache('listings', workspace_id=ws_id) or []
         listing_map = {l.get('id'): l for l in pf_listings}
         # Also map by reference
         for l in pf_listings:
@@ -6252,7 +7077,7 @@ def api_sync_leads_from_pf():
         for pf_lead in all_pf_leads:
             # Check if already exists
             source_id = str(pf_lead.get('id'))
-            existing = Lead.query.filter_by(source='propertyfinder', source_id=source_id).first()
+            existing = Lead.query.filter_by(source='propertyfinder', source_id=source_id, workspace_id=ws_id).first()
             if existing:
                 skipped += 1
                 continue
@@ -6311,6 +7136,7 @@ def api_sync_leads_from_pf():
                     assigned_to_id = email_to_lm_user[pf_agent_email].id
             
             lead = Lead(
+                workspace_id=ws_id,
                 source='propertyfinder',
                 source_id=source_id,
                 channel=pf_lead.get('channel'),  # whatsapp, email, call
@@ -6352,10 +7178,12 @@ from database import Contact
 
 @app.route('/api/contacts', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_contacts():
     """Get all contacts with optional search"""
+    ws_id = get_active_workspace_id()
     search = request.args.get('search', '').strip()
-    query = Contact.query.order_by(Contact.name)
+    query = Contact.query.filter_by(workspace_id=ws_id).order_by(Contact.name)
     
     if search:
         query = query.filter(
@@ -6374,9 +7202,11 @@ def api_get_contacts():
 
 @app.route('/api/contacts', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_create_contact():
     """Create a new contact"""
     data = request.get_json()
+    ws_id = get_active_workspace_id()
     
     # Validate required fields
     if not data.get('name') or not data.get('phone'):
@@ -6393,7 +7223,13 @@ def api_create_contact():
         # Remove leading zero and prepend country code
         full_phone = country_code + phone.lstrip('0')
     
+    if data.get('lead_id'):
+        lead = Lead.query.filter_by(id=data.get('lead_id'), workspace_id=ws_id).first()
+        if not lead:
+            return jsonify({'error': 'Lead not found'}), 404
+    
     contact = Contact(
+        workspace_id=ws_id,
         name=data.get('name'),
         phone=full_phone,
         country_code=country_code,
@@ -6413,17 +7249,21 @@ def api_create_contact():
 
 @app.route('/api/contacts/<int:contact_id>', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_contact(contact_id):
     """Get a single contact"""
-    contact = Contact.query.get_or_404(contact_id)
+    ws_id = get_active_workspace_id()
+    contact = Contact.query.filter_by(id=contact_id, workspace_id=ws_id).first_or_404()
     return jsonify(contact.to_dict())
 
 
 @app.route('/api/contacts/<int:contact_id>', methods=['PATCH'])
 @login_required
+@require_active_workspace
 def api_update_contact(contact_id):
     """Update a contact"""
-    contact = Contact.query.get_or_404(contact_id)
+    ws_id = get_active_workspace_id()
+    contact = Contact.query.filter_by(id=contact_id, workspace_id=ws_id).first_or_404()
     data = request.get_json()
     
     if 'name' in data:
@@ -6451,9 +7291,11 @@ def api_update_contact(contact_id):
 
 @app.route('/api/contacts/<int:contact_id>', methods=['DELETE'])
 @login_required
+@require_active_workspace
 def api_delete_contact(contact_id):
     """Delete a contact"""
-    contact = Contact.query.get_or_404(contact_id)
+    ws_id = get_active_workspace_id()
+    contact = Contact.query.filter_by(id=contact_id, workspace_id=ws_id).first_or_404()
     db.session.delete(contact)
     db.session.commit()
     return jsonify({'success': True})
@@ -6461,10 +7303,12 @@ def api_delete_contact(contact_id):
 
 @app.route('/api/contacts/from-lead/<int:lead_id>', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_create_contact_from_lead(lead_id):
     """Create a contact from an existing lead"""
     try:
-        lead = Lead.query.get_or_404(lead_id)
+        ws_id = get_active_workspace_id()
+        lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first_or_404()
         
         # Check if contact already exists with same phone
         phone = lead.phone or lead.whatsapp or ''
@@ -6473,7 +7317,7 @@ def api_create_contact_from_lead(lead_id):
                 existing = Contact.query.filter(
                     (Contact.phone == phone) | 
                     (Contact.phone == phone.lstrip('+').lstrip('0'))
-                ).first()
+                ).filter(Contact.workspace_id == ws_id).first()
                 if existing:
                     return jsonify({'success': True, 'contact': existing.to_dict(), 'existing': True})
             except Exception as e:
@@ -6495,7 +7339,8 @@ def api_create_contact_from_lead(lead_id):
             name=lead.name or 'Unknown',
             phone=phone_number or '',
             country_code=country_code,
-            email=lead.email or ''
+            email=lead.email or '',
+            workspace_id=ws_id
         )
         
         # Set optional fields safely
@@ -6517,6 +7362,7 @@ def api_create_contact_from_lead(lead_id):
 
 @app.route('/tasks')
 @login_required
+@require_active_workspace
 def tasks_page():
     """Tasks management page - Trello-like boards"""
     return render_template('tasks.html')
@@ -6526,18 +7372,29 @@ def tasks_page():
 
 @app.route('/api/boards', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_boards():
     """Get all task boards the user has access to"""
     try:
         include_archived = request.args.get('include_archived', 'false') == 'true'
         user_id = session.get('user_id')
+        ws_id = get_active_workspace_id()
         
         # Get boards where user is creator or member
-        created_boards = TaskBoard.query.filter(TaskBoard.created_by_id == user_id)
+        created_boards = TaskBoard.query.filter(
+            TaskBoard.created_by_id == user_id,
+            TaskBoard.workspace_id == ws_id
+        )
         member_board_ids = db.session.query(BoardMember.board_id).filter(BoardMember.user_id == user_id).subquery()
-        member_boards = TaskBoard.query.filter(TaskBoard.id.in_(member_board_ids))
+        member_boards = TaskBoard.query.filter(
+            TaskBoard.id.in_(member_board_ids),
+            TaskBoard.workspace_id == ws_id
+        )
         # Also include public boards
-        public_boards = TaskBoard.query.filter(TaskBoard.is_private == False)
+        public_boards = TaskBoard.query.filter(
+            TaskBoard.is_private == False,
+            TaskBoard.workspace_id == ws_id
+        )
         
         query = created_boards.union(member_boards).union(public_boards)
         
@@ -6567,6 +7424,7 @@ def api_get_boards():
 
 @app.route('/api/boards', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_create_board():
     """Create a new task board"""
     try:
@@ -6584,7 +7442,9 @@ def api_create_board():
             {'id': str(uuid.uuid4()), 'name': 'Done', 'color': '#10b981'}
         ]
         
+        ws_id = get_active_workspace_id()
         board = TaskBoard(
+            workspace_id=ws_id,
             name=data['name'],
             description=data.get('description', ''),
             color=data.get('color', '#3b82f6'),
@@ -6613,9 +7473,11 @@ def api_create_board():
 
 @app.route('/api/boards/<int:board_id>', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_board(board_id):
     """Get a single board with tasks"""
-    board = TaskBoard.query.get_or_404(board_id)
+    ws_id = get_active_workspace_id()
+    board = TaskBoard.query.filter_by(id=board_id, workspace_id=ws_id).first_or_404()
     user_id = session.get('user_id')
     
     # Check access
@@ -6631,9 +7493,11 @@ def api_get_board(board_id):
 
 @app.route('/api/boards/<int:board_id>', methods=['PUT'])
 @login_required
+@require_active_workspace
 def api_update_board(board_id):
     """Update a board"""
-    board = TaskBoard.query.get_or_404(board_id)
+    ws_id = get_active_workspace_id()
+    board = TaskBoard.query.filter_by(id=board_id, workspace_id=ws_id).first_or_404()
     user_id = session.get('user_id')
     
     # Check permission
@@ -6665,9 +7529,11 @@ def api_update_board(board_id):
 
 @app.route('/api/boards/<int:board_id>', methods=['DELETE'])
 @login_required
+@require_active_workspace
 def api_delete_board(board_id):
     """Delete a board and all its tasks"""
-    board = TaskBoard.query.get_or_404(board_id)
+    ws_id = get_active_workspace_id()
+    board = TaskBoard.query.filter_by(id=board_id, workspace_id=ws_id).first_or_404()
     user_id = session.get('user_id')
     
     # Only owner can delete
@@ -6683,9 +7549,11 @@ def api_delete_board(board_id):
 
 @app.route('/api/boards/<int:board_id>/members', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_board_members(board_id):
     """Get all members of a board"""
-    board = TaskBoard.query.get_or_404(board_id)
+    ws_id = get_active_workspace_id()
+    board = TaskBoard.query.filter_by(id=board_id, workspace_id=ws_id).first_or_404()
     user_id = session.get('user_id')
     
     if not board.user_can(user_id, 'can_view'):
@@ -6700,9 +7568,11 @@ def api_get_board_members(board_id):
 
 @app.route('/api/boards/<int:board_id>/members', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_add_board_member(board_id):
     """Add a member to the board"""
-    board = TaskBoard.query.get_or_404(board_id)
+    ws_id = get_active_workspace_id()
+    board = TaskBoard.query.filter_by(id=board_id, workspace_id=ws_id).first_or_404()
     user_id = session.get('user_id')
     
     if not board.user_can(user_id, 'can_manage_members'):
@@ -6723,6 +7593,10 @@ def api_add_board_member(board_id):
     
     if not target_user:
         return jsonify({'success': False, 'error': 'User not found'}), 404
+
+    # Ensure user belongs to this workspace
+    if not WorkspaceMember.query.filter_by(workspace_id=ws_id, user_id=target_user.id).first():
+        return jsonify({'success': False, 'error': 'User not in this workspace'}), 400
     
     # Check if already a member
     existing = BoardMember.query.filter_by(board_id=board_id, user_id=target_user.id).first()
@@ -6756,9 +7630,11 @@ def api_add_board_member(board_id):
 
 @app.route('/api/boards/<int:board_id>/members/<int:member_user_id>', methods=['PUT'])
 @login_required
+@require_active_workspace
 def api_update_board_member(board_id, member_user_id):
     """Update a member's role"""
-    board = TaskBoard.query.get_or_404(board_id)
+    ws_id = get_active_workspace_id()
+    board = TaskBoard.query.filter_by(id=board_id, workspace_id=ws_id).first_or_404()
     user_id = session.get('user_id')
     
     if not board.user_can(user_id, 'can_manage_members'):
@@ -6789,9 +7665,11 @@ def api_update_board_member(board_id, member_user_id):
 
 @app.route('/api/boards/<int:board_id>/members/<int:member_user_id>', methods=['DELETE'])
 @login_required
+@require_active_workspace
 def api_remove_board_member(board_id, member_user_id):
     """Remove a member from the board"""
-    board = TaskBoard.query.get_or_404(board_id)
+    ws_id = get_active_workspace_id()
+    board = TaskBoard.query.filter_by(id=board_id, workspace_id=ws_id).first_or_404()
     user_id = session.get('user_id')
     
     # Can remove self or if have permission
@@ -6809,9 +7687,11 @@ def api_remove_board_member(board_id, member_user_id):
 
 @app.route('/api/boards/<int:board_id>/available-users', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_available_users_for_board(board_id):
     """Get users that can be added to the board"""
-    board = TaskBoard.query.get_or_404(board_id)
+    ws_id = get_active_workspace_id()
+    board = TaskBoard.query.filter_by(id=board_id, workspace_id=ws_id).first_or_404()
     user_id = session.get('user_id')
     
     if not board.user_can(user_id, 'can_manage_members'):
@@ -6819,7 +7699,10 @@ def api_get_available_users_for_board(board_id):
     
     # Get all active users except those already on the board
     existing_member_ids = [board.created_by_id] + [m.user_id for m in board.members.all()]
-    available_users = User.query.filter(
+    available_users = User.query.join(
+        WorkspaceMember, WorkspaceMember.user_id == User.id
+    ).filter(
+        WorkspaceMember.workspace_id == ws_id,
         User.is_active == True,
         ~User.id.in_(existing_member_ids)
     ).order_by(User.name).all()
@@ -6834,24 +7717,34 @@ def api_get_available_users_for_board(board_id):
 
 @app.route('/api/boards/<int:board_id>/labels', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_board_labels(board_id):
     """Get labels for a board"""
-    labels = TaskLabel.query.filter(
-        (TaskLabel.board_id == board_id) | (TaskLabel.board_id == None)
-    ).all()
+    ws_id = get_active_workspace_id()
+    board = TaskBoard.query.filter_by(id=board_id, workspace_id=ws_id).first_or_404()
+    user_id = session.get('user_id')
+    if board.is_private and not board.user_can(user_id, 'can_view'):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    labels = TaskLabel.query.filter(TaskLabel.board_id == board_id).all()
     return jsonify({'success': True, 'labels': [l.to_dict() for l in labels]})
 
 
 @app.route('/api/boards/<int:board_id>/labels', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_create_label(board_id):
     """Create a new label"""
     data = request.get_json()
+    ws_id = get_active_workspace_id()
+    board = TaskBoard.query.filter_by(id=board_id, workspace_id=ws_id).first_or_404()
+    user_id = session.get('user_id')
+    if not board.user_can(user_id, 'can_edit_board'):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     label = TaskLabel(
         name=data.get('name', 'New Label'),
         color=data.get('color', '#6b7280'),
-        board_id=board_id if data.get('board_specific', True) else None
+        board_id=board_id
     )
     
     db.session.add(label)
@@ -6861,9 +7754,20 @@ def api_create_label(board_id):
 
 @app.route('/api/labels/<int:label_id>', methods=['PUT'])
 @login_required
+@require_active_workspace
 def api_update_label(label_id):
     """Update a label"""
     label = TaskLabel.query.get_or_404(label_id)
+    ws_id = get_active_workspace_id()
+    if label.board_id is None:
+        return jsonify({'success': False, 'error': 'Label not found'}), 404
+    if label.board_id:
+        board = TaskBoard.query.filter_by(id=label.board_id, workspace_id=ws_id).first()
+        if not board:
+            return jsonify({'success': False, 'error': 'Label not found'}), 404
+        user_id = session.get('user_id')
+        if not board.user_can(user_id, 'can_edit_board'):
+            return jsonify({'success': False, 'error': 'Permission denied'}), 403
     data = request.get_json()
     
     if 'name' in data:
@@ -6877,21 +7781,54 @@ def api_update_label(label_id):
 
 @app.route('/api/labels/<int:label_id>', methods=['DELETE'])
 @login_required
+@require_active_workspace
 def api_delete_label(label_id):
     """Delete a label"""
     label = TaskLabel.query.get_or_404(label_id)
+    ws_id = get_active_workspace_id()
+    if label.board_id is None:
+        return jsonify({'success': False, 'error': 'Label not found'}), 404
+    if label.board_id:
+        board = TaskBoard.query.filter_by(id=label.board_id, workspace_id=ws_id).first()
+        if not board:
+            return jsonify({'success': False, 'error': 'Label not found'}), 404
+        user_id = session.get('user_id')
+        if not board.user_can(user_id, 'can_edit_board'):
+            return jsonify({'success': False, 'error': 'Permission denied'}), 403
     db.session.delete(label)
     db.session.commit()
     return jsonify({'success': True})
 
 
 # ---- Tasks API ----
+def _get_task_in_workspace(task_id, ws_id):
+    """Fetch a task scoped to the active workspace."""
+    return Task.query.join(
+        TaskBoard, Task.board_id == TaskBoard.id
+    ).filter(
+        Task.id == task_id,
+        TaskBoard.workspace_id == ws_id
+    ).first_or_404()
+
+
+def _get_task_comment_in_workspace(comment_id, ws_id):
+    """Fetch a task comment scoped to the active workspace."""
+    return TaskComment.query.join(
+        Task, TaskComment.task_id == Task.id
+    ).join(
+        TaskBoard, Task.board_id == TaskBoard.id
+    ).filter(
+        TaskComment.id == comment_id,
+        TaskBoard.workspace_id == ws_id
+    ).first_or_404()
 
 @app.route('/api/boards/<int:board_id>/tasks', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_board_tasks(board_id):
     """Get all tasks for a board"""
-    board = TaskBoard.query.get_or_404(board_id)
+    ws_id = get_active_workspace_id()
+    board = TaskBoard.query.filter_by(id=board_id, workspace_id=ws_id).first_or_404()
     user_id = session.get('user_id')
     
     # Check access
@@ -6904,9 +7841,11 @@ def api_get_board_tasks(board_id):
 
 @app.route('/api/boards/<int:board_id>/tasks', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_create_task(board_id):
     """Create a new task"""
-    board = TaskBoard.query.get_or_404(board_id)
+    ws_id = get_active_workspace_id()
+    board = TaskBoard.query.filter_by(id=board_id, workspace_id=ws_id).first_or_404()
     user_id = session.get('user_id')
     
     # Check permission
@@ -6945,8 +7884,11 @@ def api_create_task(board_id):
         except:
             pass
     
-    # Handle primary assignee
-    if data.get('assignee_id'):
+    # Handle primary assignee (workspace members only)
+    allowed_user_ids = {
+        m.user_id for m in WorkspaceMember.query.filter_by(workspace_id=ws_id).all()
+    }
+    if data.get('assignee_id') and data['assignee_id'] in allowed_user_ids:
         task.assignee_id = data['assignee_id']
     
     if data.get('cover_color'):
@@ -6954,7 +7896,10 @@ def api_create_task(board_id):
     
     # Handle labels
     if data.get('label_ids'):
-        labels = TaskLabel.query.filter(TaskLabel.id.in_(data['label_ids'])).all()
+        labels = TaskLabel.query.filter(
+            TaskLabel.id.in_(data['label_ids']),
+            TaskLabel.board_id == board_id
+        ).all()
         task.labels = labels
     
     db.session.add(task)
@@ -6962,7 +7907,7 @@ def api_create_task(board_id):
     
     # Handle multiple assignees
     if data.get('assignee_ids'):
-        assignee_ids = data['assignee_ids']
+        assignee_ids = [i for i in data['assignee_ids'] if i in allowed_user_ids]
         if assignee_ids:
             # First one is primary assignee
             task.assignee_id = assignee_ids[0]
@@ -6978,9 +7923,11 @@ def api_create_task(board_id):
 
 @app.route('/api/tasks/<int:task_id>', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_task(task_id):
     """Get a single task with all details"""
-    task = Task.query.get_or_404(task_id)
+    ws_id = get_active_workspace_id()
+    task = _get_task_in_workspace(task_id, ws_id)
     user_id = session.get('user_id')
     board = task.board
     
@@ -6999,9 +7946,11 @@ def api_get_task(task_id):
 
 @app.route('/api/tasks/<int:task_id>', methods=['PUT'])
 @login_required
+@require_active_workspace
 def api_update_task(task_id):
     """Update a task"""
-    task = Task.query.get_or_404(task_id)
+    ws_id = get_active_workspace_id()
+    task = _get_task_in_workspace(task_id, ws_id)
     user_id = session.get('user_id')
     board = task.board
     
@@ -7026,13 +7975,16 @@ def api_update_task(task_id):
     if 'cover_image' in data:
         task.cover_image = data['cover_image']
     
-    # Handle primary assignee
+    # Handle primary assignee (workspace members only)
+    allowed_user_ids = {
+        m.user_id for m in WorkspaceMember.query.filter_by(workspace_id=ws_id).all()
+    }
     if 'assignee_id' in data:
-        task.assignee_id = data['assignee_id']
+        task.assignee_id = data['assignee_id'] if data['assignee_id'] in allowed_user_ids else None
     
     # Handle multiple assignees (includes primary)
     if 'assignee_ids' in data:
-        assignee_ids = data['assignee_ids']
+        assignee_ids = [i for i in data['assignee_ids'] if i in allowed_user_ids]
         if assignee_ids:
             # First one is primary assignee
             task.assignee_id = assignee_ids[0]
@@ -7075,7 +8027,10 @@ def api_update_task(task_id):
         task.set_checklist(data['checklist'])
     
     if 'label_ids' in data:
-        labels = TaskLabel.query.filter(TaskLabel.id.in_(data['label_ids'])).all()
+        labels = TaskLabel.query.filter(
+            TaskLabel.id.in_(data['label_ids']),
+            TaskLabel.board_id == task.board_id
+        ).all()
         task.labels = labels
     
     db.session.commit()
@@ -7084,14 +8039,18 @@ def api_update_task(task_id):
 
 @app.route('/api/tasks/<int:task_id>/move', methods=['PATCH'])
 @login_required
+@require_active_workspace
 def api_move_task(task_id):
     """Move a task to a different column or position"""
-    task = Task.query.get_or_404(task_id)
+    ws_id = get_active_workspace_id()
+    task = _get_task_in_workspace(task_id, ws_id)
     data = request.get_json()
     
     new_column_id = data.get('column_id', task.column_id)
     new_position = data.get('position', task.position)
     new_board_id = data.get('board_id', task.board_id)
+    if new_board_id != task.board_id:
+        TaskBoard.query.filter_by(id=new_board_id, workspace_id=ws_id).first_or_404()
     
     # If moving to a different column, update positions
     if new_column_id != task.column_id or new_board_id != task.board_id:
@@ -7135,9 +8094,11 @@ def api_move_task(task_id):
 
 @app.route('/api/tasks/<int:task_id>', methods=['DELETE'])
 @login_required
+@require_active_workspace
 def api_delete_task(task_id):
     """Delete a task"""
-    task = Task.query.get_or_404(task_id)
+    ws_id = get_active_workspace_id()
+    task = _get_task_in_workspace(task_id, ws_id)
     user_id = session.get('user_id')
     board = task.board
     
@@ -7164,18 +8125,21 @@ def api_delete_task(task_id):
 
 @app.route('/api/my-tasks', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_my_tasks():
     """Get all tasks assigned to the current user across all boards"""
     user_id = session.get('user_id')
+    ws_id = get_active_workspace_id()
+    board_ids = db.session.query(TaskBoard.id).filter(TaskBoard.workspace_id == ws_id).subquery()
     
     # Get tasks where user is primary assignee or in assignees list
-    primary_tasks = Task.query.filter(Task.assignee_id == user_id)
+    primary_tasks = Task.query.filter(Task.assignee_id == user_id, Task.board_id.in_(board_ids))
     
     # Get task IDs from task_assignees association
     assigned_task_ids = db.session.query(task_assignee_association.c.task_id).filter(
         task_assignee_association.c.user_id == user_id
     ).subquery()
-    secondary_tasks = Task.query.filter(Task.id.in_(assigned_task_ids))
+    secondary_tasks = Task.query.filter(Task.id.in_(assigned_task_ids), Task.board_id.in_(board_ids))
     
     all_tasks = primary_tasks.union(secondary_tasks).order_by(Task.due_date.asc().nullslast(), Task.priority.desc()).all()
     
@@ -7200,9 +8164,11 @@ def api_get_my_tasks():
 
 @app.route('/api/tasks/<int:task_id>/assign', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_assign_task(task_id):
     """Assign users to a task"""
-    task = Task.query.get_or_404(task_id)
+    ws_id = get_active_workspace_id()
+    task = _get_task_in_workspace(task_id, ws_id)
     user_id = session.get('user_id')
     board = task.board
     
@@ -7211,7 +8177,10 @@ def api_assign_task(task_id):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     data = request.get_json()
-    assignee_ids = data.get('assignee_ids', [])
+    allowed_user_ids = {
+        m.user_id for m in WorkspaceMember.query.filter_by(workspace_id=ws_id).all()
+    }
+    assignee_ids = [i for i in data.get('assignee_ids', []) if i in allowed_user_ids]
     
     # Set primary assignee (first in list)
     if assignee_ids:
@@ -7232,9 +8201,11 @@ def api_assign_task(task_id):
 
 @app.route('/api/tasks/<int:task_id>/unassign', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_unassign_task(task_id):
     """Remove assignment from a task"""
-    task = Task.query.get_or_404(task_id)
+    ws_id = get_active_workspace_id()
+    task = _get_task_in_workspace(task_id, ws_id)
     user_id = session.get('user_id')
     board = task.board
     
@@ -7259,18 +8230,22 @@ def api_unassign_task(task_id):
 
 @app.route('/api/tasks/<int:task_id>/comments', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_task_comments(task_id):
     """Get comments for a task"""
-    task = Task.query.get_or_404(task_id)
+    ws_id = get_active_workspace_id()
+    task = _get_task_in_workspace(task_id, ws_id)
     comments = task.comments.order_by(TaskComment.created_at.desc()).all()
     return jsonify({'success': True, 'comments': [c.to_dict() for c in comments]})
 
 
 @app.route('/api/tasks/<int:task_id>/comments', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_create_task_comment(task_id):
     """Add a comment to a task"""
-    task = Task.query.get_or_404(task_id)
+    ws_id = get_active_workspace_id()
+    task = _get_task_in_workspace(task_id, ws_id)
     data = request.get_json()
     
     if not data.get('content'):
@@ -7290,9 +8265,11 @@ def api_create_task_comment(task_id):
 
 @app.route('/api/comments/<int:comment_id>', methods=['DELETE'])
 @login_required
+@require_active_workspace
 def api_delete_task_comment(comment_id):
     """Delete a comment"""
-    comment = TaskComment.query.get_or_404(comment_id)
+    ws_id = get_active_workspace_id()
+    comment = _get_task_comment_in_workspace(comment_id, ws_id)
     
     # Only allow delete by author or admin
     if comment.user_id != session.get('user_id'):
@@ -7332,8 +8309,10 @@ def webhook_zapier():
     if not data:
         return jsonify({'error': 'No data provided'}), 400
     
+    ws_id = get_default_workspace_id()
     # Create lead
     lead = Lead(
+        workspace_id=ws_id,
         source=data.get('source', 'zapier'),
         name=data.get('name', 'Unknown'),
         email=data.get('email'),
@@ -7398,7 +8377,11 @@ def webhook_propertyfinder():
         import hashlib
         source_id = hashlib.sha256(raw_body).hexdigest()
 
-    existing = Lead.query.filter_by(source='propertyfinder', source_id=str(source_id)).first()
+    ws_id = get_default_workspace_id()
+    if ws_id:
+        existing = Lead.query.filter_by(source='propertyfinder', source_id=str(source_id), workspace_id=ws_id).first()
+    else:
+        existing = Lead.query.filter_by(source='propertyfinder', source_id=str(source_id)).first()
 
     if existing:
         # Update status/response link if present
@@ -7409,8 +8392,16 @@ def webhook_propertyfinder():
         return jsonify({'success': True, 'lead_id': existing.id, 'event_id': event_id})
 
     # Auto-assign to L-Manager user based on PF agent email
-    pf_users = PFCache.get_cache('users') or []
-    lm_users = User.query.filter_by(is_active=True).all()
+    pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
+    if ws_id:
+        lm_users = User.query.join(
+            WorkspaceMember, WorkspaceMember.user_id == User.id
+        ).filter(
+            WorkspaceMember.workspace_id == ws_id,
+            User.is_active == True
+        ).all()
+    else:
+        lm_users = User.query.filter_by(is_active=True).all()
     email_to_lm_user = {u.email.lower(): u for u in lm_users}
     pf_agent_email_map = {}
     for pf_user in pf_users:
@@ -7427,6 +8418,7 @@ def webhook_propertyfinder():
             assigned_to_id = email_to_lm_user[pf_agent_email].id
 
     lead = Lead(
+        workspace_id=ws_id,
         source='propertyfinder',
         source_id=str(source_id),
         channel=payload.get('channel', ''),
@@ -7460,70 +8452,78 @@ PROCESSED_IMAGES_DIR = UPLOAD_FOLDER / 'processed'
 
 @app.route('/image-editor')
 @login_required
+@require_active_workspace
 def image_editor():
     """Image editor page"""
     # Get all image settings
+    ws_id = get_active_workspace_id()
     settings = {
-        'image_default_ratio': AppSettings.get('image_default_ratio', ''),
-        'image_default_size': AppSettings.get('image_default_size', 'full_hd'),
-        'image_quality': AppSettings.get('image_quality', '90'),
-        'image_format': AppSettings.get('image_format', 'JPEG'),
-        'image_qr_enabled': AppSettings.get('image_qr_enabled', 'false'),
-        'image_qr_data': AppSettings.get('image_default_qr_data', ''),
-        'image_qr_position': AppSettings.get('image_qr_position', 'bottom_right'),
-        'image_qr_size_percent': AppSettings.get('image_qr_size_percent', '12'),
-        'image_qr_color': AppSettings.get('image_qr_color', '#000000'),
-        'image_logo_enabled': AppSettings.get('image_logo_enabled', 'false'),
-        'image_logo_position': AppSettings.get('image_logo_position', 'bottom_left'),
-        'image_logo_size': AppSettings.get('image_logo_size', '15'),
-        'image_logo_opacity': AppSettings.get('image_logo_opacity', '80'),
-        'image_default_logo': AppSettings.get('image_default_logo', ''),
+        'image_default_ratio': AppSettings.get('image_default_ratio', '', workspace_id=ws_id),
+        'image_default_size': AppSettings.get('image_default_size', 'full_hd', workspace_id=ws_id),
+        'image_quality': AppSettings.get('image_quality', '90', workspace_id=ws_id),
+        'image_format': AppSettings.get('image_format', 'JPEG', workspace_id=ws_id),
+        'image_qr_enabled': AppSettings.get('image_qr_enabled', 'false', workspace_id=ws_id),
+        'image_qr_data': AppSettings.get('image_default_qr_data', '', workspace_id=ws_id),
+        'image_qr_position': AppSettings.get('image_qr_position', 'bottom_right', workspace_id=ws_id),
+        'image_qr_size_percent': AppSettings.get('image_qr_size_percent', '12', workspace_id=ws_id),
+        'image_qr_color': AppSettings.get('image_qr_color', '#000000', workspace_id=ws_id),
+        'image_logo_enabled': AppSettings.get('image_logo_enabled', 'false', workspace_id=ws_id),
+        'image_logo_position': AppSettings.get('image_logo_position', 'bottom_left', workspace_id=ws_id),
+        'image_logo_size': AppSettings.get('image_logo_size', '15', workspace_id=ws_id),
+        'image_logo_opacity': AppSettings.get('image_logo_opacity', '80', workspace_id=ws_id),
+        'image_default_logo': AppSettings.get('image_default_logo', '', workspace_id=ws_id),
     }
     return render_template('image_editor.html', settings=settings)
 
 
 @app.route('/api/images/settings', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_image_settings():
     """Get image processing settings"""
+    ws_id = get_active_workspace_id()
     settings = {
-        'default_logo': AppSettings.get('image_default_logo'),
-        'default_qr_data': AppSettings.get('image_default_qr_data'),
-        'default_ratio': AppSettings.get('image_default_ratio', '16:9'),
-        'qr_position': AppSettings.get('image_qr_position', 'bottom-right'),
-        'qr_size_percent': int(AppSettings.get('image_qr_size_percent', '15')),
-        'logo_position': AppSettings.get('image_logo_position', 'bottom-left'),
-        'logo_opacity': int(AppSettings.get('image_logo_opacity', '80'))
+        'default_logo': AppSettings.get('image_default_logo', workspace_id=ws_id),
+        'default_qr_data': AppSettings.get('image_default_qr_data', workspace_id=ws_id),
+        'default_ratio': AppSettings.get('image_default_ratio', '16:9', workspace_id=ws_id),
+        'qr_position': AppSettings.get('image_qr_position', 'bottom-right', workspace_id=ws_id),
+        'qr_size_percent': int(AppSettings.get('image_qr_size_percent', '15', workspace_id=ws_id)),
+        'logo_position': AppSettings.get('image_logo_position', 'bottom-left', workspace_id=ws_id),
+        'logo_opacity': int(AppSettings.get('image_logo_opacity', '80', workspace_id=ws_id))
     }
     return jsonify(settings)
 
 
 @app.route('/api/images/settings', methods=['POST'])
 @permission_required('settings')
+@require_active_workspace
 def api_save_image_settings():
     """Save image processing settings"""
     data = request.json
+    ws_id = get_active_workspace_id()
     
     if 'default_qr_data' in data:
-        AppSettings.set('image_default_qr_data', data['default_qr_data'])
+        AppSettings.set('image_default_qr_data', data['default_qr_data'], workspace_id=ws_id)
     if 'default_ratio' in data:
-        AppSettings.set('image_default_ratio', data['default_ratio'])
+        AppSettings.set('image_default_ratio', data['default_ratio'], workspace_id=ws_id)
     if 'qr_position' in data:
-        AppSettings.set('image_qr_position', data['qr_position'])
+        AppSettings.set('image_qr_position', data['qr_position'], workspace_id=ws_id)
     if 'qr_size_percent' in data:
-        AppSettings.set('image_qr_size_percent', str(data['qr_size_percent']))
+        AppSettings.set('image_qr_size_percent', str(data['qr_size_percent']), workspace_id=ws_id)
     if 'logo_position' in data:
-        AppSettings.set('image_logo_position', data['logo_position'])
+        AppSettings.set('image_logo_position', data['logo_position'], workspace_id=ws_id)
     if 'logo_opacity' in data:
-        AppSettings.set('image_logo_opacity', str(data['logo_opacity']))
+        AppSettings.set('image_logo_opacity', str(data['logo_opacity']), workspace_id=ws_id)
     
     return jsonify({'success': True, 'message': 'Settings saved'})
 
 
 @app.route('/api/images/upload-logo', methods=['POST'])
 @permission_required('settings')
+@require_active_workspace
 def api_upload_logo():
     """Upload default logo"""
+    ws_id = get_active_workspace_id()
     if 'logo' not in request.files:
         return jsonify({'error': 'No logo file provided'}), 400
     
@@ -7546,7 +8546,7 @@ def api_upload_logo():
     
     # Save path in settings
     relative_path = f'uploads/logos/{logo_filename}'
-    AppSettings.set('image_default_logo', relative_path)
+    AppSettings.set('image_default_logo', relative_path, workspace_id=ws_id)
     
     return jsonify({
         'success': True,
@@ -7557,12 +8557,14 @@ def api_upload_logo():
 
 @app.route('/api/images/process-single', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_process_single_image():
     """Process a single image from base64 data"""
     import base64
     from io import BytesIO
     
     temp_logo_path = None
+    ws_id = get_active_workspace_id()
     
     try:
         data = request.json
@@ -7620,7 +8622,7 @@ def api_process_single_image():
                 print(f"[ImageProcessor] Logo decode error: {logo_err}")
         elif not logo_data:
             # Check for default logo
-            logo_setting = AppSettings.get('image_default_logo')
+            logo_setting = AppSettings.get('image_default_logo', workspace_id=ws_id)
             if logo_setting:
                 potential_path = str(ROOT_DIR / logo_setting)
                 if Path(potential_path).exists():
@@ -7682,6 +8684,7 @@ def api_process_single_image():
 
 @app.route('/api/settings/images', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_settings_images():
     """Get image settings (alternate endpoint)"""
     return api_get_image_settings()
@@ -7689,9 +8692,11 @@ def api_get_settings_images():
 
 @app.route('/api/settings/images', methods=['POST'])
 @permission_required('settings')
+@require_active_workspace
 def api_save_settings_images():
     """Save image settings"""
     data = request.json
+    ws_id = get_active_workspace_id()
     
     settings_map = {
         'ratio': 'image_default_ratio',
@@ -7715,7 +8720,7 @@ def api_save_settings_images():
             # Convert booleans to strings
             if isinstance(value, bool):
                 value = 'true' if value else 'false'
-            AppSettings.set(db_key, str(value))
+            AppSettings.set(db_key, str(value), workspace_id=ws_id)
     
     # Handle logo data if provided as base64
     if data.get('logoData') and data['logoData'].startswith('data:'):
@@ -7736,7 +8741,7 @@ def api_save_settings_images():
             with open(logo_path, 'wb') as f:
                 f.write(logo_bytes)
             
-            AppSettings.set('image_default_logo', f'uploads/logos/{logo_filename}')
+            AppSettings.set('image_default_logo', f'uploads/logos/{logo_filename}', workspace_id=ws_id)
         except Exception as e:
             print(f"Error saving logo: {e}")
     
@@ -7754,6 +8759,7 @@ def serve_upload(filename):
 
 @app.route('/api/images/process-with-settings', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_process_image_with_settings():
     """Process an image using saved settings and save to disk
     
@@ -7772,6 +8778,11 @@ def api_process_image_with_settings():
             return jsonify({'error': 'No data provided'}), 400
         
         listing_id = data.get('listing_id')
+        ws_id = get_active_workspace_id()
+        if listing_id:
+            listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first()
+            if not listing:
+                return jsonify({'error': 'Listing not found'}), 404
         image_bytes = None
         
         # Option 1: URL - server downloads it (bypasses CORS)
@@ -7818,20 +8829,20 @@ def api_process_image_with_settings():
         
         # Load saved settings
         settings = {
-            'ratio': AppSettings.get('image_default_ratio') or None,
-            'size': AppSettings.get('image_default_size') or 'full_hd',
-            'quality': int(AppSettings.get('image_quality') or 90),
-            'format': AppSettings.get('image_format') or 'JPEG',
-            'qr_enabled': AppSettings.get('image_qr_enabled') == 'true',
-            'qr_data': AppSettings.get('image_default_qr_data') or '',
-            'qr_position': AppSettings.get('image_qr_position') or 'bottom_right',
-            'qr_size': int(AppSettings.get('image_qr_size_percent') or 12),
-            'qr_color': AppSettings.get('image_qr_color') or '#000000',
-            'logo_enabled': AppSettings.get('image_logo_enabled') == 'true',
-            'logo_path': AppSettings.get('image_default_logo'),
-            'logo_position': AppSettings.get('image_logo_position') or 'bottom_left',
-            'logo_size': int(AppSettings.get('image_logo_size') or 10),
-            'logo_opacity': float(AppSettings.get('image_logo_opacity') or 0.9),
+            'ratio': AppSettings.get('image_default_ratio', workspace_id=ws_id) or None,
+            'size': AppSettings.get('image_default_size', workspace_id=ws_id) or 'full_hd',
+            'quality': int(AppSettings.get('image_quality', workspace_id=ws_id) or 90),
+            'format': AppSettings.get('image_format', workspace_id=ws_id) or 'JPEG',
+            'qr_enabled': AppSettings.get('image_qr_enabled', workspace_id=ws_id) == 'true',
+            'qr_data': AppSettings.get('image_default_qr_data', workspace_id=ws_id) or '',
+            'qr_position': AppSettings.get('image_qr_position', workspace_id=ws_id) or 'bottom_right',
+            'qr_size': int(AppSettings.get('image_qr_size_percent', workspace_id=ws_id) or 12),
+            'qr_color': AppSettings.get('image_qr_color', workspace_id=ws_id) or '#000000',
+            'logo_enabled': AppSettings.get('image_logo_enabled', workspace_id=ws_id) == 'true',
+            'logo_path': AppSettings.get('image_default_logo', workspace_id=ws_id),
+            'logo_position': AppSettings.get('image_logo_position', workspace_id=ws_id) or 'bottom_left',
+            'logo_size': int(AppSettings.get('image_logo_size', workspace_id=ws_id) or 10),
+            'logo_opacity': float(AppSettings.get('image_logo_opacity', workspace_id=ws_id) or 0.9),
         }
         
         print(f"[ProcessWithSettings] Using settings: ratio={settings['ratio']}, qr={settings['qr_enabled']}, logo={settings['logo_enabled']}")
@@ -7914,6 +8925,7 @@ def api_process_image_with_settings():
 
 @app.route('/api/images/upload', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_upload_image():
     """Upload a single image file with automatic optimization for large files"""
     import uuid
@@ -7937,9 +8949,17 @@ def api_upload_image():
         # Read file into memory
         file_data = file.read()
         original_size = len(file_data)
+        original_bytes = file_data
+        original_ext = ext
         
         # Get listing_id if provided (for organizing files)
         listing_id = request.form.get('listing_id')
+        ws_id = get_active_workspace_id()
+        listing = None
+        if listing_id:
+            listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first()
+            if not listing:
+                return jsonify({'error': 'Listing not found'}), 404
         
         # Generate unique filename (always save as JPEG for consistency and smaller size)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -8006,6 +9026,30 @@ def api_upload_image():
         url = f'/uploads/{relative_path}'
         
         print(f"[ImageUpload] Saved: {relative_path} ({file_size} bytes){' [optimized]' if optimized else ''}")
+
+        # Save original copy if listing_id was provided
+        original_relative_path = None
+        if listing_id and listing:
+            try:
+                originals_dir = LISTING_IMAGES_FOLDER / str(listing_id) / 'originals'
+                originals_dir.mkdir(parents=True, exist_ok=True)
+                orig_filename = f'orig_{timestamp}_{unique_id}.{original_ext}'
+                orig_path = originals_dir / orig_filename
+                with open(orig_path, 'wb') as f:
+                    f.write(original_bytes)
+                original_relative_path = f'listings/{listing_id}/originals/{orig_filename}'
+            except Exception as e:
+                print(f"[ImageUpload] Failed to store original image: {e}")
+        
+        if listing_id and listing and original_relative_path:
+            try:
+                existing_originals = _load_original_images_raw(listing)
+                merged_originals = _merge_unique_paths(existing_originals, [original_relative_path])
+                listing.original_images = json.dumps(merged_originals)
+                listing.updated_at = datetime.utcnow()
+                db.session.commit()
+            except Exception as e:
+                print(f"[ImageUpload] Failed to update listing originals: {e}")
         
         return jsonify({
             'success': True,
@@ -8028,10 +9072,12 @@ def api_upload_image():
 
 @app.route('/api/folders', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_folders():
     """API: Get all folders"""
-    folders = ListingFolder.get_all_with_counts()
-    uncategorized_count = LocalListing.query.filter(LocalListing.folder_id.is_(None)).count()
+    ws_id = get_active_workspace_id()
+    folders = ListingFolder.get_all_with_counts(workspace_id=ws_id)
+    uncategorized_count = scope_query(LocalListing.query, ws_id).filter(LocalListing.folder_id.is_(None)).count()
     return jsonify({
         'folders': folders,
         'uncategorized_count': uncategorized_count
@@ -8040,25 +9086,34 @@ def api_get_folders():
 
 @app.route('/api/folders', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_create_folder():
     """API: Create a new folder"""
     data = request.get_json(silent=True) or request.json or {}
+    ws_id = get_active_workspace_id()
     
     if not data.get('name'):
         return jsonify({'error': 'Folder name is required'}), 400
+
+    parent_id = data.get('parent_id')
+    if parent_id:
+        parent = ListingFolder.query.filter_by(id=parent_id, workspace_id=ws_id).first()
+        if not parent:
+            return jsonify({'error': 'Parent folder not found'}), 404
     
     # Check if folder with same name exists
-    existing = ListingFolder.query.filter_by(name=data['name']).first()
+    existing = ListingFolder.query.filter_by(name=data['name'], workspace_id=ws_id).first()
     if existing:
         return jsonify({'error': 'A folder with this name already exists'}), 400
     
     try:
         folder = ListingFolder(
+            workspace_id=ws_id,
             name=data['name'],
             color=data.get('color', 'indigo'),
             icon=data.get('icon', 'fa-folder'),
             description=data.get('description'),
-            parent_id=data.get('parent_id')
+            parent_id=parent_id
         )
         db.session.add(folder)
         db.session.commit()
@@ -8071,17 +9126,21 @@ def api_create_folder():
 
 @app.route('/api/folders/<int:folder_id>', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_folder(folder_id):
     """API: Get a single folder"""
-    folder = ListingFolder.query.get_or_404(folder_id)
+    ws_id = get_active_workspace_id()
+    folder = ListingFolder.query.filter_by(id=folder_id, workspace_id=ws_id).first_or_404()
     return jsonify({'folder': folder.to_dict()})
 
 
 @app.route('/api/folders/<int:folder_id>', methods=['PUT', 'PATCH'])
 @login_required
+@require_active_workspace
 def api_update_folder(folder_id):
     """API: Update a folder"""
-    folder = ListingFolder.query.get_or_404(folder_id)
+    ws_id = get_active_workspace_id()
+    folder = ListingFolder.query.filter_by(id=folder_id, workspace_id=ws_id).first_or_404()
     data = request.json
     
     if 'name' in data:
@@ -8093,7 +9152,12 @@ def api_update_folder(folder_id):
     if 'description' in data:
         folder.description = data['description']
     if 'parent_id' in data:
-        folder.parent_id = data['parent_id']
+        parent_id = data['parent_id']
+        if parent_id:
+            parent = ListingFolder.query.filter_by(id=parent_id, workspace_id=ws_id).first()
+            if not parent:
+                return jsonify({'error': 'Parent folder not found'}), 404
+        folder.parent_id = parent_id
     
     db.session.commit()
     return jsonify({'folder': folder.to_dict(), 'message': 'Folder updated successfully'})
@@ -8101,12 +9165,14 @@ def api_update_folder(folder_id):
 
 @app.route('/api/folders/<int:folder_id>', methods=['DELETE'])
 @login_required
+@require_active_workspace
 def api_delete_folder(folder_id):
     """API: Delete a folder (moves listings to uncategorized)"""
-    folder = ListingFolder.query.get_or_404(folder_id)
+    ws_id = get_active_workspace_id()
+    folder = ListingFolder.query.filter_by(id=folder_id, workspace_id=ws_id).first_or_404()
     
     # Move all listings in this folder to uncategorized
-    LocalListing.query.filter_by(folder_id=folder_id).update({'folder_id': None})
+    LocalListing.query.filter_by(folder_id=folder_id, workspace_id=ws_id).update({'folder_id': None})
     
     db.session.delete(folder)
     db.session.commit()
@@ -8116,23 +9182,28 @@ def api_delete_folder(folder_id):
 
 @app.route('/api/listings/move-to-folder', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_move_listings_to_folder():
     """API: Move listings to a folder"""
     data = request.json
     listing_ids = data.get('listing_ids', [])
     folder_id = data.get('folder_id')  # None means uncategorized
+    ws_id = get_active_workspace_id()
     
     if not listing_ids:
         return jsonify({'error': 'No listings specified'}), 400
     
     # Verify folder exists if specified
     if folder_id is not None:
-        folder = ListingFolder.query.get(folder_id)
+        folder = ListingFolder.query.filter_by(id=folder_id, workspace_id=ws_id).first()
         if not folder:
             return jsonify({'error': 'Folder not found'}), 404
     
     # Update listings
-    updated = LocalListing.query.filter(LocalListing.id.in_(listing_ids)).update(
+    updated = LocalListing.query.filter(
+        LocalListing.id.in_(listing_ids),
+        LocalListing.workspace_id == ws_id
+    ).update(
         {'folder_id': folder_id},
         synchronize_session=False
     )
@@ -8148,30 +9219,35 @@ def api_move_listings_to_folder():
 
 @app.route('/loops')
 @login_required
+@require_active_workspace
 def loops_page():
     """Loop management page"""
-    loops = LoopConfig.query.order_by(LoopConfig.created_at.desc()).all()
+    ws_id = get_active_workspace_id()
+    loops = LoopConfig.query.filter_by(workspace_id=ws_id).order_by(LoopConfig.created_at.desc()).all()
     
     # Get primary listings only (exclude "Duplicated" folder)
-    duplicated_folder = ListingFolder.query.filter_by(name='Duplicated').first()
+    duplicated_folder = ListingFolder.query.filter_by(name='Duplicated', workspace_id=ws_id).first()
     if duplicated_folder:
         listings = LocalListing.query.filter(
             db.or_(
                 LocalListing.folder_id != duplicated_folder.id,
                 LocalListing.folder_id == None
-            )
+            ),
+            LocalListing.workspace_id == ws_id
         ).order_by(LocalListing.reference).all()
     else:
-        listings = LocalListing.query.order_by(LocalListing.reference).all()
+        listings = LocalListing.query.filter_by(workspace_id=ws_id).order_by(LocalListing.reference).all()
     
     return render_template('loops.html', loops=loops, listings=listings)
 
 
 @app.route('/api/loops', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_loops():
     """Get all loop configurations"""
-    loops = LoopConfig.query.order_by(LoopConfig.created_at.desc()).all()
+    ws_id = get_active_workspace_id()
+    loops = LoopConfig.query.filter_by(workspace_id=ws_id).order_by(LoopConfig.created_at.desc()).all()
     return jsonify({
         'success': True,
         'loops': [loop.to_dict() for loop in loops]
@@ -8180,9 +9256,11 @@ def api_get_loops():
 
 @app.route('/api/loops', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_create_loop():
     """Create a new loop configuration"""
     data = request.json
+    ws_id = get_active_workspace_id()
     
     if not data.get('name'):
         return jsonify({'error': 'Name is required'}), 400
@@ -8191,6 +9269,7 @@ def api_create_loop():
         return jsonify({'error': 'At least one listing is required'}), 400
     
     loop = LoopConfig(
+        workspace_id=ws_id,
         name=data['name'],
         loop_type=data.get('loop_type', 'duplicate'),
         interval_hours=float(data.get('interval_hours', 1)),
@@ -8203,6 +9282,10 @@ def api_create_loop():
     
     # Add listings to the loop
     for idx, listing_id in enumerate(data['listing_ids']):
+        listing = LocalListing.query.filter_by(id=int(listing_id), workspace_id=ws_id).first()
+        if not listing:
+            db.session.rollback()
+            return jsonify({'error': f'Listing {listing_id} not found in workspace'}), 404
         loop_listing = LoopListing(
             loop_config_id=loop.id,
             listing_id=int(listing_id),
@@ -8224,9 +9307,11 @@ def api_create_loop():
 
 @app.route('/api/loops/<int:loop_id>', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_loop(loop_id):
     """Get a single loop configuration"""
-    loop = LoopConfig.query.get_or_404(loop_id)
+    ws_id = get_active_workspace_id()
+    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
     
     # Include listings with details
     loop_data = loop.to_dict()
@@ -8240,9 +9325,11 @@ def api_get_loop(loop_id):
 
 @app.route('/api/loops/<int:loop_id>', methods=['PUT'])
 @login_required
+@require_active_workspace
 def api_update_loop(loop_id):
     """Update a loop configuration"""
-    loop = LoopConfig.query.get_or_404(loop_id)
+    ws_id = get_active_workspace_id()
+    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
     data = request.json
     
     if 'name' in data:
@@ -8263,6 +9350,10 @@ def api_update_loop(loop_id):
         
         # Add new listings
         for idx, listing_id in enumerate(data['listing_ids']):
+            listing = LocalListing.query.filter_by(id=int(listing_id), workspace_id=ws_id).first()
+            if not listing:
+                db.session.rollback()
+                return jsonify({'error': f'Listing {listing_id} not found in workspace'}), 404
             loop_listing = LoopListing(
                 loop_config_id=loop.id,
                 listing_id=int(listing_id),
@@ -8283,9 +9374,11 @@ def api_update_loop(loop_id):
 
 @app.route('/api/loops/<int:loop_id>', methods=['DELETE'])
 @login_required
+@require_active_workspace
 def api_delete_loop(loop_id):
     """Delete a loop configuration"""
-    loop = LoopConfig.query.get_or_404(loop_id)
+    ws_id = get_active_workspace_id()
+    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
     
     # Delete associated records
     LoopListing.query.filter_by(loop_config_id=loop.id).delete()
@@ -8302,9 +9395,11 @@ def api_delete_loop(loop_id):
 
 @app.route('/api/loops/<int:loop_id>/start', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_start_loop(loop_id):
     """Start a loop"""
-    loop = LoopConfig.query.get_or_404(loop_id)
+    ws_id = get_active_workspace_id()
+    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
     
     loop.is_active = True
     loop.is_paused = False
@@ -8322,9 +9417,11 @@ def api_start_loop(loop_id):
 
 @app.route('/api/loops/<int:loop_id>/stop', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_stop_loop(loop_id):
     """Stop a loop"""
-    loop = LoopConfig.query.get_or_404(loop_id)
+    ws_id = get_active_workspace_id()
+    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
     
     loop.is_active = False
     loop.is_paused = False
@@ -8340,9 +9437,11 @@ def api_stop_loop(loop_id):
 
 @app.route('/api/loops/<int:loop_id>/pause', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_pause_loop(loop_id):
     """Pause a loop"""
-    loop = LoopConfig.query.get_or_404(loop_id)
+    ws_id = get_active_workspace_id()
+    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
     
     loop.is_paused = True
     
@@ -8357,9 +9456,11 @@ def api_pause_loop(loop_id):
 
 @app.route('/api/loops/<int:loop_id>/resume', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_resume_loop(loop_id):
     """Resume a paused loop"""
-    loop = LoopConfig.query.get_or_404(loop_id)
+    ws_id = get_active_workspace_id()
+    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
     
     loop.is_paused = False
     loop.next_run_at = datetime.utcnow()  # Resume immediately
@@ -8375,9 +9476,11 @@ def api_resume_loop(loop_id):
 
 @app.route('/api/loops/<int:loop_id>/run-now', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_run_loop_now(loop_id):
     """Manually trigger a loop execution"""
-    loop = LoopConfig.query.get_or_404(loop_id)
+    ws_id = get_active_workspace_id()
+    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
     
     if not loop.is_active:
         loop.is_active = True
@@ -8395,9 +9498,11 @@ def api_run_loop_now(loop_id):
 
 @app.route('/api/loops/<int:loop_id>/logs', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_loop_logs(loop_id):
     """Get execution logs for a loop"""
-    loop = LoopConfig.query.get_or_404(loop_id)
+    ws_id = get_active_workspace_id()
+    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
     
     limit = request.args.get('limit', 50, type=int)
     logs = LoopExecutionLog.query.filter_by(loop_config_id=loop_id).order_by(
@@ -8412,9 +9517,11 @@ def api_get_loop_logs(loop_id):
 
 @app.route('/api/loops/<int:loop_id>/duplicates', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_loop_duplicates(loop_id):
     """Get duplicates created by a loop"""
-    loop = LoopConfig.query.get_or_404(loop_id)
+    ws_id = get_active_workspace_id()
+    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
     
     duplicates = DuplicatedListing.query.filter_by(loop_config_id=loop_id).order_by(
         DuplicatedListing.created_at.desc()
@@ -8428,15 +9535,17 @@ def api_get_loop_duplicates(loop_id):
 
 @app.route('/api/loops/<int:loop_id>/cleanup', methods=['POST'])
 @login_required
+@require_active_workspace
 def api_cleanup_loop_duplicates(loop_id):
     """Delete all duplicates created by a loop from PropertyFinder"""
-    loop = LoopConfig.query.get_or_404(loop_id)
+    ws_id = get_active_workspace_id()
+    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
     
     # Stop the loop first
     loop.is_active = False
     loop.is_paused = False
     
-    client = PropertyFinderClient()
+    client = get_client(workspace_id=ws_id)
     deleted_count = 0
     errors = []
     
@@ -8469,10 +9578,12 @@ def api_cleanup_loop_duplicates(loop_id):
 
 @app.route('/api/listings/summary', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_listings_summary():
     """Get summary of all listings for dropdown selection"""
     try:
-        listings = LocalListing.query.order_by(LocalListing.reference).all()
+        ws_id = get_active_workspace_id()
+        listings = LocalListing.query.filter_by(workspace_id=ws_id).order_by(LocalListing.reference).all()
         
         result = []
         for l in listings:
@@ -8507,9 +9618,11 @@ def api_listings_summary():
 
 @app.route('/api/listings/<int:listing_id>/images', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_get_listing_images(listing_id):
     """Get images for a listing"""
-    listing = LocalListing.query.get_or_404(listing_id)
+    ws_id = get_active_workspace_id()
+    listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first_or_404()
     
     images = []
     if listing.images:
@@ -8526,14 +9639,32 @@ def api_get_listing_images(listing_id):
     })
 
 
+@app.route('/api/listings/<int:listing_id>/original-images', methods=['GET'])
+@login_required
+@require_active_workspace
+def api_get_listing_original_images(listing_id):
+    """Get original images for a listing (for reprocessing)"""
+    ws_id = get_active_workspace_id()
+    listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first_or_404()
+    originals = listing._parse_original_images()
+    return jsonify({
+        'listing_id': listing_id,
+        'reference': listing.reference,
+        'originals': originals,
+        'count': len(originals)
+    })
+
+
 @app.route('/api/listings/<int:listing_id>/images', methods=['POST'])
 @permission_required('edit')
+@require_active_workspace
 def api_assign_images_to_listing(listing_id):
     """Assign processed images to a listing"""
     import base64
     import uuid
     
-    listing = LocalListing.query.get_or_404(listing_id)
+    ws_id = get_active_workspace_id()
+    listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first_or_404()
     data = request.json
     
     if not data or 'images' not in data:
@@ -8541,6 +9672,7 @@ def api_assign_images_to_listing(listing_id):
     
     images_data = data['images']  # List of base64 data URIs
     mode = data.get('mode', 'append')  # 'append' or 'replace'
+    originals_data = data.get('originals') or []
     
     # Get existing images
     existing_images = []
@@ -8555,6 +9687,10 @@ def api_assign_images_to_listing(listing_id):
     # Create listing images directory
     listing_dir = LISTING_IMAGES_FOLDER / str(listing_id)
     listing_dir.mkdir(parents=True, exist_ok=True)
+    originals_dir = None
+    if originals_data:
+        originals_dir = listing_dir / 'originals'
+        originals_dir.mkdir(parents=True, exist_ok=True)
     
     # Save new images
     new_image_paths = []
@@ -8595,12 +9731,47 @@ def api_assign_images_to_listing(listing_id):
         except Exception as e:
             print(f"[ListingImages] Error saving image {i}: {e}")
             continue
+
+    # Save original images (optional)
+    new_original_paths = []
+    if originals_dir:
+        for i, orig_data in enumerate(originals_data):
+            try:
+                if ',' in orig_data:
+                    header, encoded = orig_data.split(',', 1)
+                    if 'png' in header.lower():
+                        ext = 'png'
+                    elif 'webp' in header.lower():
+                        ext = 'webp'
+                    else:
+                        ext = 'jpg'
+                else:
+                    encoded = orig_data
+                    ext = 'jpg'
+
+                image_bytes = base64.b64decode(encoded)
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                unique_id = str(uuid.uuid4())[:8]
+                filename = f'orig_{timestamp}_{unique_id}.{ext}'
+                filepath = originals_dir / filename
+                with open(filepath, 'wb') as f:
+                    f.write(image_bytes)
+                relative_path = f'listings/{listing_id}/originals/{filename}'
+                new_original_paths.append(relative_path)
+                print(f"[ListingImages] Saved original: {relative_path} ({len(image_bytes)} bytes)")
+            except Exception as e:
+                print(f"[ListingImages] Error saving original {i}: {e}")
+                continue
     
     # Combine with existing images
     all_images = existing_images + new_image_paths
     
     # Update listing
     listing.images = json.dumps(all_images)
+    if new_original_paths:
+        existing_originals = _load_original_images_raw(listing)
+        merged_originals = _merge_unique_paths(existing_originals, new_original_paths)
+        listing.original_images = json.dumps(merged_originals)
     listing.updated_at = datetime.utcnow()
     db.session.commit()
     
@@ -8610,15 +9781,18 @@ def api_assign_images_to_listing(listing_id):
         'images_added': len(new_image_paths),
         'total_images': len(all_images),
         'images': all_images,
+        'originals_added': len(new_original_paths),
         'message': f'Added {len(new_image_paths)} images to listing'
     })
 
 
 @app.route('/api/listings/<int:listing_id>/images', methods=['DELETE'])
 @permission_required('edit')
+@require_active_workspace
 def api_delete_listing_images(listing_id):
     """Delete images from a listing"""
-    listing = LocalListing.query.get_or_404(listing_id)
+    ws_id = get_active_workspace_id()
+    listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first_or_404()
     data = request.json
     
     images_to_delete = data.get('images', [])  # List of image paths to delete
@@ -8664,13 +9838,15 @@ def api_delete_listing_images(listing_id):
 
 @app.route('/api/listings/search', methods=['GET'])
 @login_required
+@require_active_workspace
 def api_search_listings():
     """Search listings for assignment dropdown"""
     query = request.args.get('q', '').strip()
     limit = min(int(request.args.get('limit', 20)), 50)
     
     # Build query
-    listings_query = LocalListing.query
+    ws_id = get_active_workspace_id()
+    listings_query = LocalListing.query.filter_by(workspace_id=ws_id)
     
     if query:
         search = f'%{query}%'

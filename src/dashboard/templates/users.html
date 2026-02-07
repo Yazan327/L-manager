@@ -4,7 +4,74 @@
 {% block page_title %}User Management{% endblock %}
 
 {% block content %}
-<div x-data="usersPage()" class="max-w-6xl">
+<div x-data="usersPage()" x-init="init()" class="max-w-6xl">
+
+    {% if can_manage_members %}
+    <!-- Invite User (Link) -->
+    <div class="bg-white rounded-lg shadow mb-6">
+        <div class="p-6">
+            <h3 class="text-lg font-semibold mb-4">
+                <i class="fas fa-link text-indigo-500 mr-2"></i>Invite User (Link Only)
+            </h3>
+            <form @submit.prevent="createInvite()" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                    <input type="email" x-model="inviteEmail" required
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                           placeholder="user@example.com">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                    <select x-model="inviteRole" class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
+                        <option value="member">Member</option>
+                        <option value="admin">Admin</option>
+                        <option value="owner">Owner</option>
+                    </select>
+                </div>
+                <div class="flex items-end">
+                    <button type="submit"
+                            class="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 transition">
+                        <i class="fas fa-paper-plane mr-2"></i>Generate Link
+                    </button>
+                </div>
+            </form>
+            <div x-show="inviteLink" class="mt-4 p-3 bg-gray-50 border rounded-lg flex items-center justify-between gap-2">
+                <div class="text-sm text-gray-700 break-all" x-text="inviteLink"></div>
+                <button @click="copyInviteLink()" class="px-3 py-1.5 text-sm text-indigo-600 hover:bg-indigo-50 rounded">
+                    <i class="fas fa-copy mr-1"></i>Copy
+                </button>
+            </div>
+            <p class="text-xs text-gray-500 mt-2">Note: Links are shown once. If lost, revoke and create a new invite.</p>
+        </div>
+    </div>
+
+    <!-- Pending Invites -->
+    <div class="bg-white rounded-lg shadow mb-6">
+        <div class="p-6">
+            <h3 class="text-lg font-semibold mb-4">
+                <i class="fas fa-hourglass-half text-amber-500 mr-2"></i>Pending Invites
+            </h3>
+            <div x-show="pendingInvites.length === 0" class="text-sm text-gray-500">
+                No pending invites.
+            </div>
+            <div class="space-y-2" x-show="pendingInvites.length > 0">
+                <template x-for="invite in pendingInvites" :key="invite.id">
+                    <div class="flex items-center justify-between p-3 border rounded-lg">
+                        <div>
+                            <div class="font-medium text-gray-800" x-text="invite.email"></div>
+                            <div class="text-xs text-gray-500">
+                                Role: <span x-text="invite.role"></span> • Expires: <span x-text="formatDate(invite.expires_at)"></span>
+                            </div>
+                        </div>
+                        <button @click="revokeInvite(invite.id)" class="text-red-600 hover:text-red-800 text-sm">
+                            <i class="fas fa-ban mr-1"></i>Revoke
+                        </button>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+    {% endif %}
     
     <!-- Add User Card -->
     <div class="bg-white rounded-lg shadow mb-6">
@@ -184,6 +251,14 @@
                                         class="text-indigo-600 hover:text-indigo-900" title="Edit">
                                     <i class="fas fa-edit"></i>
                                 </button>
+
+                                {% if can_manage_members %}
+                                <!-- Reset Password Link -->
+                                <button @click="generateResetLink({{ user.id }}, '{{ user.email }}')" 
+                                        class="text-amber-600 hover:text-amber-800" title="Generate reset link">
+                                    <i class="fas fa-key"></i>
+                                </button>
+                                {% endif %}
                                 
                                 {% if user.id != current_user.id %}
                                 <!-- Delete Button -->
@@ -325,6 +400,18 @@ function usersPage() {
         editingUser: {},
         useCustomPermissions: false,
         users: {{ users|tojson|safe }},
+        workspaceId: {{ workspace.id if workspace else 'null' }},
+        canManageMembers: {{ 'true' if can_manage_members else 'false' }},
+        inviteEmail: '',
+        inviteRole: 'member',
+        inviteLink: '',
+        pendingInvites: [],
+
+        init() {
+            if (this.canManageMembers) {
+                this.loadInvites();
+            }
+        },
         
         editUser(userId) {
             const user = this.users.find(u => u.id === userId);
@@ -341,6 +428,94 @@ function usersPage() {
             const select = event.target;
             const selectedOption = select.options[select.selectedIndex];
             this.editingUser.pf_agent_name = select.value ? selectedOption.text : '';
+        },
+
+        async loadInvites() {
+            if (!this.workspaceId) return;
+            try {
+                const response = await fetch(`/api/workspaces/${this.workspaceId}/invites`, {
+                    headers: { 'Accept': 'application/json' }
+                });
+                const data = await response.json().catch(() => ({}));
+                if (response.ok && data.success) {
+                    this.pendingInvites = data.invites || [];
+                }
+            } catch (e) {
+                console.error('Failed to load invites', e);
+            }
+        },
+
+        async createInvite() {
+            if (!this.workspaceId) return;
+            try {
+                const response = await fetch(`/api/workspaces/${this.workspaceId}/invites`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: this.inviteEmail, role: this.inviteRole })
+                });
+                const data = await response.json().catch(() => ({}));
+                if (response.ok && data.success) {
+                    this.inviteLink = data.invite_link || '';
+                    this.inviteEmail = '';
+                    this.inviteRole = 'member';
+                    this.loadInvites();
+                } else {
+                    alert(data.error || 'Failed to create invite');
+                }
+            } catch (e) {
+                alert('Failed to create invite');
+            }
+        },
+
+        async revokeInvite(inviteId) {
+            if (!this.workspaceId) return;
+            if (!confirm('Revoke this invite?')) return;
+            try {
+                const response = await fetch(`/api/workspaces/${this.workspaceId}/invites/${inviteId}/revoke`, {
+                    method: 'POST',
+                    headers: { 'Accept': 'application/json' }
+                });
+                if (response.ok) {
+                    this.loadInvites();
+                } else {
+                    alert('Failed to revoke invite');
+                }
+            } catch (e) {
+                alert('Failed to revoke invite');
+            }
+        },
+
+        copyInviteLink() {
+            if (!this.inviteLink) return;
+            navigator.clipboard.writeText(this.inviteLink);
+        },
+
+        async generateResetLink(userId, email) {
+            if (!this.workspaceId) return;
+            if (!confirm(`Generate reset link for ${email}?`)) return;
+            try {
+                const response = await fetch(`/api/workspaces/${this.workspaceId}/members/${userId}/reset-password`, {
+                    method: 'POST',
+                    headers: { 'Accept': 'application/json' }
+                });
+                const data = await response.json().catch(() => ({}));
+                if (response.ok && data.success) {
+                    window.prompt('Reset link (copy):', data.reset_link);
+                } else {
+                    alert(data.error || 'Failed to generate reset link');
+                }
+            } catch (e) {
+                alert('Failed to generate reset link');
+            }
+        },
+
+        formatDate(value) {
+            if (!value) return 'n/a';
+            try {
+                return new Date(value).toLocaleString();
+            } catch {
+                return value;
+            }
         }
     };
 }

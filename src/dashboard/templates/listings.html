@@ -106,6 +106,19 @@
                 <option value="draft">Draft</option>
                 <option value="unpublished">Unpublished</option>
             </select>
+
+            <!-- Assignee Filter -->
+            <select class="border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
+                    x-model="filterAssignee" @change="applyFilters()">
+                <option value="">All Assignees</option>
+                <option value="unassigned">Unassigned</option>
+                {% if current_user_id %}
+                <option value="{{ current_user_id }}">My Listings</option>
+                {% endif %}
+                {% for member in workspace_members %}
+                <option value="{{ member.id }}">{{ member.name }}</option>
+                {% endfor %}
+            </select>
             
             <!-- Sort By -->
             <select class="border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
@@ -185,7 +198,7 @@
             <span class="font-medium" x-text="pagination.total"></span> listings found
             <span x-show="searchQuery" class="text-gray-400">for "<span x-text="searchQuery"></span>"</span>
         </p>
-        <button @click="clearFilters()" x-show="searchQuery || filterStatus" 
+        <button @click="clearFilters()" x-show="searchQuery || filterStatus || filterAssignee" 
                 class="text-sm text-indigo-600 hover:text-indigo-800">
             <i class="fas fa-times mr-1"></i>Clear filters
         </button>
@@ -216,6 +229,7 @@
                             <i class="fas fa-sort ml-1" x-show="sortBy !== 'size'"></i>
                         </th>
                         <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Location</th>
+                        <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Assignee</th>
                         <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:text-gray-700" @click="sortColumn('price')">
                             Price
                             <i class="fas fa-sort ml-1" x-show="sortBy !== 'price'"></i>
@@ -298,6 +312,13 @@
                                     <span class="text-gray-400">-</span>
                                 {% endif %}
                             </div>
+                        </td>
+                        <td class="px-3 py-3 text-sm text-gray-600">
+                            {% if listing.assigned_to_name %}
+                                <div class="truncate max-w-[140px]" title="{{ listing.assigned_to_name }}">{{ listing.assigned_to_name }}</div>
+                            {% else %}
+                                <span class="text-gray-400">-</span>
+                            {% endif %}
                         </td>
                         <td class="px-3 py-3">
                             {% if listing.price %}
@@ -566,6 +587,7 @@ function listingsPage() {
         // State from server
         searchQuery: '{{ search|default("") }}',
         filterStatus: '{{ status|default("") }}',
+        filterAssignee: '{{ assigned_to_id|default("") }}',
         sortBy: '{{ sort_by|default("updated_at") }}',
         sortOrder: '{{ sort_order|default("desc") }}',
         perPage: '{{ per_page|default(25) }}',
@@ -703,6 +725,7 @@ function listingsPage() {
             params.set('sort_by', this.sortBy);
             params.set('sort_order', this.sortOrder);
             if (this.filterStatus) params.set('status', this.filterStatus);
+            if (this.filterAssignee) params.set('assigned_to_id', this.filterAssignee);
             if (this.searchQuery) params.set('search', this.searchQuery);
             if (this.showDuplicates) params.set('show_duplicates', '1');
             // Preserve folder_id if set
@@ -714,6 +737,7 @@ function listingsPage() {
         clearFilters() {
             this.searchQuery = '';
             this.filterStatus = '';
+            this.filterAssignee = '';
             this.applyFilters();
         },
         
