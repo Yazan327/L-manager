@@ -57,7 +57,7 @@ class PermissionService:
     
     def _has_system_role(self, user, role_code: str) -> bool:
         """Check if user has a specific system role"""
-        from src.database.models import UserSystemRole, SystemRole
+        from database import UserSystemRole, SystemRole
         
         cache_key = f"sys_role:{user.id}:{role_code}"
         if cache_key in self._cache:
@@ -75,7 +75,7 @@ class PermissionService:
     
     def get_user_system_capabilities(self, user) -> Dict[str, bool]:
         """Get all system-level capabilities for a user"""
-        from src.database.models import UserSystemRole, SystemRole
+        from database import UserSystemRole, SystemRole
         
         if not user:
             return {}
@@ -105,7 +105,7 @@ class PermissionService:
     
     def get_workspace_role(self, user, workspace_id: int) -> Optional[str]:
         """Get user's role in a workspace"""
-        from src.database.models import WorkspaceMember
+        from database import WorkspaceMember
         
         if not user:
             return None
@@ -142,7 +142,7 @@ class PermissionService:
     
     def get_workspace_permission_bucket(self, user, workspace_id: int, action: str) -> str:
         """Get permission bucket level for an action in workspace"""
-        from src.database.models import WorkspaceRole, WorkspaceMember
+        from database import WorkspaceRole, WorkspaceMember
         
         if self.is_system_admin(user):
             return WorkspaceRole.BUCKET_ADMIN_ONLY  # Effectively has all access
@@ -178,7 +178,7 @@ class PermissionService:
     
     def check_workspace_action(self, user, workspace_id: int, action: str) -> bool:
         """Check if user can perform action in workspace based on permission buckets"""
-        from src.database.models import WorkspaceRole
+        from database import WorkspaceRole
         
         if self.is_system_admin(user):
             return True
@@ -205,7 +205,7 @@ class PermissionService:
     
     def get_module_capabilities(self, user, workspace_id: int, module: str) -> Dict[str, Any]:
         """Get user's capabilities for a specific module in a workspace"""
-        from src.database.models import ModulePermission, WorkspaceRole, WorkspaceMember
+        from database import ModulePermission, WorkspaceRole, WorkspaceMember
         
         if self.is_system_admin(user):
             # System admin has all capabilities
@@ -308,7 +308,7 @@ class PermissionService:
     
     def check_module_scope(self, user, workspace_id: int, module: str, object_owner_id: int) -> bool:
         """Check if user's scope allows access to object owned by object_owner_id"""
-        from src.database.models import ModulePermission
+        from database import ModulePermission
         
         if self.is_system_admin(user):
             return True
@@ -330,7 +330,7 @@ class PermissionService:
     
     def get_object_permissions(self, user, object_type: str, object_id: int) -> Dict[str, bool]:
         """Get user's permissions for a specific object"""
-        from src.database.models import ObjectACL, WorkspaceMember
+        from database import ObjectACL, WorkspaceMember
         
         if self.is_system_admin(user):
             return {p: True for p in ObjectACL.ALL_PERMISSIONS}
@@ -401,7 +401,7 @@ class PermissionService:
         Returns:
             bool: Whether access is allowed
         """
-        from src.database.models import FeatureFlag
+        from database import FeatureFlag
         
         # Check if permission enforcement is enabled
         if not self._is_enforcement_enabled(workspace_id):
@@ -487,7 +487,7 @@ class PermissionService:
     
     def _is_enforcement_enabled(self, workspace_id: int = None) -> bool:
         """Check if permission enforcement is enabled"""
-        from src.database.models import FeatureFlag
+        from database import FeatureFlag
         
         # Check workspace-specific flag first
         if workspace_id:
@@ -510,7 +510,7 @@ class PermissionService:
     
     def _is_audit_mode_enabled(self, workspace_id: int = None) -> bool:
         """Check if audit mode is enabled (log without blocking)"""
-        from src.database.models import FeatureFlag
+        from database import FeatureFlag
         
         if workspace_id:
             flag = FeatureFlag.query.filter_by(
@@ -538,7 +538,7 @@ class PermissionService:
         result: str
     ):
         """Log permission check to audit log"""
-        from src.database.models import AuditLog, db
+        from database import AuditLog, db
         
         try:
             log = AuditLog(
@@ -583,7 +583,7 @@ class PermissionService:
                 'effective': {...}  # Merged final permissions
             }
         """
-        from src.database.models import UserSystemRole, SystemRole
+        from database import UserSystemRole, SystemRole
         
         result = {
             'system_role': None,
@@ -613,7 +613,7 @@ class PermissionService:
             result['workspace_role'] = self.get_workspace_role(user, workspace_id)
             
             # Get all permission buckets
-            from src.database.models import WorkspaceRole
+            from database import WorkspaceRole
             for action in ['manage_members', 'manage_roles', 'manage_connections', 
                           'manage_settings', 'view_data', 'create_data', 'edit_data', 'delete_data']:
                 bucket = self.get_workspace_permission_bucket(user, workspace_id, action)
