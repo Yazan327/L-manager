@@ -19,7 +19,7 @@ SRC_DIR = ROOT_DIR / 'src'
 # Add src directory to path
 sys.path.insert(0, str(SRC_DIR))
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session, g
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session, g, has_request_context
 from werkzeug.utils import secure_filename
 
 from api import PropertyFinderClient, PropertyFinderAPIError, Config
@@ -53,6 +53,12 @@ APP_PUBLIC_URL = os.environ.get('APP_PUBLIC_URL') or os.environ.get('RAILWAY_PUB
 if APP_PUBLIC_URL and not APP_PUBLIC_URL.startswith('http'):
     APP_PUBLIC_URL = f'https://{APP_PUBLIC_URL}'
 print(f"[STARTUP] APP_PUBLIC_URL: {APP_PUBLIC_URL or 'NOT SET - local images will NOT work with PropertyFinder!'}")
+
+# Reserved slugs must never be used for workspace routes.
+RESERVED_WORKSPACE_SLUGS = {
+    'system-admin', 'login', 'logout', 'register', 'api',
+    'workspaces', 'workspace', 'static', 'ping', 'favicon.ico'
+}
 
 # Storage Configuration - Use Railway Volume in production
 RAILWAY_VOLUME_PATH = Path('/data')
@@ -1420,14 +1426,12 @@ def load_user():
     
     # Check for workspace context
     parts = request.path.strip('/').split('/')
-    if parts and parts[0] and not parts[0] in ['login', 'logout', 'register', 'ping', 'favicon.ico']:
+    if parts and parts[0] and parts[0] not in RESERVED_WORKSPACE_SLUGS:
         # Check if first part is a workspace slug
         workspace = Workspace.query.filter_by(slug=parts[0], is_active=True).first()
         if workspace:
             g.workspace = workspace
             g.is_workspace_context = True
-            # Store in session for API calls
-            session['current_workspace_id'] = workspace.id
 
 
 @app.context_processor
@@ -1456,19 +1460,75 @@ def is_system_admin(user):
     return service.is_system_admin(user)
 
 
+def _user_can_access_workspace(user, workspace):
+    """Return True when user is allowed to access workspace context."""
+    if not user or not workspace or not workspace.is_active:
+        return False
+    if is_system_admin(user):
+        return True
+    membership = WorkspaceMember.query.filter_by(
+        workspace_id=workspace.id,
+        user_id=user.id
+    ).first()
+    return membership is not None
+
+
+def _get_valid_workspace_from_session(user):
+    """Resolve session workspace ids and sanitize invalid ones."""
+    if not user or not has_request_context():
+        return None
+
+    sys_admin = is_system_admin(user)
+    selected = None
+    keys = ('active_workspace_id',) if sys_admin else ('active_workspace_id', 'current_workspace_id')
+    for key in keys:
+        ws_id = session.get(key)
+        if not ws_id:
+            continue
+        ws = Workspace.query.get(ws_id)
+        if ws and _user_can_access_workspace(user, ws):
+            if key == 'active_workspace_id':
+                return ws
+            if selected is None:
+                selected = ws
+            continue
+        print(f"[WORKSPACE_CTX] sanitize_session user={user.id} key={key} ws_id={ws_id} path={request.path}")
+        session.pop(key, None)
+    if sys_admin and session.get('current_workspace_id') and not session.get('active_workspace_id'):
+        # System admins must explicitly enter workspace using active_workspace_id.
+        session.pop('current_workspace_id', None)
+    return selected
+
+
+def _get_user_default_workspace(user):
+    """Fallback workspace for org users (first membership by workspace id)."""
+    if not user or is_system_admin(user):
+        return None
+    memberships = WorkspaceMember.query.filter_by(user_id=user.id).order_by(WorkspaceMember.workspace_id.asc()).all()
+    for membership in memberships:
+        ws = Workspace.query.get(membership.workspace_id)
+        if ws and ws.is_active:
+            return ws
+    return None
+
+
 def get_active_workspace():
     """Resolve active workspace for current request/session."""
     try:
+        user = getattr(g, 'user', None)
         ws = getattr(g, 'workspace', None)
-        if ws:
+        if ws and _user_can_access_workspace(user, ws):
             return ws
-        ws_id = session.get('active_workspace_id') or session.get('current_workspace_id')
-        if ws_id:
-            return Workspace.query.get(ws_id)
-        if g.user and not is_system_admin(g.user):
-            memberships = WorkspaceMember.query.filter_by(user_id=g.user.id).all()
-            if len(memberships) == 1:
-                return Workspace.query.get(memberships[0].workspace_id)
+        if ws and user and not _user_can_access_workspace(user, ws):
+            print(f"[WORKSPACE_CTX] reject_request_workspace user={user.id} ws_id={ws.id} path={request.path}")
+
+        session_ws = _get_valid_workspace_from_session(user)
+        if session_ws:
+            return session_ws
+
+        fallback_ws = _get_user_default_workspace(user)
+        if fallback_ws:
+            return fallback_ws
     except Exception:
         return None
     return None
@@ -1502,10 +1562,13 @@ def require_active_workspace(f):
         ws = get_active_workspace()
         if not ws:
             if request.path.startswith('/api/'):
+                print(f"[WORKSPACE_CTX] workspace_required_api user={getattr(g.user, 'id', None)} path={request.path}")
                 return jsonify({'success': False, 'error': 'workspace_required'}), 400
             if g.user and is_system_admin(g.user):
+                print(f"[WORKSPACE_CTX] workspace_required_system_admin user={g.user.id} redirect=system_admin")
                 flash('Select a workspace to continue.', 'warning')
                 return redirect(url_for('system_admin_page'))
+            print(f"[WORKSPACE_CTX] workspace_required_logout user={getattr(g.user, 'id', None)} redirect=logout")
             flash('You are not assigned to any workspace.', 'warning')
             return redirect(url_for('logout'))
         g.workspace = ws
@@ -3055,7 +3118,8 @@ def require_workspace_access(f):
         workspace = Workspace.query.filter_by(slug=workspace_slug, is_active=True).first()
         if not workspace:
             flash('Workspace not found.', 'error')
-            return redirect(url_for('login'))
+            print(f"[WORKSPACE_CTX] workspace_not_found user={getattr(g.user, 'id', None)} slug={workspace_slug} redirect=index")
+            return redirect(url_for('index'))
         
         if not g.user:
             return redirect(url_for('login'))
@@ -3071,12 +3135,18 @@ def require_workspace_access(f):
         if sys_admin:
             active_ws_id = session.get('active_workspace_id')
             if active_ws_id != workspace.id:
+                print(f"[WORKSPACE_CTX] sys_admin_workspace_block user={g.user.id} requested={workspace.id} active={active_ws_id} redirect=system_admin")
                 flash('Enter the workspace to access it.', 'warning')
                 return redirect(url_for('system_admin_page'))
         
         if not membership and not sys_admin:
+            if session.get('current_workspace_id') == workspace.id:
+                session.pop('current_workspace_id', None)
+            if session.get('active_workspace_id') == workspace.id:
+                session.pop('active_workspace_id', None)
+            print(f"[WORKSPACE_CTX] unauthorized_workspace user={g.user.id} ws_id={workspace.id} redirect=index")
             flash('You do not have access to this workspace.', 'error')
-            return redirect(url_for('login'))
+            return redirect(url_for('index'))
         
         g.workspace = workspace
         g.workspace_membership = membership
@@ -3293,13 +3363,20 @@ def api_create_workspace():
         return jsonify({'success': False, 'error': 'Admin only'}), 403
     
     # Models imported at top
-    data = request.get_json()
+    data = request.get_json() or {}
     
     name = data.get('name', '').strip()
     if not name:
         return jsonify({'success': False, 'error': 'Name is required'}), 400
     
-    slug = Workspace.generate_slug(name)
+    requested_slug = (data.get('slug') or '').strip()
+    slug_source = requested_slug if requested_slug else name
+    slug = Workspace.generate_slug(slug_source)
+    if not slug:
+        return jsonify({'success': False, 'error': 'Invalid workspace slug'}), 400
+    if slug in RESERVED_WORKSPACE_SLUGS:
+        return jsonify({'success': False, 'error': f'Slug "{slug}" is reserved'}), 400
+
     # Ensure unique slug
     base_slug = slug
     counter = 1
@@ -3345,10 +3422,23 @@ def api_update_workspace(workspace_id):
     if not workspace.is_admin(g.user.id) and not is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
-    data = request.get_json()
+    data = request.get_json() or {}
     
     if 'name' in data:
         workspace.name = data['name'].strip()
+    if 'slug' in data:
+        new_slug = Workspace.generate_slug((data.get('slug') or '').strip())
+        if not new_slug:
+            return jsonify({'success': False, 'error': 'Invalid workspace slug'}), 400
+        if new_slug != workspace.slug and new_slug in RESERVED_WORKSPACE_SLUGS:
+            return jsonify({'success': False, 'error': f'Slug "{new_slug}" is reserved'}), 400
+        existing = Workspace.query.filter(
+            Workspace.slug == new_slug,
+            Workspace.id != workspace.id
+        ).first()
+        if existing:
+            return jsonify({'success': False, 'error': 'Slug already in use'}), 400
+        workspace.slug = new_slug
     if 'description' in data:
         workspace.description = data['description']
     if 'color' in data:
@@ -4337,13 +4427,23 @@ def index():
     """Dashboard home page - redirects to workspace if user has one"""
     ws = get_active_workspace()
     if ws and ws.is_active:
+        session['current_workspace_id'] = ws.id
+        print(f"[WORKSPACE_CTX] index_redirect_workspace user={g.user.id} ws_id={ws.id} slug={ws.slug}")
         return redirect(url_for('workspace_dashboard', workspace_slug=ws.slug))
 
     # System admins land on system admin UI unless they explicitly enter a workspace
     if is_system_admin(g.user):
+        print(f"[WORKSPACE_CTX] index_redirect_system_admin user={g.user.id}")
         return redirect(url_for('system_admin_page'))
     
-    # No workspace found - show error or redirect to login
+    memberships_count = WorkspaceMember.query.filter_by(user_id=g.user.id).count()
+    if memberships_count > 0:
+        print(f"[WORKSPACE_CTX] index_no_active_workspace user={g.user.id} memberships={memberships_count} redirect=logout")
+        flash('No active workspace is available for your account. Please contact your administrator.', 'warning')
+        return redirect(url_for('logout'))
+
+    # No workspace memberships found
+    print(f"[WORKSPACE_CTX] index_no_membership user={g.user.id} redirect=logout")
     flash('You are not assigned to any workspace. Please contact your administrator.', 'warning')
     return redirect(url_for('logout'))
 
