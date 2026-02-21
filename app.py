@@ -766,23 +766,30 @@ with app.app_context():
                     print(f"[BACKFILL] Created feature flag: {code}")
             db.session.commit()
             
-            # Backfill: Assign SYSTEM_ADMIN role to existing admin users
+            # Bootstrap: ensure there is at least one SYSTEM_ADMIN assignment.
+            # Do not derive system access from legacy users.role.
             system_admin_role = SystemRole.query.filter_by(code='SYSTEM_ADMIN').first()
             if system_admin_role:
-                admin_users = User.query.filter_by(role='admin').all()
-                for admin in admin_users:
-                    existing = UserSystemRole.query.filter_by(
-                        user_id=admin.id,
-                        system_role_id=system_admin_role.id
-                    ).first()
-                    if not existing:
+                existing_count = UserSystemRole.query.filter_by(system_role_id=system_admin_role.id).count()
+                if existing_count == 0:
+                    bootstrap_email = (os.environ.get('DEFAULT_SYSTEM_ADMIN_EMAIL') or '').strip().lower()
+                    bootstrap_user = None
+                    if bootstrap_email:
+                        bootstrap_user = User.query.filter_by(email=bootstrap_email).first()
+                    if not bootstrap_user:
+                        bootstrap_user = User.query.filter_by(is_active=True).order_by(User.id.asc()).first()
+                    if bootstrap_user:
                         assignment = UserSystemRole(
-                            user_id=admin.id,
+                            user_id=bootstrap_user.id,
                             system_role_id=system_admin_role.id
                         )
                         db.session.add(assignment)
-                        print(f"[BACKFILL] Assigned SYSTEM_ADMIN to user: {admin.email}")
-                db.session.commit()
+                        db.session.commit()
+                        print(f"[BACKFILL] Bootstrapped SYSTEM_ADMIN to user: {bootstrap_user.email}")
+                    else:
+                        print("[BACKFILL] SYSTEM_ADMIN bootstrap skipped: no active users found")
+                else:
+                    print(f"[BACKFILL] SYSTEM_ADMIN assignments exist ({existing_count}), no bootstrap needed")
             
             print("[BACKFILL] Permission system initialization complete")
         except Exception as e:
@@ -1596,6 +1603,15 @@ def _public_base_url():
 def _is_workspace_admin(user_id, workspace_id):
     member = WorkspaceMember.query.filter_by(workspace_id=workspace_id, user_id=user_id).first()
     return member and member.role in ('owner', 'admin')
+
+
+def can_manage_workspace_members(user, workspace_id):
+    """Allow workspace owners/admins and system admins to manage workspace members."""
+    if not user:
+        return False
+    if is_system_admin(user):
+        return True
+    return bool(_is_workspace_admin(user.id, workspace_id))
 
 
 def _validate_assignee(workspace_id, assignee_id):
@@ -2745,7 +2761,7 @@ def users_page():
     users = User.query.filter(User.id.in_(user_ids)).order_by(User.created_at.desc()).all()
     pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
     workspace = Workspace.query.get(ws_id)
-    can_manage_members = _is_workspace_admin(g.user.id, ws_id)
+    can_manage_members = can_manage_workspace_members(g.user, ws_id)
     return render_template('users.html', 
                            users=[u.to_dict() for u in users],
                            roles=User.ROLES,
@@ -2874,7 +2890,7 @@ def delete_user(user_id):
 def api_create_workspace_invite(workspace_id):
     """Create an invite link for a workspace"""
     workspace = Workspace.query.get_or_404(workspace_id)
-    if not _is_workspace_admin(g.user.id, workspace_id):
+    if not can_manage_workspace_members(g.user, workspace_id):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     data = request.get_json() or {}
@@ -2917,7 +2933,7 @@ def api_create_workspace_invite(workspace_id):
 @login_required
 def api_list_workspace_invites(workspace_id):
     """List pending invites for a workspace"""
-    if not _is_workspace_admin(g.user.id, workspace_id):
+    if not can_manage_workspace_members(g.user, workspace_id):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     invites = WorkspaceInvite.query.filter_by(workspace_id=workspace_id).order_by(WorkspaceInvite.created_at.desc()).all()
@@ -2935,7 +2951,7 @@ def api_list_workspace_invites(workspace_id):
 @login_required
 def api_revoke_workspace_invite(workspace_id, invite_id):
     """Revoke a workspace invite"""
-    if not _is_workspace_admin(g.user.id, workspace_id):
+    if not can_manage_workspace_members(g.user, workspace_id):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     invite = WorkspaceInvite.query.filter_by(id=invite_id, workspace_id=workspace_id).first_or_404()
@@ -3004,7 +3020,7 @@ def accept_invite(token):
 @login_required
 def api_create_reset_link(workspace_id, member_id):
     """Create a password reset link for a workspace member"""
-    if not _is_workspace_admin(g.user.id, workspace_id):
+    if not can_manage_workspace_members(g.user, workspace_id):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     member = WorkspaceMember.query.filter_by(id=member_id, workspace_id=workspace_id).first_or_404()
@@ -3268,7 +3284,7 @@ def workspace_users(workspace_slug):
     users = User.query.filter(User.id.in_(user_ids)).order_by(User.created_at.desc()).all()
     pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
     workspace = Workspace.query.get(ws_id)
-    can_manage_members = _is_workspace_admin(g.user.id, ws_id)
+    can_manage_members = can_manage_workspace_members(g.user, ws_id)
 
     return render_template('users.html',
                            users=[u.to_dict() for u in users],
