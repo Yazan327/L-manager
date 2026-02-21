@@ -41,10 +41,7 @@ class PermissionService:
         """Check if user has SYSTEM_ADMIN role"""
         if not user:
             return False
-        # Legacy compatibility: admin role = system admin
-        if getattr(user, 'role', None) == 'admin':
-            return True
-        # Check new system roles
+        # System-level access is derived only from assigned system roles.
         return self._has_system_role(user, 'SYSTEM_ADMIN')
     
     def is_global_workspace_manager(self, user) -> bool:
@@ -79,11 +76,7 @@ class PermissionService:
         
         if not user:
             return {}
-        
-        # Legacy admin has all capabilities
-        if getattr(user, 'role', None) == 'admin':
-            return SystemRole.DEFAULT_ROLES.get('SYSTEM_ADMIN', {}).get('capabilities', {})
-        
+
         capabilities = {}
         assignments = UserSystemRole.query.filter_by(user_id=user.id).all()
         
