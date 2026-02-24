@@ -851,7 +851,12 @@ function loopsManager() {
         formatLoopDate(dateStr, tzName) {
             if (!dateStr) return '-';
             try {
-                const date = new Date(dateStr);
+                let normalized = String(dateStr);
+                // Backward compatibility: treat naive server timestamps as UTC.
+                if (!/[zZ]$/.test(normalized) && !/[+-]\\d{2}:?\\d{2}$/.test(normalized)) {
+                    normalized += 'Z';
+                }
+                const date = new Date(normalized);
                 return new Intl.DateTimeFormat('en-AE', {
                     timeZone: tzName || 'Asia/Dubai',
                     year: 'numeric',

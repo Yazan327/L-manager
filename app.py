@@ -1282,10 +1282,25 @@ def get_loop_schedule_status(loop, now_utc=None):
     return 'ready'
 
 
+def _to_utc_iso_z(dt_value):
+    """Serialize DB datetimes as explicit UTC ISO strings (Z suffix)."""
+    if not dt_value:
+        return None
+    if dt_value.tzinfo is None:
+        aware = dt_value.replace(tzinfo=timezone.utc)
+    else:
+        aware = dt_value.astimezone(timezone.utc)
+    return aware.isoformat().replace('+00:00', 'Z')
+
+
 def serialize_loop_for_api(loop):
     """Serialize loop with schedule metadata for UI/API."""
     data = loop.to_dict()
     ws_id = getattr(loop, 'workspace_id', None)
+    # LoopConfig.to_dict() returns naive ISO strings; override with explicit UTC for browser-safe parsing.
+    data['created_at'] = _to_utc_iso_z(getattr(loop, 'created_at', None))
+    data['last_run_at'] = _to_utc_iso_z(getattr(loop, 'last_run_at', None))
+    data['next_run_at'] = _to_utc_iso_z(getattr(loop, 'next_run_at', None))
     data['schedule_timezone'] = get_workspace_timezone_name(ws_id)
     data['schedule_summary'] = get_loop_schedule_summary(loop, workspace_id=ws_id)
     data['schedule_status'] = get_loop_schedule_status(loop)
@@ -10701,9 +10716,15 @@ def api_get_loop_logs(loop_id):
         LoopExecutionLog.executed_at.desc()
     ).limit(limit).all()
     
+    log_rows = []
+    for log in logs:
+        row = log.to_dict()
+        row['executed_at'] = _to_utc_iso_z(getattr(log, 'executed_at', None))
+        log_rows.append(row)
+
     return jsonify({
         'success': True,
-        'logs': [log.to_dict() for log in logs]
+        'logs': log_rows
     })
 
 
@@ -10720,9 +10741,17 @@ def api_get_loop_duplicates(loop_id):
         DuplicatedListing.created_at.desc()
     ).all()
     
+    duplicate_rows = []
+    for dup in duplicates:
+        row = dup.to_dict()
+        row['created_at'] = _to_utc_iso_z(getattr(dup, 'created_at', None))
+        row['published_at'] = _to_utc_iso_z(getattr(dup, 'published_at', None))
+        row['deleted_at'] = _to_utc_iso_z(getattr(dup, 'deleted_at', None))
+        duplicate_rows.append(row)
+
     return jsonify({
         'success': True,
-        'duplicates': [dup.to_dict() for dup in duplicates]
+        'duplicates': duplicate_rows
     })
 
 
