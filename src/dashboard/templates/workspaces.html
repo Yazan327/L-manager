@@ -169,6 +169,7 @@
                 <!-- Add Member -->
                 <div class="mb-6 p-4 bg-gray-50 rounded-lg">
                     <h4 class="font-medium mb-3">Add Member</h4>
+                    <p class="text-xs text-gray-500 mb-3">Platform/system admins are not listed here and cannot be added to workspace memberships.</p>
                     <div class="flex gap-2">
                         <select x-model="newMember.user_id" class="flex-1 border rounded-lg px-3 py-2">
                             <option value="">Select user...</option>
@@ -334,6 +335,9 @@ function workspacesManager() {
                         if (idx >= 0) this.workspaces[idx] = { ...this.workspaces[idx], ...data.workspace };
                     } else {
                         this.workspaces.push(data.workspace);
+                        if (data.message) {
+                            alert(data.message);
+                        }
                     }
                     this.closeModals();
                 } else {

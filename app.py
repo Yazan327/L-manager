@@ -814,6 +814,9 @@ with app.app_context():
                 # Add all existing users to this workspace
                 all_users = User.query.all()
                 for user in all_users:
+                    if UserSystemRole.query.filter_by(user_id=user.id).first():
+                        print(f"[BACKFILL] Skipping system user {user.email} for default workspace membership")
+                        continue
                     existing = WorkspaceMember.query.filter_by(
                         workspace_id=default_workspace.id,
                         user_id=user.id
@@ -1467,6 +1470,54 @@ def is_system_admin(user):
     return service.is_system_admin(user)
 
 
+def has_any_system_role(user):
+    """Return True if the user has any platform/system role assignment."""
+    if not user:
+        return False
+    try:
+        user_id = user.id if hasattr(user, 'id') else int(user)
+    except (TypeError, ValueError):
+        return False
+    return UserSystemRole.query.filter_by(user_id=user_id).first() is not None
+
+
+def is_workspace_eligible_user(user):
+    """Workspace org users must not also be platform/system users."""
+    return bool(user) and not has_any_system_role(user)
+
+
+def _get_system_user_ids(user_ids):
+    """Return a set of user IDs that have at least one system role assignment."""
+    ids = []
+    for value in (user_ids or []):
+        try:
+            ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return set()
+    rows = db.session.query(UserSystemRole.user_id).filter(UserSystemRole.user_id.in_(ids)).distinct().all()
+    return {row[0] for row in rows}
+
+
+def _filter_workspace_memberships_for_org(memberships):
+    """Hide platform users from workspace member lists and counts."""
+    memberships = list(memberships or [])
+    system_user_ids = _get_system_user_ids([m.user_id for m in memberships])
+    visible = [m for m in memberships if m.user_id not in system_user_ids]
+    return visible, system_user_ids
+
+
+def workspace_to_org_dict(workspace, include_members=False, include_connections=False):
+    """Workspace dict with system-user memberships excluded from org-facing counts/lists."""
+    data = workspace.to_dict(include_members=include_members, include_connections=include_connections)
+    visible_members, _ = _filter_workspace_memberships_for_org(workspace.members)
+    data['member_count'] = len(visible_members)
+    if include_members:
+        data['members'] = [m.to_dict() for m in visible_members]
+    return data
+
+
 def _user_can_access_workspace(user, workspace):
     """Return True when user is allowed to access workspace context."""
     if not user or not workspace or not workspace.is_active:
@@ -1691,6 +1742,8 @@ def _invite_is_valid(invite):
 def _accept_invite(invite, user):
     if user.email.lower() != invite.email.lower():
         return False, 'This invite was sent to a different email.'
+    if has_any_system_role(user):
+        return False, 'Platform/system users cannot join workspaces through invite links.'
     membership = WorkspaceMember.query.filter_by(
         workspace_id=invite.workspace_id,
         user_id=user.id
@@ -2905,6 +2958,8 @@ def api_create_workspace_invite(workspace_id):
     
     existing_user = User.query.filter_by(email=email).first()
     if existing_user:
+        if has_any_system_role(existing_user):
+            return jsonify({'success': False, 'error': 'System users cannot be invited to workspaces.'}), 400
         existing_member = WorkspaceMember.query.filter_by(workspace_id=workspace_id, user_id=existing_user.id).first()
         if existing_member:
             return jsonify({'success': False, 'error': 'User is already a member of this workspace'}), 400
@@ -2972,11 +3027,18 @@ def accept_invite(token):
         if g.user:
             ok, err = _accept_invite(invite, g.user)
             if not ok:
-                return render_template('invite_accept.html', error=err)
+                return render_template('invite_accept.html', invite=invite, workspace=workspace, error=err)
             flash('You have joined the workspace.', 'success')
             return redirect(url_for('workspace_dashboard', workspace_slug=workspace.slug))
         
         existing_user = User.query.filter_by(email=invite.email).first()
+        if existing_user and has_any_system_role(existing_user):
+            return render_template(
+                'invite_accept.html',
+                invite=invite,
+                workspace=workspace,
+                error='This email belongs to a platform/system user and cannot join a workspace by invite.'
+            )
         return render_template(
             'invite_accept.html',
             invite=invite,
@@ -2994,6 +3056,13 @@ def accept_invite(token):
     
     existing_user = User.query.filter_by(email=invite.email).first()
     if existing_user:
+        if has_any_system_role(existing_user):
+            return render_template(
+                'invite_accept.html',
+                invite=invite,
+                workspace=workspace,
+                error='This email belongs to a platform/system user and cannot join a workspace by invite.'
+            )
         return render_template('invite_accept.html', invite=invite, workspace=workspace, error='This email already exists. Please log in to accept the invite.')
     
     user = User(email=invite.email, name=name, role='user')
@@ -3024,6 +3093,8 @@ def api_create_reset_link(workspace_id, member_id):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     member = WorkspaceMember.query.filter_by(id=member_id, workspace_id=workspace_id).first_or_404()
+    if member.user and has_any_system_role(member.user):
+        return jsonify({'success': False, 'error': 'System users are managed from System Admin only.'}), 400
     token = _generate_token()
     reset = PasswordResetToken(
         user_id=member.user_id,
@@ -3279,9 +3350,10 @@ def workspace_users(workspace_slug):
         return redirect(url_for('workspace_dashboard', workspace_slug=workspace_slug))
 
     ws_id = g.workspace.id
-    memberships = WorkspaceMember.query.filter_by(workspace_id=ws_id).all()
+    memberships_all = WorkspaceMember.query.filter_by(workspace_id=ws_id).all()
+    memberships, _ = _filter_workspace_memberships_for_org(memberships_all)
     user_ids = [m.user_id for m in memberships]
-    users = User.query.filter(User.id.in_(user_ids)).order_by(User.created_at.desc()).all()
+    users = User.query.filter(User.id.in_(user_ids)).order_by(User.created_at.desc()).all() if user_ids else []
     pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
     workspace = Workspace.query.get(ws_id)
     can_manage_members = can_manage_workspace_members(g.user, ws_id)
@@ -3340,8 +3412,10 @@ def workspaces_page():
     # Models imported at top
     workspaces = Workspace.query.order_by(Workspace.name).all()
     users = User.query.filter_by(is_active=True).order_by(User.name).all()
+    system_user_ids = _get_system_user_ids([u.id for u in users])
+    users = [u for u in users if u.id not in system_user_ids]
     return render_template('workspaces.html', 
-                           workspaces=[w.to_dict(include_members=True, include_connections=True) for w in workspaces],
+                           workspaces=[workspace_to_org_dict(w, include_members=True, include_connections=True) for w in workspaces],
                            users=[u.to_dict() for u in users],
                            providers=WorkspaceConnection.PROVIDERS,
                            colors=Workspace.COLORS)
@@ -3367,7 +3441,7 @@ def api_list_workspaces():
     
     return jsonify({
         'success': True,
-        'workspaces': [w.to_dict() for w in workspaces]
+        'workspaces': [workspace_to_org_dict(w) for w in workspaces]
     })
 
 
@@ -3409,23 +3483,30 @@ def api_create_workspace():
     )
     db.session.add(workspace)
     db.session.flush()  # Get the ID
-    
-    # Add creator as owner
-    member = WorkspaceMember(
-        workspace_id=workspace.id,
-        user_id=g.user.id,
-        role='owner'
-    )
-    db.session.add(member)
+
+    creator_added_as_owner = False
+    if is_workspace_eligible_user(g.user):
+        member = WorkspaceMember(
+            workspace_id=workspace.id,
+            user_id=g.user.id,
+            role='owner'
+        )
+        db.session.add(member)
+        creator_added_as_owner = True
+
     db.session.commit()
 
     # Initialize default settings for this workspace
     AppSettings.init_defaults(workspace_id=workspace.id)
-    
-    return jsonify({
+
+    response = {
         'success': True,
-        'workspace': workspace.to_dict(include_members=True)
-    })
+        'workspace': workspace_to_org_dict(workspace, include_members=True)
+    }
+    if not creator_added_as_owner:
+        response['message'] = 'Workspace created. Add or invite an org owner to manage it.'
+        response['owner_required'] = True
+    return jsonify(response)
 
 
 @app.route('/api/workspaces/<int:workspace_id>', methods=['PUT'])
@@ -3468,7 +3549,7 @@ def api_update_workspace(workspace_id):
     
     return jsonify({
         'success': True,
-        'workspace': workspace.to_dict()
+        'workspace': workspace_to_org_dict(workspace)
     })
 
 
@@ -3497,9 +3578,10 @@ def api_get_workspace_members(workspace_id):
     if not workspace.get_member(g.user.id) and not is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Access denied'}), 403
     
+    members, _ = _filter_workspace_memberships_for_org(workspace.members)
     return jsonify({
         'success': True,
-        'members': [m.to_dict() for m in workspace.members]
+        'members': [m.to_dict() for m in members]
     })
 
 
@@ -3519,6 +3601,17 @@ def api_add_workspace_member(workspace_id):
     
     if not user_id:
         return jsonify({'success': False, 'error': 'User ID required'}), 400
+
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Invalid user ID'}), 400
+
+    target_user = User.query.get(user_id)
+    if not target_user:
+        return jsonify({'success': False, 'error': 'User not found'}), 404
+    if has_any_system_role(target_user):
+        return jsonify({'success': False, 'error': 'System users cannot be added as workspace members.'}), 400
     
     # Check if already a member
     existing = WorkspaceMember.query.filter_by(
@@ -3554,9 +3647,12 @@ def api_update_workspace_member(workspace_id, member_id):
     
     if member.workspace_id != workspace_id:
         return jsonify({'success': False, 'error': 'Member not in this workspace'}), 400
-    
+
     if not workspace.is_admin(g.user.id) and not is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
+
+    if member.user and has_any_system_role(member.user):
+        return jsonify({'success': False, 'error': 'System users cannot be managed as workspace members.'}), 400
     
     data = request.get_json()
     if 'role' in data:
@@ -3885,7 +3981,7 @@ def workspace_admin_page(workspace_id):
         flash('Access denied. Workspace administrators only.', 'error')
         return redirect(url_for('index'))
     
-    return render_template('workspace_admin.html', workspace=workspace.to_dict(include_members=True))
+    return render_template('workspace_admin.html', workspace=workspace_to_org_dict(workspace, include_members=True))
 
 
 # --- System Roles API ---

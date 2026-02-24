@@ -24,6 +24,24 @@ python app.py
 # Login with credentials from .env
 ```
 
+### Dashboard CSS (Tailwind)
+
+The dashboard now uses a compiled CSS file (`src/dashboard/static/css/app.css`) instead of the Tailwind CDN script in production.
+
+```bash
+# Install frontend build tools (one-time)
+npm install
+
+# Build CSS for commit/deploy
+npm run build:css
+
+# Optional while editing UI
+npm run watch:css
+```
+
+Production note:
+- Commit `src/dashboard/static/css/app.css` so Railway can serve it without Node.
+
 ### Production (Railway)
 
 ```bash
