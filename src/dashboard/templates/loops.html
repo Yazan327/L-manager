@@ -72,7 +72,7 @@
                 <tr>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Loop Name</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Interval</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Schedule</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Listings</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Next Run</th>
@@ -106,7 +106,8 @@
                             </span>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            Every <span x-text="loop.interval_hours"></span> hour(s)
+                            <div class="font-medium text-gray-700" x-text="loop.schedule_summary || ('Every ' + loop.interval_hours + ' hour(s)')"></div>
+                            <div class="text-xs text-gray-400" x-text="loop.schedule_timezone || 'Asia/Dubai'"></div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                             <span x-text="loop.listing_count"></span> listings
@@ -116,9 +117,17 @@
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             <template x-if="loop.is_active && !loop.is_paused">
-                                <span class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">
-                                    <i class="fas fa-circle text-xs mr-1"></i> Running
-                                </span>
+                                <div>
+                                    <span class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">
+                                        <i class="fas fa-circle text-xs mr-1"></i> Running
+                                    </span>
+                                    <template x-if="loop.schedule_status === 'waiting_window'">
+                                        <div class="text-xs text-amber-600 mt-1">Waiting window</div>
+                                    </template>
+                                    <template x-if="loop.schedule_status === 'waiting_time'">
+                                        <div class="text-xs text-gray-500 mt-1">Waiting next time</div>
+                                    </template>
+                                </div>
                             </template>
                             <template x-if="loop.is_paused">
                                 <span class="px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-800">
@@ -132,7 +141,7 @@
                             </template>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            <span x-text="loop.next_run_at ? new Date(loop.next_run_at).toLocaleString() : '-'"></span>
+                            <span x-text="formatLoopDate(loop.next_run_at, loop.schedule_timezone)"></span>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm">
                             <div class="flex items-center space-x-2">
@@ -235,16 +244,72 @@
                         </div>
                     </div>
                     
-                    <!-- Interval -->
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Run Interval</label>
-                        <div class="flex items-center space-x-2">
-                            <span class="text-gray-500">Every</span>
-                            <input type="number" x-model="formData.interval_hours" min="0.5" step="0.5" required
-                                   class="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
-                            <span class="text-gray-500">hour(s)</span>
+                    <!-- Schedule -->
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Schedule Mode</label>
+                            <select x-model="formData.schedule_mode"
+                                    class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                                <option value="interval">Interval</option>
+                                <option value="windowed_interval">Time Window + Interval</option>
+                                <option value="daily_times">Exact Times (Daily)</option>
+                            </select>
                         </div>
-                        <p class="text-xs text-gray-500 mt-1">For multi-listing loops, this is the interval between each listing</p>
+
+                        <template x-if="formData.schedule_mode !== 'daily_times'">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Run Interval</label>
+                                <div class="flex items-center space-x-2">
+                                    <span class="text-gray-500">Every</span>
+                                    <input type="number" x-model="formData.interval_hours" min="0.5" step="0.5" required
+                                           class="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                                    <span class="text-gray-500">hour(s)</span>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-1">For multi-listing loops, this is the interval between each listing.</p>
+                            </div>
+                        </template>
+
+                        <template x-if="formData.schedule_mode === 'windowed_interval'">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Window Start</label>
+                                    <input type="time" x-model="formData.schedule_window_start"
+                                           class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Window End</label>
+                                    <input type="time" x-model="formData.schedule_window_end"
+                                           class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                                </div>
+                                <div class="md:col-span-2 text-xs text-gray-500">
+                                    Runs only inside this daily time range (supports overnight windows like 22:00-02:00).
+                                </div>
+                            </div>
+                        </template>
+
+                        <template x-if="formData.schedule_mode === 'daily_times'">
+                            <div class="p-4 bg-gray-50 rounded-lg border border-gray-200 space-y-3">
+                                <div class="flex items-center justify-between">
+                                    <label class="block text-sm font-medium text-gray-700">Exact Daily Times</label>
+                                    <button type="button" @click="addExactTime()"
+                                            class="text-sm text-indigo-600 hover:text-indigo-800">
+                                        <i class="fas fa-plus mr-1"></i>Add time
+                                    </button>
+                                </div>
+                                <template x-for="(t, idx) in formData.schedule_exact_times" :key="`t-${idx}`">
+                                    <div class="flex items-center gap-2">
+                                        <input type="time" x-model="formData.schedule_exact_times[idx]"
+                                               class="w-40 px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                                        <button type="button" @click="removeExactTime(idx)"
+                                                class="px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg"
+                                                title="Remove time">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </div>
+                                </template>
+                                <p class="text-xs text-gray-500">Runs at these exact times every day (workspace timezone).</p>
+                            </div>
+                        </template>
                     </div>
                     
                     <!-- Duplicate Options (only for duplicate type) -->
@@ -330,7 +395,7 @@
                     <div class="flex items-center">
                         <input type="checkbox" x-model="formData.is_active" id="start_immediately"
                                class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
-                        <label for="start_immediately" class="ml-2 text-sm text-gray-700">Start loop immediately after creation</label>
+                        <label for="start_immediately" class="ml-2 text-sm text-gray-700">Start loop after creation (wait for next scheduled time)</label>
                     </div>
                     
                     <!-- Actions -->
@@ -512,6 +577,10 @@ function loopsManager() {
             name: '',
             loop_type: 'duplicate',
             interval_hours: 1,
+            schedule_mode: 'interval',
+            schedule_window_start: '09:00',
+            schedule_window_end: '18:00',
+            schedule_exact_times: ['09:00'],
             keep_duplicates: true,
             max_duplicates: 0,
             listing_ids: [],
@@ -566,6 +635,10 @@ function loopsManager() {
                 name: '',
                 loop_type: 'duplicate',
                 interval_hours: 1,
+                schedule_mode: 'interval',
+                schedule_window_start: '09:00',
+                schedule_window_end: '18:00',
+                schedule_exact_times: ['09:00'],
                 keep_duplicates: true,
                 max_duplicates: 0,
                 listing_ids: [],
@@ -582,16 +655,41 @@ function loopsManager() {
                 this.formData.listing_ids.splice(idx, 1);
             }
         },
+
+        addExactTime() {
+            if (!Array.isArray(this.formData.schedule_exact_times)) {
+                this.formData.schedule_exact_times = [];
+            }
+            this.formData.schedule_exact_times.push('09:00');
+        },
+
+        removeExactTime(idx) {
+            if (!Array.isArray(this.formData.schedule_exact_times)) return;
+            this.formData.schedule_exact_times.splice(idx, 1);
+            if (this.formData.schedule_exact_times.length === 0) {
+                this.formData.schedule_exact_times.push('09:00');
+            }
+        },
         
         async saveLoop() {
             try {
                 const url = this.showEditModal ? `/api/loops/${this.formData.id}` : '/api/loops';
                 const method = this.showEditModal ? 'PUT' : 'POST';
+                const payload = {
+                    ...this.formData,
+                    schedule_exact_times: Array.isArray(this.formData.schedule_exact_times)
+                        ? this.formData.schedule_exact_times.map(t => String(t || '').trim()).filter(Boolean)
+                        : []
+                };
+                if (payload.schedule_mode === 'daily_times' && payload.schedule_exact_times.length === 0) {
+                    this.showToast('Add at least one exact time', 'error');
+                    return;
+                }
                 
                 const resp = await fetch(url, {
                     method: method,
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(this.formData)
+                    body: JSON.stringify(payload)
                 });
                 
                 const data = await resp.json();
@@ -616,6 +714,12 @@ function loopsManager() {
                 name: loop.name,
                 loop_type: loop.loop_type,
                 interval_hours: loop.interval_hours,
+                schedule_mode: loop.schedule_mode || 'interval',
+                schedule_window_start: loop.schedule_window_start || '09:00',
+                schedule_window_end: loop.schedule_window_end || '18:00',
+                schedule_exact_times: Array.isArray(loop.schedule_exact_times) && loop.schedule_exact_times.length
+                    ? [...loop.schedule_exact_times]
+                    : ['09:00'],
                 keep_duplicates: loop.keep_duplicates,
                 max_duplicates: loop.max_duplicates,
                 listing_ids: [], // Will be populated when we load full details
@@ -628,6 +732,12 @@ function loopsManager() {
                 .then(data => {
                     if (data.success && data.loop.listings) {
                         this.formData.listing_ids = data.loop.listings.map(l => l.listing_id);
+                        this.formData.schedule_mode = data.loop.schedule_mode || this.formData.schedule_mode;
+                        this.formData.schedule_window_start = data.loop.schedule_window_start || this.formData.schedule_window_start;
+                        this.formData.schedule_window_end = data.loop.schedule_window_end || this.formData.schedule_window_end;
+                        this.formData.schedule_exact_times = (Array.isArray(data.loop.schedule_exact_times) && data.loop.schedule_exact_times.length)
+                            ? [...data.loop.schedule_exact_times]
+                            : ['09:00'];
                     }
                 });
             
@@ -736,6 +846,27 @@ function loopsManager() {
         showToast(message, type = 'success') {
             this.toast = { show: true, message, type };
             setTimeout(() => { this.toast.show = false; }, 3000);
+        },
+
+        formatLoopDate(dateStr, tzName) {
+            if (!dateStr) return '-';
+            try {
+                const date = new Date(dateStr);
+                return new Intl.DateTimeFormat('en-AE', {
+                    timeZone: tzName || 'Asia/Dubai',
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                }).format(date);
+            } catch (e) {
+                try {
+                    return new Date(dateStr).toLocaleString();
+                } catch {
+                    return dateStr;
+                }
+            }
         }
     };
 }

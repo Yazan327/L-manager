@@ -52,6 +52,14 @@
                         </select>
                     </dd>
                 </div>
+
+                <div class="py-3 border-b border-gray-100">
+                    <label class="block text-gray-600 mb-1">Workspace Timezone</label>
+                    <div class="text-xs text-gray-400 mb-2">Used for loop schedules (daily windows and exact run times)</div>
+                    <input type="text" x-model="settings.workspace_timezone" @change="saveSettings()"
+                           class="w-full border rounded-lg px-3 py-2"
+                           placeholder="Asia/Dubai">
+                </div>
                 
                 <div class="flex items-center justify-between py-3 border-b border-gray-100">
                     <dt class="text-gray-600">Last Sync</dt>
@@ -361,10 +369,13 @@ function settingsManager() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
-                
-                if (resp.ok) {
+
+                const data = await resp.json().catch(() => ({}));
+                if (resp.ok && data.success !== false) {
                     this.saveSuccess = true;
                     setTimeout(() => this.saveSuccess = false, 3000);
+                } else {
+                    alert(data.error || 'Failed to save settings');
                 }
             } catch (e) {
                 console.error('Failed to save settings:', e);

@@ -10,7 +10,8 @@ import secrets
 import shutil
 from pathlib import Path
 from functools import wraps
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time, timezone
+from zoneinfo import ZoneInfo
 
 # Get the src directory
 ROOT_DIR = Path(__file__).parent
@@ -444,6 +445,40 @@ with app.app_context():
                     print("[MIGRATION] original_images column added to listings")
         except Exception as e:
             print(f"[MIGRATION] original_images column migration skipped or failed: {e}")
+
+        # Migration: Add advanced scheduling columns to loop_configs
+        loop_schedule_columns = [
+            ('schedule_mode', "ALTER TABLE loop_configs ADD COLUMN schedule_mode VARCHAR(32) DEFAULT 'interval'"),
+            ('schedule_window_start', "ALTER TABLE loop_configs ADD COLUMN schedule_window_start VARCHAR(5)"),
+            ('schedule_window_end', "ALTER TABLE loop_configs ADD COLUMN schedule_window_end VARCHAR(5)"),
+            ('schedule_exact_times', "ALTER TABLE loop_configs ADD COLUMN schedule_exact_times TEXT"),
+        ]
+        for column_name, ddl in loop_schedule_columns:
+            try:
+                with db.engine.connect() as conn:
+                    result = conn.execute(text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name='loop_configs' AND column_name=:column_name"
+                    ), {'column_name': column_name})
+                    if not result.fetchone():
+                        print(f"[MIGRATION] Adding {column_name} column to loop_configs...")
+                        conn.execute(text(ddl))
+                        conn.commit()
+                        print(f"[MIGRATION] {column_name} column added to loop_configs")
+            except Exception as e:
+                print(f"[MIGRATION] {column_name} column migration skipped or failed: {e}")
+
+        # Backfill: default schedule_mode for existing loops
+        try:
+            with db.engine.connect() as conn:
+                conn.execute(text(
+                    "UPDATE loop_configs SET schedule_mode = 'interval' "
+                    "WHERE schedule_mode IS NULL OR schedule_mode = ''"
+                ))
+                conn.commit()
+                print("[BACKFILL] loop_configs.schedule_mode normalized to interval")
+        except Exception as e:
+            print(f"[BACKFILL] loop schedule mode normalization skipped or failed: {e}")
         
         # Migration: Update app_settings constraints for workspace scoping
         try:
@@ -975,6 +1010,287 @@ with app.app_context():
 # Global scheduler instance
 loop_scheduler = BackgroundScheduler()
 
+
+def parse_hhmm(value):
+    """Parse HH:MM (24-hour) into datetime.time."""
+    if value is None:
+        raise ValueError('Invalid time format. Use HH:MM (24-hour)')
+    text_value = str(value).strip()
+    try:
+        parsed = datetime.strptime(text_value, '%H:%M')
+    except ValueError:
+        raise ValueError('Invalid time format. Use HH:MM (24-hour)') from None
+    return parsed.time().replace(second=0, microsecond=0)
+
+
+def normalize_exact_times(values):
+    """Normalize list of exact execution times (HH:MM) sorted and deduplicated."""
+    if values is None:
+        return []
+    if not isinstance(values, list):
+        raise ValueError('schedule_exact_times must be an array of HH:MM strings')
+    normalized = []
+    seen = set()
+    for raw in values:
+        hhmm = parse_hhmm(raw).strftime('%H:%M')
+        if hhmm not in seen:
+            seen.add(hhmm)
+            normalized.append(hhmm)
+    normalized.sort()
+    return normalized
+
+
+def get_workspace_timezone_name(workspace_id):
+    """Return workspace timezone (IANA) with safe fallback."""
+    tz_name = (AppSettings.get('workspace_timezone', 'Asia/Dubai', workspace_id=workspace_id) or '').strip()
+    if not tz_name:
+        tz_name = 'Asia/Dubai'
+    try:
+        ZoneInfo(tz_name)
+        return tz_name
+    except Exception:
+        return 'Asia/Dubai'
+
+
+def get_workspace_zoneinfo(workspace_id):
+    """Return ZoneInfo for workspace timezone."""
+    return ZoneInfo(get_workspace_timezone_name(workspace_id))
+
+
+def _loop_schedule_mode(loop):
+    mode = (getattr(loop, 'schedule_mode', None) or 'interval').strip()
+    return mode if mode in LoopConfig.SCHEDULE_MODES else LoopConfig.SCHEDULE_INTERVAL
+
+
+def _loop_interval_delta(loop):
+    hours = float(getattr(loop, 'interval_hours', 0) or 0)
+    if hours <= 0:
+        hours = 1.0
+    return timedelta(hours=hours)
+
+
+def _format_interval_hours(hours_value):
+    try:
+        hours = float(hours_value or 0)
+    except (TypeError, ValueError):
+        hours = 0
+    if hours.is_integer():
+        return f'{int(hours)}h'
+    return f'{hours:g}h'
+
+
+def _is_local_time_in_window(local_dt, start_time, end_time):
+    """Check if local datetime is inside a daily window (supports overnight windows)."""
+    current_time = local_dt.timetz().replace(tzinfo=None)
+    if start_time == end_time:
+        return False
+    if start_time < end_time:
+        return start_time <= current_time < end_time
+    return current_time >= start_time or current_time < end_time
+
+
+def _next_window_start_local(after_local_dt, start_time):
+    """Return next local datetime when the daily window starts after the given moment."""
+    candidate = datetime.combine(after_local_dt.date(), start_time, tzinfo=after_local_dt.tzinfo)
+    if candidate <= after_local_dt:
+        candidate = candidate + timedelta(days=1)
+    return candidate
+
+
+def _next_daily_exact_time_local(after_local_dt, exact_times):
+    """Return next local datetime for exact daily times after the given moment."""
+    for hhmm in exact_times:
+        t = parse_hhmm(hhmm)
+        candidate = datetime.combine(after_local_dt.date(), t, tzinfo=after_local_dt.tzinfo)
+        if candidate > after_local_dt:
+            return candidate
+    if not exact_times:
+        return None
+    first_time = parse_hhmm(exact_times[0])
+    return datetime.combine(after_local_dt.date() + timedelta(days=1), first_time, tzinfo=after_local_dt.tzinfo)
+
+
+def validate_loop_schedule_payload(data):
+    """Validate and normalize loop scheduling payload fields."""
+    data = data or {}
+    normalized = {}
+
+    # interval_hours remains required for interval and windowed mode
+    interval_hours_raw = data.get('interval_hours', None)
+    if interval_hours_raw is not None:
+        try:
+            interval_hours = float(interval_hours_raw)
+        except (TypeError, ValueError):
+            raise ValueError('interval_hours must be greater than 0')
+        if interval_hours <= 0:
+            raise ValueError('interval_hours must be greater than 0')
+        normalized['interval_hours'] = interval_hours
+
+    schedule_mode = data.get('schedule_mode', LoopConfig.SCHEDULE_INTERVAL) or LoopConfig.SCHEDULE_INTERVAL
+    schedule_mode = str(schedule_mode).strip()
+    if schedule_mode not in LoopConfig.SCHEDULE_MODES:
+        raise ValueError('Invalid schedule_mode')
+    normalized['schedule_mode'] = schedule_mode
+
+    if schedule_mode == LoopConfig.SCHEDULE_INTERVAL:
+        if ('interval_hours' not in normalized) and ('interval_hours' in data):
+            raise ValueError('interval_hours must be greater than 0')
+        normalized['schedule_window_start'] = None
+        normalized['schedule_window_end'] = None
+        normalized['schedule_exact_times'] = []
+        return normalized
+
+    if schedule_mode == LoopConfig.SCHEDULE_WINDOWED_INTERVAL:
+        interval_value = normalized.get('interval_hours')
+        if interval_value is None:
+            try:
+                interval_value = float(data.get('interval_hours', 0))
+            except (TypeError, ValueError):
+                interval_value = 0
+            if interval_value <= 0:
+                raise ValueError('interval_hours must be greater than 0')
+            normalized['interval_hours'] = interval_value
+
+        start_raw = data.get('schedule_window_start')
+        end_raw = data.get('schedule_window_end')
+        if not start_raw or not end_raw:
+            raise ValueError('schedule_window_start and schedule_window_end are required for windowed_interval')
+        start_time = parse_hhmm(start_raw)
+        end_time = parse_hhmm(end_raw)
+        if start_time == end_time:
+            raise ValueError('schedule_window_start and schedule_window_end cannot be the same')
+        normalized['schedule_window_start'] = start_time.strftime('%H:%M')
+        normalized['schedule_window_end'] = end_time.strftime('%H:%M')
+        normalized['schedule_exact_times'] = []
+        return normalized
+
+    # daily_times
+    exact_times = normalize_exact_times(data.get('schedule_exact_times', []))
+    if not exact_times:
+        raise ValueError('At least one exact time is required for daily_times')
+    normalized['schedule_window_start'] = None
+    normalized['schedule_window_end'] = None
+    normalized['schedule_exact_times'] = exact_times
+    return normalized
+
+
+def is_loop_schedule_allowed_now(loop, now_utc=None):
+    """Return (is_allowed, reason) for current time under loop schedule."""
+    if now_utc is None:
+        now_utc = datetime.utcnow()
+    mode = _loop_schedule_mode(loop)
+    if mode == LoopConfig.SCHEDULE_INTERVAL:
+        return True, 'ready'
+
+    tz = get_workspace_zoneinfo(loop.workspace_id)
+    now_local = now_utc.replace(tzinfo=timezone.utc).astimezone(tz)
+
+    if mode == LoopConfig.SCHEDULE_WINDOWED_INTERVAL:
+        try:
+            start_time = parse_hhmm(loop.schedule_window_start)
+            end_time = parse_hhmm(loop.schedule_window_end)
+        except ValueError:
+            return False, 'waiting_window'
+        in_window = _is_local_time_in_window(now_local, start_time, end_time)
+        return (in_window, 'ready' if in_window else 'waiting_window')
+
+    # daily_times
+    exact_times = loop.get_schedule_exact_times() if hasattr(loop, 'get_schedule_exact_times') else []
+    if not exact_times:
+        return False, 'waiting_time'
+    exact_times_set = set(exact_times)
+    current_hhmm = now_local.strftime('%H:%M')
+    in_exact_time = current_hhmm in exact_times_set
+    return (in_exact_time, 'ready' if in_exact_time else 'waiting_time')
+
+
+def compute_next_loop_run_at(loop, now_utc=None):
+    """Compute next UTC execution time for a loop based on its schedule mode."""
+    if now_utc is None:
+        now_utc = datetime.utcnow()
+    now_utc = now_utc.replace(microsecond=0)
+    mode = _loop_schedule_mode(loop)
+
+    if mode == LoopConfig.SCHEDULE_INTERVAL:
+        return now_utc + _loop_interval_delta(loop)
+
+    tz = get_workspace_zoneinfo(loop.workspace_id)
+    now_local = now_utc.replace(tzinfo=timezone.utc).astimezone(tz)
+
+    if mode == LoopConfig.SCHEDULE_WINDOWED_INTERVAL:
+        try:
+            start_time = parse_hhmm(loop.schedule_window_start)
+            end_time = parse_hhmm(loop.schedule_window_end)
+        except ValueError:
+            return now_utc + _loop_interval_delta(loop)
+        interval_delta = _loop_interval_delta(loop)
+        if _is_local_time_in_window(now_local, start_time, end_time):
+            candidate_local = now_local + interval_delta
+            if _is_local_time_in_window(candidate_local, start_time, end_time):
+                return candidate_local.astimezone(timezone.utc).replace(tzinfo=None, microsecond=0)
+        next_start_local = _next_window_start_local(now_local, start_time)
+        return next_start_local.astimezone(timezone.utc).replace(tzinfo=None, microsecond=0)
+
+    if mode == LoopConfig.SCHEDULE_DAILY_TIMES:
+        exact_times = loop.get_schedule_exact_times() if hasattr(loop, 'get_schedule_exact_times') else []
+        if not exact_times:
+            return now_utc + _loop_interval_delta(loop)
+        next_local = _next_daily_exact_time_local(now_local, exact_times)
+        if next_local is None:
+            return now_utc + _loop_interval_delta(loop)
+        return next_local.astimezone(timezone.utc).replace(tzinfo=None, microsecond=0)
+
+    return now_utc + _loop_interval_delta(loop)
+
+
+def get_loop_schedule_summary(loop, workspace_id=None):
+    """Human-readable schedule summary for loop table/API."""
+    mode = _loop_schedule_mode(loop)
+    interval_text = _format_interval_hours(loop.interval_hours)
+    if mode == LoopConfig.SCHEDULE_WINDOWED_INTERVAL:
+        if loop.schedule_window_start and loop.schedule_window_end:
+            return f'Every {interval_text} in {loop.schedule_window_start}-{loop.schedule_window_end}'
+        return f'Every {interval_text} (windowed)'
+    if mode == LoopConfig.SCHEDULE_DAILY_TIMES:
+        times = loop.get_schedule_exact_times() if hasattr(loop, 'get_schedule_exact_times') else []
+        return f"At {', '.join(times)}" if times else 'At specific times'
+    return f'Every {interval_text}'
+
+
+def get_loop_schedule_status(loop, now_utc=None):
+    """Computed schedule status for UI display."""
+    if now_utc is None:
+        now_utc = datetime.utcnow()
+    if not loop.is_active:
+        return 'stopped'
+    if loop.is_paused:
+        return 'manual_paused'
+
+    mode = _loop_schedule_mode(loop)
+    allowed, reason = is_loop_schedule_allowed_now(loop, now_utc=now_utc)
+    if mode == LoopConfig.SCHEDULE_WINDOWED_INTERVAL and not allowed:
+        return 'waiting_window'
+    if mode == LoopConfig.SCHEDULE_DAILY_TIMES and not allowed:
+        return 'waiting_time'
+
+    if loop.next_run_at and loop.next_run_at > now_utc:
+        if mode == LoopConfig.SCHEDULE_WINDOWED_INTERVAL:
+            # If inside window but future schedule time, still "waiting_time"
+            return 'waiting_time' if allowed else 'waiting_window'
+        if mode == LoopConfig.SCHEDULE_DAILY_TIMES:
+            return 'waiting_time'
+    return 'ready'
+
+
+def serialize_loop_for_api(loop):
+    """Serialize loop with schedule metadata for UI/API."""
+    data = loop.to_dict()
+    ws_id = getattr(loop, 'workspace_id', None)
+    data['schedule_timezone'] = get_workspace_timezone_name(ws_id)
+    data['schedule_summary'] = get_loop_schedule_summary(loop, workspace_id=ws_id)
+    data['schedule_status'] = get_loop_schedule_status(loop)
+    return data
+
 def execute_loop_job(loop_id):
     """Execute a single loop iteration"""
     with app.app_context():
@@ -1049,8 +1365,9 @@ def execute_loop_job(loop_id):
             
             # Advance to next listing
             loop.advance_index()
-            loop.last_run_at = datetime.utcnow()
-            loop.next_run_at = datetime.utcnow() + timedelta(hours=loop.interval_hours)
+            completed_at = datetime.utcnow()
+            loop.last_run_at = completed_at
+            loop.next_run_at = compute_next_loop_run_at(loop, now_utc=completed_at)
             db.session.commit()
             
             print(f"[LOOP] Completed: success={success}, message={message}")
@@ -1257,6 +1574,11 @@ def check_and_run_loops():
             ).all()
             
             for loop in due_loops:
+                allowed_now, _reason = is_loop_schedule_allowed_now(loop, now_utc=now)
+                if not allowed_now:
+                    loop.next_run_at = compute_next_loop_run_at(loop, now_utc=now)
+                    db.session.commit()
+                    continue
                 print(f"[SCHEDULER] Running loop: {loop.name}")
                 execute_loop_job(loop.id)
                 
@@ -3630,7 +3952,21 @@ def workspace_image_editor(workspace_slug):
 @require_workspace_loops_admin
 def workspace_loops(workspace_slug):
     """Workspace-scoped loops page"""
-    return render_template('loops.html')
+    ws_id = g.workspace.id if g.workspace else get_active_workspace_id()
+    loops = LoopConfig.query.filter_by(workspace_id=ws_id).order_by(LoopConfig.created_at.desc()).all()
+
+    duplicated_folder = ListingFolder.query.filter_by(name='Duplicated', workspace_id=ws_id).first()
+    if duplicated_folder:
+        listings = visible_local_listing_query(ws_id).filter(
+            db.or_(
+                LocalListing.folder_id != duplicated_folder.id,
+                LocalListing.folder_id == None
+            )
+        ).order_by(LocalListing.reference).all()
+    else:
+        listings = visible_local_listing_query(ws_id).order_by(LocalListing.reference).all()
+
+    return render_template('loops.html', loops=loops, listings=listings)
 
 
 @app.route('/<workspace_slug>/auth')
@@ -5759,11 +6095,21 @@ def api_storage_cleanup():
 @require_active_workspace
 def api_update_settings():
     """API: Update app settings"""
-    data = request.get_json()
+    data = request.get_json() or {}
     ws_id = get_active_workspace_id()
     
-    allowed_keys = ['sync_interval_minutes', 'auto_sync_enabled', 'default_agent_email', 
-                    'default_owner_email', 'default_pf_agent_id']
+    allowed_keys = ['sync_interval_minutes', 'auto_sync_enabled', 'workspace_timezone',
+                    'default_agent_email', 'default_owner_email', 'default_pf_agent_id']
+
+    if 'workspace_timezone' in data:
+        timezone_name = (data.get('workspace_timezone') or '').strip()
+        if not timezone_name:
+            timezone_name = 'Asia/Dubai'
+            data['workspace_timezone'] = timezone_name
+        try:
+            ZoneInfo(timezone_name)
+        except Exception:
+            return jsonify({'success': False, 'error': 'Invalid workspace timezone'}), 400
     
     for key in allowed_keys:
         if key in data:
@@ -10051,7 +10397,7 @@ def api_get_loops():
     loops = LoopConfig.query.filter_by(workspace_id=ws_id).order_by(LoopConfig.created_at.desc()).all()
     return jsonify({
         'success': True,
-        'loops': [loop.to_dict() for loop in loops]
+        'loops': [serialize_loop_for_api(loop) for loop in loops]
     })
 
 
@@ -10061,7 +10407,7 @@ def api_get_loops():
 @require_workspace_loops_admin
 def api_create_loop():
     """Create a new loop configuration"""
-    data = request.json
+    data = request.get_json() or {}
     ws_id = get_active_workspace_id()
     
     if not data.get('name'):
@@ -10069,16 +10415,31 @@ def api_create_loop():
     
     if not data.get('listing_ids') or len(data['listing_ids']) == 0:
         return jsonify({'error': 'At least one listing is required'}), 400
+
+    try:
+        schedule_payload = validate_loop_schedule_payload({
+            'schedule_mode': data.get('schedule_mode', LoopConfig.SCHEDULE_INTERVAL),
+            'interval_hours': data.get('interval_hours', 1),
+            'schedule_window_start': data.get('schedule_window_start'),
+            'schedule_window_end': data.get('schedule_window_end'),
+            'schedule_exact_times': data.get('schedule_exact_times', []),
+        })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     
     loop = LoopConfig(
         workspace_id=ws_id,
         name=data['name'],
         loop_type=data.get('loop_type', 'duplicate'),
-        interval_hours=float(data.get('interval_hours', 1)),
+        interval_hours=float(schedule_payload.get('interval_hours', data.get('interval_hours', 1))),
         keep_duplicates=data.get('keep_duplicates', True),
         max_duplicates=int(data.get('max_duplicates', 0)),
         is_active=data.get('is_active', False)
     )
+    loop.schedule_mode = schedule_payload['schedule_mode']
+    loop.schedule_window_start = schedule_payload.get('schedule_window_start')
+    loop.schedule_window_end = schedule_payload.get('schedule_window_end')
+    loop.set_schedule_exact_times(schedule_payload.get('schedule_exact_times', []))
     db.session.add(loop)
     db.session.flush()  # Get the ID
     
@@ -10097,13 +10458,13 @@ def api_create_loop():
     
     # Calculate next run time if active
     if loop.is_active:
-        loop.next_run_at = datetime.utcnow()
+        loop.next_run_at = compute_next_loop_run_at(loop, now_utc=datetime.utcnow())
     
     db.session.commit()
     
     return jsonify({
         'success': True,
-        'loop': loop.to_dict()
+        'loop': serialize_loop_for_api(loop)
     })
 
 
@@ -10117,7 +10478,7 @@ def api_get_loop(loop_id):
     loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
     
     # Include listings with details
-    loop_data = loop.to_dict()
+    loop_data = serialize_loop_for_api(loop)
     loop_data['listings'] = [ll.to_dict() for ll in loop.listings.order_by(LoopListing.order_index).all()]
     
     return jsonify({
@@ -10134,14 +10495,30 @@ def api_update_loop(loop_id):
     """Update a loop configuration"""
     ws_id = get_active_workspace_id()
     loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
-    data = request.json
+    data = request.get_json() or {}
+
+    schedule_input = {
+        'schedule_mode': data.get('schedule_mode', loop.schedule_mode or LoopConfig.SCHEDULE_INTERVAL),
+        'interval_hours': data.get('interval_hours', loop.interval_hours),
+        'schedule_window_start': data.get('schedule_window_start', loop.schedule_window_start),
+        'schedule_window_end': data.get('schedule_window_end', loop.schedule_window_end),
+        'schedule_exact_times': data.get('schedule_exact_times', loop.get_schedule_exact_times()),
+    }
+    try:
+        schedule_payload = validate_loop_schedule_payload(schedule_input)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     
     if 'name' in data:
         loop.name = data['name']
     if 'loop_type' in data:
         loop.loop_type = data['loop_type']
-    if 'interval_hours' in data:
-        loop.interval_hours = float(data['interval_hours'])
+    if ('interval_hours' in data) or (schedule_payload.get('interval_hours') is not None):
+        loop.interval_hours = float(schedule_payload.get('interval_hours', loop.interval_hours))
+    loop.schedule_mode = schedule_payload['schedule_mode']
+    loop.schedule_window_start = schedule_payload.get('schedule_window_start')
+    loop.schedule_window_end = schedule_payload.get('schedule_window_end')
+    loop.set_schedule_exact_times(schedule_payload.get('schedule_exact_times', []))
     if 'keep_duplicates' in data:
         loop.keep_duplicates = data['keep_duplicates']
     if 'max_duplicates' in data:
@@ -10167,12 +10544,16 @@ def api_update_loop(loop_id):
         
         # Reset index
         loop.current_index = 0
+
+    schedule_fields = {'schedule_mode', 'interval_hours', 'schedule_window_start', 'schedule_window_end', 'schedule_exact_times'}
+    if loop.is_active and not loop.is_paused and schedule_fields.intersection(data.keys()):
+        loop.next_run_at = compute_next_loop_run_at(loop, now_utc=datetime.utcnow())
     
     db.session.commit()
     
     return jsonify({
         'success': True,
-        'loop': loop.to_dict()
+        'loop': serialize_loop_for_api(loop)
     })
 
 
@@ -10210,14 +10591,14 @@ def api_start_loop(loop_id):
     loop.is_active = True
     loop.is_paused = False
     loop.consecutive_failures = 0
-    loop.next_run_at = datetime.utcnow()  # Run immediately
+    loop.next_run_at = compute_next_loop_run_at(loop, now_utc=datetime.utcnow())
     
     db.session.commit()
     
     return jsonify({
         'success': True,
         'message': f'Loop "{loop.name}" started',
-        'loop': loop.to_dict()
+        'loop': serialize_loop_for_api(loop)
     })
 
 
@@ -10238,7 +10619,7 @@ def api_stop_loop(loop_id):
     return jsonify({
         'success': True,
         'message': f'Loop "{loop.name}" stopped',
-        'loop': loop.to_dict()
+        'loop': serialize_loop_for_api(loop)
     })
 
 
@@ -10258,7 +10639,7 @@ def api_pause_loop(loop_id):
     return jsonify({
         'success': True,
         'message': f'Loop "{loop.name}" paused',
-        'loop': loop.to_dict()
+        'loop': serialize_loop_for_api(loop)
     })
 
 
@@ -10272,14 +10653,14 @@ def api_resume_loop(loop_id):
     loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
     
     loop.is_paused = False
-    loop.next_run_at = datetime.utcnow()  # Resume immediately
+    loop.next_run_at = compute_next_loop_run_at(loop, now_utc=datetime.utcnow())
     
     db.session.commit()
     
     return jsonify({
         'success': True,
         'message': f'Loop "{loop.name}" resumed',
-        'loop': loop.to_dict()
+        'loop': serialize_loop_for_api(loop)
     })
 
 
@@ -10302,7 +10683,7 @@ def api_run_loop_now(loop_id):
     return jsonify({
         'success': True,
         'message': f'Loop "{loop.name}" executed',
-        'loop': loop.to_dict()
+        'loop': serialize_loop_for_api(loop)
     })
 
 

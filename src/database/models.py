@@ -2264,6 +2264,7 @@ class AppSettings(db.Model):
     DEFAULTS = {
         'sync_interval_minutes': '30',
         'auto_sync_enabled': 'true',
+        'workspace_timezone': 'Asia/Dubai',
         'default_agent_email': '',
         'default_owner_email': '',
         'default_insights_agent_id': '',  # PF user ID to show by default in insights
@@ -2371,7 +2372,11 @@ class LoopConfig(db.Model):
     
     # Timing
     interval_hours = db.Column(db.Float, default=1.0)  # Hours between each action
-    
+    schedule_mode = db.Column(db.String(32), default='interval')  # interval, windowed_interval, daily_times
+    schedule_window_start = db.Column(db.String(5), nullable=True)  # HH:MM
+    schedule_window_end = db.Column(db.String(5), nullable=True)    # HH:MM
+    schedule_exact_times = db.Column(db.Text, nullable=True)        # JSON array of HH:MM
+
     # Duplicate handling
     keep_duplicates = db.Column(db.Boolean, default=True)  # Keep in "Duplicated" folder
     max_duplicates = db.Column(db.Integer, default=0)  # 0 = unlimited
@@ -2393,6 +2398,33 @@ class LoopConfig(db.Model):
     # Relationships
     listings = db.relationship('LoopListing', backref='loop_config', lazy='dynamic', cascade='all, delete-orphan')
     duplicates = db.relationship('DuplicatedListing', backref='loop_config', lazy='dynamic')
+
+    SCHEDULE_INTERVAL = 'interval'
+    SCHEDULE_WINDOWED_INTERVAL = 'windowed_interval'
+    SCHEDULE_DAILY_TIMES = 'daily_times'
+    SCHEDULE_MODES = [SCHEDULE_INTERVAL, SCHEDULE_WINDOWED_INTERVAL, SCHEDULE_DAILY_TIMES]
+
+    def get_schedule_exact_times(self):
+        """Return exact times schedule as a list of HH:MM strings."""
+        import json
+        raw = self.schedule_exact_times
+        if not raw:
+            return []
+        try:
+            value = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            return []
+        if not isinstance(value, list):
+            return []
+        return [str(v) for v in value if isinstance(v, str)]
+
+    def set_schedule_exact_times(self, values):
+        """Persist exact times schedule from a list of HH:MM strings."""
+        import json
+        if not values:
+            self.schedule_exact_times = None
+            return
+        self.schedule_exact_times = json.dumps(list(values))
     
     def to_dict(self):
         return {
@@ -2400,6 +2432,10 @@ class LoopConfig(db.Model):
             'name': self.name,
             'loop_type': self.loop_type,
             'interval_hours': self.interval_hours,
+            'schedule_mode': self.schedule_mode or self.SCHEDULE_INTERVAL,
+            'schedule_window_start': self.schedule_window_start,
+            'schedule_window_end': self.schedule_window_end,
+            'schedule_exact_times': self.get_schedule_exact_times(),
             'keep_duplicates': self.keep_duplicates,
             'max_duplicates': self.max_duplicates,
             'is_active': self.is_active,
