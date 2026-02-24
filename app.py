@@ -1413,6 +1413,7 @@ def permission_required(permission):
                 ws = None
 
             if ws:
+                extra_permissions = set(get_workspace_user_extra_permissions(user.id, workspace_id=ws.id))
                 module_action_map = {
                     'view': ('listings', 'read'),
                     'create': ('listings', 'create'),
@@ -1429,10 +1430,10 @@ def permission_required(permission):
                     from src.services.permissions import get_permission_service
                     service = get_permission_service()
                     module, action = module_action
-                    if not service.check_module_access(user, ws.id, module, action):
+                    if not service.check_module_access(user, ws.id, module, action) and permission not in extra_permissions:
                         flash('You do not have permission to access this feature.', 'error')
                         return redirect(url_for('workspace_dashboard', workspace_slug=ws.slug))
-                else:
+                elif permission not in extra_permissions:
                     flash('You do not have permission to access this feature.', 'error')
                     return redirect(url_for('workspace_dashboard', workspace_slug=ws.slug))
             elif not user.has_permission(permission):
@@ -1515,6 +1516,52 @@ def has_any_system_role(user):
 def is_workspace_eligible_user(user):
     """Workspace org users must not also be platform/system users."""
     return bool(user) and not has_any_system_role(user)
+
+
+WORKSPACE_USER_EXTRA_PERMISSIONS_KEY_PREFIX = 'workspace_user_extra_permissions'
+
+
+def _workspace_user_extra_permissions_key(user_id):
+    return f'{WORKSPACE_USER_EXTRA_PERMISSIONS_KEY_PREFIX}:{int(user_id)}'
+
+
+def get_workspace_user_extra_permissions(user_id=None, workspace_id=None):
+    """Workspace-scoped additive permissions for a user (legacy keys, but not global)."""
+    try:
+        user = getattr(g, 'user', None)
+        resolved_user_id = int(user_id if user_id is not None else (user.id if user else 0))
+    except (TypeError, ValueError):
+        return []
+    if not resolved_user_id:
+        return []
+    raw = AppSettings.get(_workspace_user_extra_permissions_key(resolved_user_id), '[]', workspace_id=workspace_id)
+    try:
+        parsed = json.loads(raw) if raw else []
+    except Exception:
+        parsed = []
+    if not isinstance(parsed, list):
+        return []
+    allowed = set(User.ALL_PERMISSIONS)
+    return [p for p in parsed if isinstance(p, str) and p in allowed]
+
+
+def set_workspace_user_extra_permissions(user_id, permissions_list, workspace_id=None):
+    """Persist workspace-scoped additive permissions for a user."""
+    try:
+        resolved_user_id = int(user_id)
+    except (TypeError, ValueError):
+        return []
+    allowed = set(User.ALL_PERMISSIONS)
+    normalized = []
+    for perm in permissions_list or []:
+        if isinstance(perm, str) and perm in allowed and perm not in normalized:
+            normalized.append(perm)
+    AppSettings.set(
+        _workspace_user_extra_permissions_key(resolved_user_id),
+        json.dumps(normalized),
+        workspace_id=workspace_id
+    )
+    return normalized
 
 
 def _get_system_user_ids(user_ids):
@@ -3059,6 +3106,9 @@ def users_page():
             data['workspace_member_id'] = member.id
             data['workspace_role'] = member.role
             data['workspace_role_name'] = WorkspaceMember.ROLES.get(member.role, {}).get('name', member.role.title())
+            extra_perms = get_workspace_user_extra_permissions(u.id, workspace_id=ws_id)
+            data['workspace_custom_permissions'] = extra_perms
+            data['has_workspace_custom_permissions'] = bool(extra_perms)
         user_payloads.append(data)
     pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
     workspace = Workspace.query.get(ws_id)
@@ -3614,6 +3664,9 @@ def workspace_users(workspace_slug):
             data['workspace_member_id'] = member.id
             data['workspace_role'] = member.role
             data['workspace_role_name'] = WorkspaceMember.ROLES.get(member.role, {}).get('name', member.role.title())
+            extra_perms = get_workspace_user_extra_permissions(u.id, workspace_id=ws_id)
+            data['workspace_custom_permissions'] = extra_perms
+            data['has_workspace_custom_permissions'] = bool(extra_perms)
         user_payloads.append(data)
     pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
     workspace = Workspace.query.get(ws_id)
@@ -3842,9 +3895,14 @@ def api_get_workspace_members(workspace_id):
         return jsonify({'success': False, 'error': 'Access denied'}), 403
     
     members, _ = _filter_workspace_memberships_for_org(workspace.members)
+    member_payloads = []
+    for m in members:
+        data = m.to_dict()
+        data['extra_permissions'] = get_workspace_user_extra_permissions(m.user_id, workspace_id=workspace_id)
+        member_payloads.append(data)
     return jsonify({
         'success': True,
-        'members': [m.to_dict() for m in members]
+        'members': member_payloads
     })
 
 
@@ -3917,7 +3975,7 @@ def api_update_workspace_member(workspace_id, member_id):
     if member.user and has_any_system_role(member.user):
         return jsonify({'success': False, 'error': 'System users cannot be managed as workspace members.'}), 400
     
-    data = request.get_json()
+    data = request.get_json() or {}
     if 'role' in data:
         # Prevent demoting the last owner
         if member.role == 'owner':
@@ -3928,12 +3986,25 @@ def api_update_workspace_member(workspace_id, member_id):
             if owner_count <= 1 and data['role'] != 'owner':
                 return jsonify({'success': False, 'error': 'Cannot demote the last owner'}), 400
         member.role = data['role']
+
+    updated_extra_permissions = None
+    if 'extra_permissions' in data:
+        if not isinstance(data.get('extra_permissions'), list):
+            return jsonify({'success': False, 'error': 'extra_permissions must be a list'}), 400
+        updated_extra_permissions = set_workspace_user_extra_permissions(
+            member.user_id,
+            data.get('extra_permissions') or [],
+            workspace_id=workspace_id
+        )
     
     db.session.commit()
-    
+    member_data = member.to_dict()
+    if updated_extra_permissions is None:
+        updated_extra_permissions = get_workspace_user_extra_permissions(member.user_id, workspace_id=workspace_id)
+    member_data['extra_permissions'] = updated_extra_permissions
     return jsonify({
         'success': True,
-        'member': member.to_dict()
+        'member': member_data
     })
 
 

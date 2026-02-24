@@ -218,6 +218,9 @@
                                     <div class="text-sm font-medium text-gray-900">{{ user.name }}</div>
                                     <div class="text-sm text-gray-500">{{ user.email }}</div>
                                     <span class="text-xs text-gray-400">App account: {{ user.role_name }}</span>
+                                    {% if user.has_workspace_custom_permissions %}
+                                    <span class="text-xs text-indigo-600 ml-2"><i class="fas fa-sliders-h mr-1"></i>Custom +{{ user.workspace_custom_permissions|length }}</span>
+                                    {% endif %}
                                 </div>
                             </div>
                         </td>
@@ -321,6 +324,27 @@
                     <p class="text-xs text-gray-500 mt-1">Workspace access is controlled by this workspace role.</p>
                 </div>
 
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <label class="block text-sm font-medium text-gray-700">Extra Permissions (Additive)</label>
+                        <button type="button"
+                                @click="editingUser.workspace_custom_permissions = []"
+                                class="text-xs text-gray-500 hover:text-gray-700">
+                            Clear
+                        </button>
+                    </div>
+                    <p class="text-xs text-gray-500 mb-2">Adds selected permissions on top of the workspace role. Does not override row-level assignment rules.</p>
+                    <div class="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-3 bg-gray-50">
+                        <template x-for="perm in allPermissions" :key="perm">
+                            <label class="flex items-center gap-2 text-sm text-gray-700">
+                                <input type="checkbox" :value="perm" x-model="editingUser.workspace_custom_permissions"
+                                       class="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500">
+                                <span x-text="perm"></span>
+                            </label>
+                        </template>
+                    </div>
+                </div>
+
                 <div class="flex justify-end space-x-3 pt-4">
                     <button type="button" @click="showEditModal = false"
                             class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">
@@ -347,6 +371,7 @@ function usersPage() {
         workspaceId: {{ workspace.id if workspace else 'null' }},
         workspaceRoleOptions: {{ workspace_member_roles|tojson|safe if workspace_member_roles is defined else '{}' }},
         workspaceMemberships: {{ workspace_memberships_json|tojson|safe if workspace_memberships_json is defined else '{}' }},
+        allPermissions: {{ all_permissions|tojson|safe if all_permissions is defined else '[]' }},
         canManageMembers: {{ 'true' if can_manage_members else 'false' }},
         inviteEmail: '',
         inviteRole: 'member',
@@ -366,7 +391,12 @@ function usersPage() {
                 alert('Workspace membership not found for this user.');
                 return;
             }
-            this.editingUser = { ...user };
+            this.editingUser = {
+                ...user,
+                workspace_custom_permissions: Array.isArray(user.workspace_custom_permissions)
+                    ? [...user.workspace_custom_permissions]
+                    : []
+            };
             this.showEditModal = true;
         },
 
@@ -459,7 +489,12 @@ function usersPage() {
                 const response = await fetch(`/api/workspaces/${this.workspaceId}/members/${this.editingUser.workspace_member_id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ role: this.editingUser.workspace_role })
+                    body: JSON.stringify({
+                        role: this.editingUser.workspace_role,
+                        extra_permissions: Array.isArray(this.editingUser.workspace_custom_permissions)
+                            ? this.editingUser.workspace_custom_permissions
+                            : []
+                    })
                 });
                 const data = await response.json().catch(() => ({}));
                 if (response.ok && data.success) {
@@ -467,6 +502,9 @@ function usersPage() {
                     if (idx !== -1) {
                         this.users[idx].workspace_role = data.member.role;
                         this.users[idx].workspace_role_name = data.member.role_name;
+                        const extraPerms = Array.isArray(data.member.extra_permissions) ? data.member.extra_permissions : [];
+                        this.users[idx].workspace_custom_permissions = extraPerms;
+                        this.users[idx].has_workspace_custom_permissions = extraPerms.length > 0;
                     }
                     this.showEditModal = false;
                 } else {
