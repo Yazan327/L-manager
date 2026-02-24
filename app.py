@@ -1613,6 +1613,71 @@ def scope_query(query, workspace_id):
     return query
 
 
+def get_workspace_membership_for_user(user=None, workspace_id=None):
+    """Return workspace membership for the given user/workspace in request contexts."""
+    user = user or getattr(g, 'user', None)
+    if not user:
+        return None
+    ws_id = workspace_id or get_active_workspace_id()
+    if not ws_id:
+        return None
+
+    cached_membership = getattr(g, 'workspace_membership', None)
+    if cached_membership and cached_membership.user_id == user.id and cached_membership.workspace_id == ws_id:
+        return cached_membership
+
+    return WorkspaceMember.query.filter_by(workspace_id=ws_id, user_id=user.id).first()
+
+
+def workspace_user_can_manage_all_listings(user=None, workspace_id=None):
+    """Workspace owners/admins and system admins can see/manage all workspace listings."""
+    user = user or getattr(g, 'user', None)
+    if not user:
+        return False
+    if is_system_admin(user):
+        return True
+    membership = get_workspace_membership_for_user(user=user, workspace_id=workspace_id)
+    return bool(membership and membership.role in ('owner', 'admin'))
+
+
+def visible_local_listing_query(workspace_id=None, user=None):
+    """Listing query scoped to workspace and current user's row-level visibility."""
+    ws_id = workspace_id or get_active_workspace_id()
+    query = scope_query(LocalListing.query, ws_id)
+    user = user or getattr(g, 'user', None)
+    if not user:
+        return query.filter(LocalListing.id == -1)
+    if workspace_user_can_manage_all_listings(user=user, workspace_id=ws_id):
+        return query
+    # Non-admin workspace users only see listings assigned to them.
+    return query.filter(LocalListing.assigned_to_id == user.id)
+
+
+def workspace_user_can_manage_loops(user=None, workspace_id=None):
+    """Loops are restricted to workspace admins/owners (and system admins)."""
+    return workspace_user_can_manage_all_listings(user=user, workspace_id=workspace_id)
+
+
+def require_workspace_loops_admin(f):
+    """Decorator: loops are admin-only until loop ownership is implemented."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        ws_id = get_active_workspace_id()
+        if workspace_user_can_manage_loops(workspace_id=ws_id):
+            return f(*args, **kwargs)
+
+        message = 'Loops are visible to workspace admins only.'
+        if request.path.startswith('/api/'):
+            return jsonify({'success': False, 'error': message}), 403
+
+        flash(message, 'error')
+        ws = get_active_workspace()
+        if ws:
+            return redirect(url_for('workspace_dashboard', workspace_slug=ws.slug))
+        return redirect(url_for('index'))
+    return decorated
+
+
 def require_active_workspace(f):
     """Decorator to ensure an active workspace context is available."""
     @wraps(f)
@@ -1631,6 +1696,13 @@ def require_active_workspace(f):
             return redirect(url_for('logout'))
         g.workspace = ws
         g.is_workspace_context = True
+        if g.user and not is_system_admin(g.user):
+            g.workspace_membership = WorkspaceMember.query.filter_by(
+                workspace_id=ws.id,
+                user_id=g.user.id
+            ).first()
+        else:
+            g.workspace_membership = None
         session['current_workspace_id'] = ws.id
         return f(*args, **kwargs)
     return decorated
@@ -3252,7 +3324,7 @@ def workspace_dashboard(workspace_slug):
     """Workspace-scoped dashboard"""
     try:
         ws_id = g.workspace.id
-        base_query = scope_query(LocalListing.query, ws_id)
+        base_query = visible_local_listing_query(ws_id)
         stats = {
             'total': base_query.count(),
             'published': base_query.filter_by(status='published').count(),
@@ -3327,6 +3399,7 @@ def workspace_image_editor(workspace_slug):
 @app.route('/<workspace_slug>/loops')
 @login_required
 @require_workspace_access
+@require_workspace_loops_admin
 def workspace_loops(workspace_slug):
     """Workspace-scoped loops page"""
     return render_template('loops.html')
@@ -4587,7 +4660,7 @@ def _render_listings_page(workspace_id):
     show_duplicates = request.args.get('show_duplicates', '0') == '1'  # Hide duplicates by default
     assigned_to_filter = request.args.get('assigned_to_id')
     
-    query = scope_query(LocalListing.query, workspace_id)
+    query = visible_local_listing_query(workspace_id)
     
     # Get the Duplicated folder ID
     duplicated_folder = ListingFolder.query.filter_by(
@@ -4666,12 +4739,14 @@ def _render_listings_page(workspace_id):
     current_folder = None
     if folder_id:
         current_folder = ListingFolder.query.filter_by(id=folder_id, workspace_id=workspace_id).first()
-    uncategorized_count = scope_query(LocalListing.query, workspace_id).filter(
+    uncategorized_count = visible_local_listing_query(workspace_id).filter(
         LocalListing.folder_id.is_(None)
     ).count()
     
     # Count duplicates (for showing toggle info)
-    duplicates_count = duplicated_folder.listings.count() if duplicated_folder else 0
+    duplicates_count = 0
+    if duplicated_folder:
+        duplicates_count = visible_local_listing_query(workspace_id).filter_by(folder_id=duplicated_folder.id).count()
     
     return render_template('listings.html', 
                          listings=[l.to_dict() for l in pagination.items],
@@ -4729,7 +4804,7 @@ def view_listing(listing_id):
     try:
         local_id = int(listing_id)
         ws_id = get_active_workspace_id()
-        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
+        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
         if local_listing:
             listing_dict = local_listing.to_dict()
             # If synced to PF, fetch current PF state for display (best-effort)
@@ -4775,7 +4850,7 @@ def edit_listing(listing_id):
     try:
         local_id = int(listing_id)
         ws_id = get_active_workspace_id()
-        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
+        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
         if local_listing:
             # Pass the model object directly so template can use get_images()
             return render_template('listing_form.html', 
@@ -4823,7 +4898,7 @@ def insights():
         return redirect(url_for('workspace_insights', workspace_slug=ws.slug))
     ws_id = get_active_workspace_id()
     # Get local listings only (no API call)
-    local_listings = scope_query(LocalListing.query, ws_id).all()
+    local_listings = visible_local_listing_query(ws_id).all()
     local_data = [listing.to_dict() for listing in local_listings]
     
     # Return empty PF data - user will load on demand
@@ -5537,7 +5612,7 @@ def api_publish_listing(listing_id):
     # Check if this is a local listing ID (integer)
     try:
         local_id = int(listing_id)
-        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
+        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
         if local_listing:
             media_warnings = []
             if local_listing.pf_listing_id:
@@ -5691,7 +5766,7 @@ def api_unpublish_listing(listing_id):
     # Check if this is a local listing ID (integer)
     try:
         local_id = int(listing_id)
-        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
+        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
         if local_listing and local_listing.pf_listing_id:
             # Use the PF listing ID instead
             client.unpublish_listing(local_listing.pf_listing_id)
@@ -5974,12 +6049,15 @@ def create_listing_form():
     form = request.form
     ws_id = get_active_workspace_id()
     
+    can_manage_all = workspace_user_can_manage_all_listings(workspace_id=ws_id)
     assigned_to_id = None
     if form.get('assigned_to_id'):
         assigned_to_id = _validate_assignee(ws_id, form.get('assigned_to_id'))
         if not assigned_to_id:
             flash('Assigned user must be a member of this workspace.', 'error')
             return redirect(url_for('new_listing'))
+    if not can_manage_all:
+        assigned_to_id = g.user.id
     
     # Auto-generate reference if not provided
     reference = form.get('reference')
@@ -6048,10 +6126,11 @@ def update_listing_form(listing_id):
     try:
         local_id = int(listing_id)
         ws_id = get_active_workspace_id()
-        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
+        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
         if local_listing:
             # Update local listing
             form = request.form
+            can_manage_all = workspace_user_can_manage_all_listings(workspace_id=ws_id)
             
             local_listing.emirate = form.get('emirate')
             local_listing.city = form.get('city')
@@ -6063,14 +6142,17 @@ def update_listing_form(listing_id):
             local_listing.assigned_agent = form.get('assigned_agent')
             local_listing.reference = form.get('reference')
             
-            if form.get('assigned_to_id'):
-                assigned_to_id = _validate_assignee(ws_id, form.get('assigned_to_id'))
-                if not assigned_to_id:
-                    flash('Assigned user must be a member of this workspace.', 'error')
-                    return redirect(url_for('edit_listing', listing_id=listing_id))
-                local_listing.assigned_to_id = assigned_to_id
+            if can_manage_all:
+                if form.get('assigned_to_id'):
+                    assigned_to_id = _validate_assignee(ws_id, form.get('assigned_to_id'))
+                    if not assigned_to_id:
+                        flash('Assigned user must be a member of this workspace.', 'error')
+                        return redirect(url_for('edit_listing', listing_id=listing_id))
+                    local_listing.assigned_to_id = assigned_to_id
+                else:
+                    local_listing.assigned_to_id = None
             else:
-                local_listing.assigned_to_id = None
+                local_listing.assigned_to_id = g.user.id
             
             # Specifications
             local_listing.bedrooms = form.get('bedrooms')
@@ -6148,7 +6230,7 @@ def duplicate_listing(listing_id):
     try:
         local_id = int(listing_id)
         ws_id = get_active_workspace_id()
-        original = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
+        original = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
         
         if not original:
             flash('Listing not found', 'error')
@@ -6237,7 +6319,7 @@ def send_to_pf_draft(listing_id):
     try:
         local_id = int(listing_id)
         ws_id = get_active_workspace_id()
-        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
+        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
         
         if not local_listing:
             flash('Listing not found', 'error')
@@ -6349,7 +6431,7 @@ def publish_listing_form(listing_id):
     try:
         local_id = int(listing_id)
         ws_id = get_active_workspace_id()
-        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
+        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
         if local_listing:
             client = get_client(workspace_id=ws_id)
             
@@ -6453,7 +6535,7 @@ def unpublish_listing_form(listing_id):
     try:
         local_id = int(listing_id)
         ws_id = get_active_workspace_id()
-        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
+        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
         if local_listing:
             if not local_listing.pf_listing_id:
                 flash('This listing is not published on PropertyFinder', 'warning')
@@ -6509,7 +6591,7 @@ def sync_pf_status_form(listing_id):
     try:
         local_id = int(listing_id)
         ws_id = get_active_workspace_id()
-        local_listing = LocalListing.query.filter_by(id=local_id, workspace_id=ws_id).first()
+        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
         if not local_listing:
             flash('Listing not found', 'error')
             return redirect(request.referrer or url_for('listings'))
@@ -6630,7 +6712,7 @@ def api_local_get_listings():
     status = request.args.get('status')
     
     ws_id = get_active_workspace_id()
-    query = scope_query(LocalListing.query, ws_id)
+    query = visible_local_listing_query(ws_id)
     if status:
         query = query.filter_by(status=status)
     
@@ -6663,6 +6745,8 @@ def api_local_create_listing():
     
     listing = LocalListing.from_dict(data)
     listing.workspace_id = ws_id
+    if not workspace_user_can_manage_all_listings(workspace_id=ws_id):
+        listing.assigned_to_id = g.user.id
     db.session.add(listing)
     db.session.commit()
     
@@ -6675,7 +6759,7 @@ def api_local_create_listing():
 def api_local_get_listing(listing_id):
     """Get a single local listing"""
     ws_id = get_active_workspace_id()
-    listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first_or_404()
+    listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first_or_404()
     return jsonify({'data': listing.to_dict()})
 
 
@@ -6685,14 +6769,18 @@ def api_local_get_listing(listing_id):
 def api_local_update_listing(listing_id):
     """Update a local listing"""
     ws_id = get_active_workspace_id()
-    listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first_or_404()
+    listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first_or_404()
     data = request.get_json()
+    can_manage_all = workspace_user_can_manage_all_listings(workspace_id=ws_id)
     
     if 'assigned_to_id' in data:
-        assigned_to_id = _validate_assignee(ws_id, data.get('assigned_to_id'))
-        if data.get('assigned_to_id') and not assigned_to_id:
-            return jsonify({'success': False, 'error': 'Assigned user must be in this workspace'}), 400
-        listing.assigned_to_id = assigned_to_id
+        if can_manage_all:
+            assigned_to_id = _validate_assignee(ws_id, data.get('assigned_to_id'))
+            if data.get('assigned_to_id') and not assigned_to_id:
+                return jsonify({'success': False, 'error': 'Assigned user must be in this workspace'}), 400
+            listing.assigned_to_id = assigned_to_id
+        else:
+            listing.assigned_to_id = g.user.id
     
     # Update fields
     for key, value in data.items():
@@ -6715,7 +6803,7 @@ def api_local_update_listing(listing_id):
 def api_local_delete_listing(listing_id):
     """Delete a local listing"""
     ws_id = get_active_workspace_id()
-    listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first_or_404()
+    listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first_or_404()
     db.session.delete(listing)
     db.session.commit()
 
@@ -6737,7 +6825,7 @@ def api_local_delete_listing(listing_id):
 def api_local_sync_pf_status(listing_id):
     """Sync local listing status with PropertyFinder state"""
     ws_id = get_active_workspace_id()
-    listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first_or_404()
+    listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first_or_404()
     client = get_client(workspace_id=ws_id)
     pf_listing_id = listing.pf_listing_id
     pf_listing = None
@@ -6823,7 +6911,7 @@ def api_local_bulk_create():
 def api_local_stats():
     """Get local listings statistics"""
     ws_id = get_active_workspace_id()
-    base_query = scope_query(LocalListing.query, ws_id)
+    base_query = visible_local_listing_query(ws_id)
     total = base_query.count()
     published = base_query.filter_by(status='published').count()
     draft = base_query.filter_by(status='draft').count()
@@ -9108,7 +9196,7 @@ def api_process_image_with_settings():
         listing_id = data.get('listing_id')
         ws_id = get_active_workspace_id()
         if listing_id:
-            listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first()
+            listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first()
             if not listing:
                 return jsonify({'error': 'Listing not found'}), 404
         image_bytes = None
@@ -9285,7 +9373,7 @@ def api_upload_image():
         ws_id = get_active_workspace_id()
         listing = None
         if listing_id:
-            listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first()
+            listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first()
             if not listing:
                 return jsonify({'error': 'Listing not found'}), 404
         
@@ -9548,6 +9636,7 @@ def api_move_listings_to_folder():
 @app.route('/loops')
 @login_required
 @require_active_workspace
+@require_workspace_loops_admin
 def loops_page():
     """Loop management page"""
     ws = get_active_workspace()
@@ -9575,6 +9664,7 @@ def loops_page():
 @app.route('/api/loops', methods=['GET'])
 @login_required
 @require_active_workspace
+@require_workspace_loops_admin
 def api_get_loops():
     """Get all loop configurations"""
     ws_id = get_active_workspace_id()
@@ -9588,6 +9678,7 @@ def api_get_loops():
 @app.route('/api/loops', methods=['POST'])
 @login_required
 @require_active_workspace
+@require_workspace_loops_admin
 def api_create_loop():
     """Create a new loop configuration"""
     data = request.json
@@ -9613,7 +9704,7 @@ def api_create_loop():
     
     # Add listings to the loop
     for idx, listing_id in enumerate(data['listing_ids']):
-        listing = LocalListing.query.filter_by(id=int(listing_id), workspace_id=ws_id).first()
+        listing = visible_local_listing_query(ws_id).filter_by(id=int(listing_id)).first()
         if not listing:
             db.session.rollback()
             return jsonify({'error': f'Listing {listing_id} not found in workspace'}), 404
@@ -9639,6 +9730,7 @@ def api_create_loop():
 @app.route('/api/loops/<int:loop_id>', methods=['GET'])
 @login_required
 @require_active_workspace
+@require_workspace_loops_admin
 def api_get_loop(loop_id):
     """Get a single loop configuration"""
     ws_id = get_active_workspace_id()
@@ -9657,6 +9749,7 @@ def api_get_loop(loop_id):
 @app.route('/api/loops/<int:loop_id>', methods=['PUT'])
 @login_required
 @require_active_workspace
+@require_workspace_loops_admin
 def api_update_loop(loop_id):
     """Update a loop configuration"""
     ws_id = get_active_workspace_id()
@@ -9681,7 +9774,7 @@ def api_update_loop(loop_id):
         
         # Add new listings
         for idx, listing_id in enumerate(data['listing_ids']):
-            listing = LocalListing.query.filter_by(id=int(listing_id), workspace_id=ws_id).first()
+            listing = visible_local_listing_query(ws_id).filter_by(id=int(listing_id)).first()
             if not listing:
                 db.session.rollback()
                 return jsonify({'error': f'Listing {listing_id} not found in workspace'}), 404
@@ -9706,6 +9799,7 @@ def api_update_loop(loop_id):
 @app.route('/api/loops/<int:loop_id>', methods=['DELETE'])
 @login_required
 @require_active_workspace
+@require_workspace_loops_admin
 def api_delete_loop(loop_id):
     """Delete a loop configuration"""
     ws_id = get_active_workspace_id()
@@ -9727,6 +9821,7 @@ def api_delete_loop(loop_id):
 @app.route('/api/loops/<int:loop_id>/start', methods=['POST'])
 @login_required
 @require_active_workspace
+@require_workspace_loops_admin
 def api_start_loop(loop_id):
     """Start a loop"""
     ws_id = get_active_workspace_id()
@@ -9749,6 +9844,7 @@ def api_start_loop(loop_id):
 @app.route('/api/loops/<int:loop_id>/stop', methods=['POST'])
 @login_required
 @require_active_workspace
+@require_workspace_loops_admin
 def api_stop_loop(loop_id):
     """Stop a loop"""
     ws_id = get_active_workspace_id()
@@ -9769,6 +9865,7 @@ def api_stop_loop(loop_id):
 @app.route('/api/loops/<int:loop_id>/pause', methods=['POST'])
 @login_required
 @require_active_workspace
+@require_workspace_loops_admin
 def api_pause_loop(loop_id):
     """Pause a loop"""
     ws_id = get_active_workspace_id()
@@ -9788,6 +9885,7 @@ def api_pause_loop(loop_id):
 @app.route('/api/loops/<int:loop_id>/resume', methods=['POST'])
 @login_required
 @require_active_workspace
+@require_workspace_loops_admin
 def api_resume_loop(loop_id):
     """Resume a paused loop"""
     ws_id = get_active_workspace_id()
@@ -9808,6 +9906,7 @@ def api_resume_loop(loop_id):
 @app.route('/api/loops/<int:loop_id>/run-now', methods=['POST'])
 @login_required
 @require_active_workspace
+@require_workspace_loops_admin
 def api_run_loop_now(loop_id):
     """Manually trigger a loop execution"""
     ws_id = get_active_workspace_id()
@@ -9830,6 +9929,7 @@ def api_run_loop_now(loop_id):
 @app.route('/api/loops/<int:loop_id>/logs', methods=['GET'])
 @login_required
 @require_active_workspace
+@require_workspace_loops_admin
 def api_get_loop_logs(loop_id):
     """Get execution logs for a loop"""
     ws_id = get_active_workspace_id()
@@ -9849,6 +9949,7 @@ def api_get_loop_logs(loop_id):
 @app.route('/api/loops/<int:loop_id>/duplicates', methods=['GET'])
 @login_required
 @require_active_workspace
+@require_workspace_loops_admin
 def api_get_loop_duplicates(loop_id):
     """Get duplicates created by a loop"""
     ws_id = get_active_workspace_id()
@@ -9867,6 +9968,7 @@ def api_get_loop_duplicates(loop_id):
 @app.route('/api/loops/<int:loop_id>/cleanup', methods=['POST'])
 @login_required
 @require_active_workspace
+@require_workspace_loops_admin
 def api_cleanup_loop_duplicates(loop_id):
     """Delete all duplicates created by a loop from PropertyFinder"""
     ws_id = get_active_workspace_id()
@@ -9914,7 +10016,7 @@ def api_listings_summary():
     """Get summary of all listings for dropdown selection"""
     try:
         ws_id = get_active_workspace_id()
-        listings = LocalListing.query.filter_by(workspace_id=ws_id).order_by(LocalListing.reference).all()
+        listings = visible_local_listing_query(ws_id).order_by(LocalListing.reference).all()
         
         result = []
         for l in listings:
@@ -9953,7 +10055,7 @@ def api_listings_summary():
 def api_get_listing_images(listing_id):
     """Get images for a listing"""
     ws_id = get_active_workspace_id()
-    listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first_or_404()
+    listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first_or_404()
     
     images = []
     if listing.images:
@@ -9976,7 +10078,7 @@ def api_get_listing_images(listing_id):
 def api_get_listing_original_images(listing_id):
     """Get original images for a listing (for reprocessing)"""
     ws_id = get_active_workspace_id()
-    listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first_or_404()
+    listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first_or_404()
     originals = listing._parse_original_images()
     return jsonify({
         'listing_id': listing_id,
@@ -9995,7 +10097,7 @@ def api_assign_images_to_listing(listing_id):
     import uuid
     
     ws_id = get_active_workspace_id()
-    listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first_or_404()
+    listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first_or_404()
     data = request.json
     
     if not data or 'images' not in data:
@@ -10123,7 +10225,7 @@ def api_assign_images_to_listing(listing_id):
 def api_delete_listing_images(listing_id):
     """Delete images from a listing"""
     ws_id = get_active_workspace_id()
-    listing = LocalListing.query.filter_by(id=listing_id, workspace_id=ws_id).first_or_404()
+    listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first_or_404()
     data = request.json
     
     images_to_delete = data.get('images', [])  # List of image paths to delete

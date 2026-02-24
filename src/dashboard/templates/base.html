@@ -54,10 +54,12 @@
                         <i class="fas fa-image w-8"></i>
                         <span x-show="sidebarOpen">Image Editor</span>
                     </a>
+                    {% if (current_workspace and current_user and current_workspace.is_admin(current_user.id)) or is_system_admin %}
                     <a href="{{ url_for('workspace_loops', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_loops' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-sync-alt w-8"></i>
                         <span x-show="sidebarOpen">Loops</span>
                     </a>
+                    {% endif %}
                     <a href="{{ url_for('workspace_insights', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_insights' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-chart-line w-8"></i>
                         <span x-show="sidebarOpen">Insights</span>

@@ -1,0 +1,5 @@
+providers = ["python"]
+
+# We commit compiled Tailwind CSS (`src/dashboard/static/css/app.css`), so
+# Railway does not need to run the Node provider even though `package.json`
+# exists for local frontend tooling.
