@@ -1398,16 +1398,47 @@ def permission_required(permission):
                 session.clear()
                 flash('Your session has expired. Please log in again.', 'warning')
                 return redirect(url_for('login'))
-            
+
             if is_system_admin(user):
                 g.user = user
                 return f(*args, **kwargs)
-            
-            if not user.has_permission(permission):
+
+            g.user = user
+
+            # In workspace context, use workspace role/module permissions only.
+            ws = None
+            try:
+                ws = get_active_workspace()
+            except Exception:
+                ws = None
+
+            if ws:
+                module_action_map = {
+                    'view': ('listings', 'read'),
+                    'create': ('listings', 'create'),
+                    'edit': ('listings', 'edit'),
+                    'delete': ('listings', 'delete'),
+                    'publish': ('listings', 'publish'),
+                    'bulk_upload': ('listings', 'bulk'),
+                    'manage_leads': ('leads', 'read'),
+                    'manage_users': ('users', 'read'),
+                    'settings': ('settings', 'edit'),
+                }
+                module_action = module_action_map.get(permission)
+                if module_action:
+                    from src.services.permissions import get_permission_service
+                    service = get_permission_service()
+                    module, action = module_action
+                    if not service.check_module_access(user, ws.id, module, action):
+                        flash('You do not have permission to access this feature.', 'error')
+                        return redirect(url_for('workspace_dashboard', workspace_slug=ws.slug))
+                else:
+                    flash('You do not have permission to access this feature.', 'error')
+                    return redirect(url_for('workspace_dashboard', workspace_slug=ws.slug))
+            elif not user.has_permission(permission):
                 flash(f'You do not have permission to access this feature.', 'error')
                 return redirect(url_for('index'))
-            
-            g.user = user
+
             return f(*args, **kwargs)
         return decorated_function
     return decorator
@@ -1653,6 +1684,70 @@ def visible_local_listing_query(workspace_id=None, user=None):
     return query.filter(LocalListing.assigned_to_id == user.id)
 
 
+def require_workspace_listing_admin(f):
+    """Decorator: listing organization actions are admin-only within a workspace."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        ws_id = get_active_workspace_id()
+        if workspace_user_can_manage_all_listings(workspace_id=ws_id):
+            return f(*args, **kwargs)
+
+        message = 'This action is available to workspace admins only.'
+        if request.path.startswith('/api/'):
+            return jsonify({'success': False, 'error': message}), 403
+
+        flash(message, 'error')
+        ws = get_active_workspace()
+        if ws:
+            return redirect(url_for('workspace_dashboard', workspace_slug=ws.slug))
+        return redirect(url_for('index'))
+    return decorated
+
+
+def workspace_user_can_manage_all_leads(user=None, workspace_id=None):
+    """Lead visibility/admin actions follow the same role rules as listings."""
+    return workspace_user_can_manage_all_listings(user=user, workspace_id=workspace_id)
+
+
+def visible_lead_query(workspace_id=None, user=None):
+    """Lead query scoped to workspace and current user's row-level visibility."""
+    ws_id = workspace_id or get_active_workspace_id()
+    query = scope_query(Lead.query, ws_id)
+    user = user or getattr(g, 'user', None)
+    if not user:
+        return query.filter(Lead.id == -1)
+    if workspace_user_can_manage_all_leads(user=user, workspace_id=ws_id):
+        return query
+    # Non-admin workspace users only see leads assigned to them.
+    return query.filter(Lead.assigned_to_id == user.id)
+
+
+def get_visible_lead_or_404(lead_id, workspace_id=None, user=None):
+    """Fetch a lead through visibility rules (404 if hidden/missing)."""
+    ws_id = workspace_id or get_active_workspace_id()
+    return visible_lead_query(workspace_id=ws_id, user=user).filter_by(id=lead_id).first_or_404()
+
+
+def require_workspace_leads_admin(f):
+    """Decorator: lead maintenance/sync actions are admin-only."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        ws_id = get_active_workspace_id()
+        if workspace_user_can_manage_all_leads(workspace_id=ws_id):
+            return f(*args, **kwargs)
+
+        message = 'This lead action is available to workspace admins only.'
+        if request.path.startswith('/api/'):
+            return jsonify({'success': False, 'error': message}), 403
+
+        flash(message, 'error')
+        ws = get_active_workspace()
+        if ws:
+            return redirect(url_for('workspace_leads', workspace_slug=ws.slug))
+        return redirect(url_for('index'))
+    return decorated
+
+
 def workspace_user_can_manage_loops(user=None, workspace_id=None):
     """Loops are restricted to workspace admins/owners (and system admins)."""
     return workspace_user_can_manage_all_listings(user=user, workspace_id=workspace_id)
@@ -1764,6 +1859,77 @@ def _normalize_upload_path(path):
     if path.startswith('/'):
         path = path.lstrip('/')
     return path or None
+
+
+USER_IMAGE_SETTING_DEFAULTS = {
+    'image_default_ratio': 'landscape_16_9',
+    'image_default_size': 'full_hd',
+    'image_quality': '90',
+    'image_format': 'JPEG',
+    'image_qr_enabled': 'false',
+    'image_default_qr_data': '',
+    'image_qr_data': '',
+    'image_qr_position': 'bottom_right',
+    'image_qr_size_percent': '12',
+    'image_qr_color': '#000000',
+    'image_logo_enabled': 'false',
+    'image_logo_position': 'bottom_left',
+    'image_logo_size': '15',
+    'image_logo_opacity': '80',
+    'image_default_logo': '',
+}
+
+
+def _resolve_image_settings_scope(workspace_id=None, user_id=None):
+    ws_id = workspace_id if workspace_id is not None else get_active_workspace_id()
+    if user_id is None:
+        user = getattr(g, 'user', None)
+        user_id = user.id if user else None
+    return ws_id, user_id
+
+
+def _user_image_setting_key(key, user_id):
+    return f'user_image:{user_id}:{key}'
+
+
+def get_user_image_setting(key, default=None, workspace_id=None, user_id=None):
+    """Read image editor preference stored per-user-per-workspace."""
+    ws_id, resolved_user_id = _resolve_image_settings_scope(workspace_id=workspace_id, user_id=user_id)
+    fallback = USER_IMAGE_SETTING_DEFAULTS.get(key, '')
+    if default is not None:
+        fallback = default
+    if not resolved_user_id:
+        return fallback
+    return AppSettings.get(_user_image_setting_key(key, resolved_user_id), fallback, workspace_id=ws_id)
+
+
+def set_user_image_setting(key, value, workspace_id=None, user_id=None):
+    """Persist image editor preference per-user-per-workspace."""
+    ws_id, resolved_user_id = _resolve_image_settings_scope(workspace_id=workspace_id, user_id=user_id)
+    if not resolved_user_id:
+        return None
+    return AppSettings.set(_user_image_setting_key(key, resolved_user_id), value, workspace_id=ws_id)
+
+
+def get_all_user_image_settings(workspace_id=None, user_id=None):
+    """Return normalized image editor settings for the current user/workspace."""
+    ws_id, resolved_user_id = _resolve_image_settings_scope(workspace_id=workspace_id, user_id=user_id)
+    return {
+        'image_default_ratio': get_user_image_setting('image_default_ratio', workspace_id=ws_id, user_id=resolved_user_id),
+        'image_default_size': get_user_image_setting('image_default_size', workspace_id=ws_id, user_id=resolved_user_id),
+        'image_quality': get_user_image_setting('image_quality', workspace_id=ws_id, user_id=resolved_user_id),
+        'image_format': get_user_image_setting('image_format', workspace_id=ws_id, user_id=resolved_user_id),
+        'image_qr_enabled': get_user_image_setting('image_qr_enabled', workspace_id=ws_id, user_id=resolved_user_id),
+        'image_qr_data': get_user_image_setting('image_default_qr_data', workspace_id=ws_id, user_id=resolved_user_id),
+        'image_qr_position': get_user_image_setting('image_qr_position', workspace_id=ws_id, user_id=resolved_user_id),
+        'image_qr_size_percent': get_user_image_setting('image_qr_size_percent', workspace_id=ws_id, user_id=resolved_user_id),
+        'image_qr_color': get_user_image_setting('image_qr_color', workspace_id=ws_id, user_id=resolved_user_id),
+        'image_logo_enabled': get_user_image_setting('image_logo_enabled', workspace_id=ws_id, user_id=resolved_user_id),
+        'image_logo_position': get_user_image_setting('image_logo_position', workspace_id=ws_id, user_id=resolved_user_id),
+        'image_logo_size': get_user_image_setting('image_logo_size', workspace_id=ws_id, user_id=resolved_user_id),
+        'image_logo_opacity': get_user_image_setting('image_logo_opacity', workspace_id=ws_id, user_id=resolved_user_id),
+        'image_default_logo': get_user_image_setting('image_default_logo', workspace_id=ws_id, user_id=resolved_user_id),
+    }
 
 
 def _load_original_images_raw(listing):
@@ -2884,16 +3050,28 @@ def users_page():
     memberships = WorkspaceMember.query.filter_by(workspace_id=ws_id).all()
     user_ids = [m.user_id for m in memberships]
     users = User.query.filter(User.id.in_(user_ids)).order_by(User.created_at.desc()).all()
+    membership_by_user_id = {m.user_id: m for m in memberships}
+    user_payloads = []
+    for u in users:
+        data = u.to_dict()
+        member = membership_by_user_id.get(u.id)
+        if member:
+            data['workspace_member_id'] = member.id
+            data['workspace_role'] = member.role
+            data['workspace_role_name'] = WorkspaceMember.ROLES.get(member.role, {}).get('name', member.role.title())
+        user_payloads.append(data)
     pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
     workspace = Workspace.query.get(ws_id)
     can_manage_members = can_manage_workspace_members(g.user, ws_id)
     return render_template('users.html', 
-                           users=[u.to_dict() for u in users],
+                           users=user_payloads,
                            roles=User.ROLES,
+                           workspace_member_roles=WorkspaceMember.ROLES,
                            all_permissions=User.ALL_PERMISSIONS,
                            pf_users=pf_users,
                            workspace=workspace.to_dict() if workspace else None,
                            workspace_memberships={m.user_id: m for m in memberships},
+                           workspace_memberships_json={m.user_id: m.to_dict() for m in memberships},
                            can_manage_members=can_manage_members)
 
 
@@ -2901,6 +3079,11 @@ def users_page():
 @permission_required('manage_users')
 def create_user():
     """Create a new user"""
+    ws = get_active_workspace()
+    if ws:
+        flash('Use workspace invites and membership management from the Workspace Users page.', 'error')
+        return redirect(url_for('workspace_users', workspace_slug=ws.slug))
+
     email = request.form.get('email', '').strip().lower()
     name = request.form.get('name', '').strip()
     password = request.form.get('password', '')
@@ -2953,6 +3136,11 @@ def create_user():
 @permission_required('manage_users')
 def edit_user(user_id):
     """Edit a user"""
+    ws = get_active_workspace()
+    if ws:
+        flash('Use workspace membership management from the Workspace Users page.', 'error')
+        return redirect(url_for('workspace_users', workspace_slug=ws.slug))
+
     user = User.query.get_or_404(user_id)
     
     # Prevent editing the last admin
@@ -2989,6 +3177,11 @@ def edit_user(user_id):
 @permission_required('manage_users')
 def delete_user(user_id):
     """Delete a user"""
+    ws = get_active_workspace()
+    if ws:
+        flash('Remove users from the workspace from the Workspace Users page instead of deleting the account.', 'error')
+        return redirect(url_for('workspace_users', workspace_slug=ws.slug))
+
     user = User.query.get_or_404(user_id)
     
     # Prevent self-deletion
@@ -3377,22 +3570,7 @@ def workspace_insights(workspace_slug):
 def workspace_image_editor(workspace_slug):
     """Workspace-scoped image editor"""
     ws_id = g.workspace.id if g.workspace else get_active_workspace_id()
-    settings = {
-        'image_default_ratio': AppSettings.get('image_default_ratio', '', workspace_id=ws_id),
-        'image_default_size': AppSettings.get('image_default_size', 'full_hd', workspace_id=ws_id),
-        'image_quality': AppSettings.get('image_quality', '90', workspace_id=ws_id),
-        'image_format': AppSettings.get('image_format', 'JPEG', workspace_id=ws_id),
-        'image_qr_enabled': AppSettings.get('image_qr_enabled', 'false', workspace_id=ws_id),
-        'image_qr_data': AppSettings.get('image_default_qr_data', '', workspace_id=ws_id),
-        'image_qr_position': AppSettings.get('image_qr_position', 'bottom_right', workspace_id=ws_id),
-        'image_qr_size_percent': AppSettings.get('image_qr_size_percent', '12', workspace_id=ws_id),
-        'image_qr_color': AppSettings.get('image_qr_color', '#000000', workspace_id=ws_id),
-        'image_logo_enabled': AppSettings.get('image_logo_enabled', 'false', workspace_id=ws_id),
-        'image_logo_position': AppSettings.get('image_logo_position', 'bottom_left', workspace_id=ws_id),
-        'image_logo_size': AppSettings.get('image_logo_size', '15', workspace_id=ws_id),
-        'image_logo_opacity': AppSettings.get('image_logo_opacity', '80', workspace_id=ws_id),
-        'image_default_logo': AppSettings.get('image_default_logo', '', workspace_id=ws_id),
-    }
+    settings = get_all_user_image_settings(workspace_id=ws_id)
     return render_template('image_editor.html', settings=settings)
 
 
@@ -3427,17 +3605,29 @@ def workspace_users(workspace_slug):
     memberships, _ = _filter_workspace_memberships_for_org(memberships_all)
     user_ids = [m.user_id for m in memberships]
     users = User.query.filter(User.id.in_(user_ids)).order_by(User.created_at.desc()).all() if user_ids else []
+    membership_by_user_id = {m.user_id: m for m in memberships}
+    user_payloads = []
+    for u in users:
+        data = u.to_dict()
+        member = membership_by_user_id.get(u.id)
+        if member:
+            data['workspace_member_id'] = member.id
+            data['workspace_role'] = member.role
+            data['workspace_role_name'] = WorkspaceMember.ROLES.get(member.role, {}).get('name', member.role.title())
+        user_payloads.append(data)
     pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
     workspace = Workspace.query.get(ws_id)
     can_manage_members = can_manage_workspace_members(g.user, ws_id)
 
     return render_template('users.html',
-                           users=[u.to_dict() for u in users],
+                           users=user_payloads,
                            roles=User.ROLES,
+                           workspace_member_roles=WorkspaceMember.ROLES,
                            all_permissions=User.ALL_PERMISSIONS,
                            pf_users=pf_users,
                            workspace=workspace.to_dict() if workspace else None,
                            workspace_memberships={m.user_id: m for m in memberships},
+                           workspace_memberships_json={m.user_id: m.to_dict() for m in memberships},
                            can_manage_members=can_manage_members)
 
 
@@ -4639,7 +4829,9 @@ def listings():
     """List all listings page - uses local database"""
     ws_id = get_active_workspace_id()
     if ws_id:
-        return redirect(url_for('workspace_listings', workspace_slug=get_active_workspace().slug))
+        ws = get_active_workspace()
+        query_args = request.args.to_dict(flat=True)
+        return redirect(url_for('workspace_listings', workspace_slug=ws.slug, **query_args))
     if not ws_id and is_system_admin(g.user):
         flash('Select a workspace to continue.', 'warning')
         return redirect(url_for('system_admin_page'))
@@ -4734,8 +4926,18 @@ def _render_listings_page(workspace_id):
     
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     
-    # Get all folders for sidebar
-    folders = ListingFolder.get_all_with_counts(workspace_id=workspace_id)
+    # Get folders for sidebar (counts are visibility-aware for non-admins)
+    if workspace_user_can_manage_all_listings(workspace_id=workspace_id):
+        folders = ListingFolder.get_all_with_counts(workspace_id=workspace_id)
+    else:
+        visible_counts = {}
+        for listing in visible_local_listing_query(workspace_id).all():
+            visible_counts[listing.folder_id] = visible_counts.get(listing.folder_id, 0) + 1
+        folders = []
+        for folder in ListingFolder.query.filter_by(workspace_id=workspace_id).order_by(ListingFolder.name).all():
+            data = folder.to_dict()
+            data['listing_count'] = visible_counts.get(folder.id, 0)
+            folders.append(data)
     current_folder = None
     if folder_id:
         current_folder = ListingFolder.query.filter_by(id=folder_id, workspace_id=workspace_id).first()
@@ -4747,6 +4949,29 @@ def _render_listings_page(workspace_id):
     duplicates_count = 0
     if duplicated_folder:
         duplicates_count = visible_local_listing_query(workspace_id).filter_by(folder_id=duplicated_folder.id).count()
+
+    folder_nav_urls = None
+    active_workspace = getattr(g, 'workspace', None) or get_active_workspace()
+    if active_workspace:
+        base_query_args = request.args.to_dict(flat=True)
+        base_query_args.pop('page', None)  # reset pagination when changing folder filter
+        base_query_args.pop('folder_id', None)
+        folder_nav_urls = {
+            'all': url_for('workspace_listings', workspace_slug=active_workspace.slug, **base_query_args),
+            'clear': url_for('workspace_listings', workspace_slug=active_workspace.slug, **base_query_args),
+            'uncategorized': url_for('workspace_listings', workspace_slug=active_workspace.slug, folder_id=0, **base_query_args),
+            'folders': {}
+        }
+        for folder in folders:
+            folder_id_value = folder.get('id') if isinstance(folder, dict) else getattr(folder, 'id', None)
+            if folder_id_value is None:
+                continue
+            folder_nav_urls['folders'][folder_id_value] = url_for(
+                'workspace_listings',
+                workspace_slug=active_workspace.slug,
+                folder_id=folder_id_value,
+                **base_query_args
+            )
     
     return render_template('listings.html', 
                          listings=[l.to_dict() for l in pagination.items],
@@ -4771,6 +4996,7 @@ def _render_listings_page(workspace_id):
                          search=search,
                          status=status or '',
                          assigned_to_id=assigned_to_filter or '',
+                         folder_nav_urls=folder_nav_urls,
                          current_user_id=g.user.id if g.user else None,
                          workspace_members=[
                              m.user.to_dict() for m in WorkspaceMember.query.filter_by(workspace_id=workspace_id).all()
@@ -6905,6 +7131,51 @@ def api_local_bulk_create():
     })
 
 
+@app.route('/api/local/listings/bulk-update', methods=['POST'])
+@login_required
+@require_active_workspace
+def api_local_bulk_update():
+    """Bulk update local listings (admin-only; currently supports reassignment)."""
+    ws_id = get_active_workspace_id()
+    if not workspace_user_can_manage_all_listings(workspace_id=ws_id):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+
+    data = request.get_json() or {}
+    listing_ids = data.get('ids') or []
+    if not listing_ids or not isinstance(listing_ids, list):
+        return jsonify({'success': False, 'error': 'No listings selected'}), 400
+
+    updates = {}
+    if 'assigned_to_id' in data:
+        raw_assignee = data.get('assigned_to_id')
+        if raw_assignee in ('null', None):
+            updates['assigned_to_id'] = None
+        else:
+            assigned_to_id = _validate_assignee(ws_id, raw_assignee)
+            if not assigned_to_id:
+                return jsonify({'success': False, 'error': 'Assigned user must be in this workspace'}), 400
+            updates['assigned_to_id'] = assigned_to_id
+
+    if not updates:
+        return jsonify({'success': False, 'error': 'No updates provided'}), 400
+
+    # Apply only to visible listings; admins can see all workspace listings.
+    visible_listings = visible_local_listing_query(ws_id).filter(LocalListing.id.in_(listing_ids)).all()
+    updated = 0
+    for listing in visible_listings:
+        for field, value in updates.items():
+            setattr(listing, field, value)
+        listing.updated_at = datetime.utcnow()
+        updated += 1
+
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'updated': updated,
+        'message': f'Updated {updated} listing(s)'
+    })
+
+
 @app.route('/api/local/stats', methods=['GET'])
 @login_required
 @require_active_workspace
@@ -7044,11 +7315,12 @@ def api_get_leads_config():
 @app.route('/api/leads/config', methods=['POST'])
 @login_required
 @require_active_workspace
+@require_workspace_leads_admin
 def api_update_leads_config():
     """Update lead configuration (statuses, sources)"""
     import json
-    data = request.get_json()
     ws_id = get_active_workspace_id()
+    data = request.get_json() or {}
     
     if 'statuses' in data:
         AppSettings.set('lead_statuses', json.dumps(data['statuses']), workspace_id=ws_id)
@@ -7073,16 +7345,7 @@ def api_get_leads():
     
     # Use joinedload to prevent N+1 query problem (each lead would query user separately)
     ws_id = get_active_workspace_id()
-    query = scope_query(
-        Lead.query.options(joinedload(Lead.assigned_to)).order_by(Lead.created_at.desc()),
-        ws_id
-    )
-    
-    # Filter by assignment for non-admin users
-    if g.user.role != 'admin':
-        # Non-admins only see leads assigned to them
-        query = query.filter(Lead.assigned_to_id == g.user.id)
-    
+    query = visible_lead_query(ws_id).options(joinedload(Lead.assigned_to)).order_by(Lead.created_at.desc())
     leads = query.all()
     return jsonify({'leads': [l.to_dict() for l in leads]})
 
@@ -7092,8 +7355,16 @@ def api_get_leads():
 @require_active_workspace
 def api_create_lead():
     """Create a new lead"""
-    data = request.get_json()
+    data = request.get_json() or {}
     ws_id = get_active_workspace_id()
+    can_manage_all = workspace_user_can_manage_all_leads(workspace_id=ws_id)
+    assigned_to_id = None
+    if can_manage_all:
+        assigned_to_id = _validate_assignee(ws_id, data.get('assigned_to_id'))
+        if data.get('assigned_to_id') and not assigned_to_id:
+            return jsonify({'success': False, 'error': 'Assigned user must be in this workspace'}), 400
+    else:
+        assigned_to_id = g.user.id
     
     lead = Lead(
         workspace_id=ws_id,
@@ -7106,7 +7377,7 @@ def api_create_lead():
         listing_reference=data.get('listing_reference'),
         priority=data.get('priority', 'medium'),
         status=data.get('status', 'new'),
-        assigned_to_id=data.get('assigned_to_id') or None
+        assigned_to_id=assigned_to_id
     )
     
     # Set lead_type if the column exists
@@ -7125,7 +7396,7 @@ def api_create_lead():
 def api_get_lead(lead_id):
     """Get a single lead"""
     ws_id = get_active_workspace_id()
-    lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first_or_404()
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
     return jsonify({'lead': lead.to_dict()})
 
 
@@ -7135,11 +7406,28 @@ def api_get_lead(lead_id):
 def api_update_lead(lead_id):
     """Update a lead"""
     ws_id = get_active_workspace_id()
-    lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first_or_404()
-    data = request.get_json()
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    data = request.get_json() or {}
+    can_manage_all = workspace_user_can_manage_all_leads(workspace_id=ws_id)
+
+    if 'assigned_to_id' in data:
+        if can_manage_all:
+            assigned_to_id = _validate_assignee(ws_id, data.get('assigned_to_id'))
+            if data.get('assigned_to_id') and not assigned_to_id:
+                return jsonify({'success': False, 'error': 'Assigned user must be in this workspace'}), 400
+            lead.assigned_to_id = assigned_to_id
+        else:
+            requested_assignee = data.get('assigned_to_id')
+            try:
+                requested_assignee_int = int(requested_assignee) if requested_assignee not in (None, '', 'null') else None
+            except (TypeError, ValueError):
+                requested_assignee_int = None
+            if requested_assignee_int != g.user.id:
+                return jsonify({'success': False, 'error': 'You cannot reassign leads'}), 403
+            lead.assigned_to_id = g.user.id
     
     for field in ['name', 'email', 'phone', 'whatsapp', 'source', 'message', 
-                  'listing_reference', 'status', 'priority', 'lead_type', 'notes', 'assigned_to_id']:
+                  'listing_reference', 'status', 'priority', 'lead_type', 'notes']:
         if field in data:
             setattr(lead, field, data[field])
     
@@ -7156,7 +7444,7 @@ def api_update_lead(lead_id):
 def api_delete_lead(lead_id):
     """Delete a lead"""
     ws_id = get_active_workspace_id()
-    lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first_or_404()
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
     db.session.delete(lead)
     db.session.commit()
     return jsonify({'success': True})
@@ -7167,19 +7455,18 @@ def api_delete_lead(lead_id):
 @require_active_workspace
 def api_bulk_delete_leads():
     """Delete multiple leads at once"""
-    data = request.get_json()
+    data = request.get_json() or {}
     lead_ids = data.get('ids', [])
     
     if not lead_ids:
         return jsonify({'success': False, 'error': 'No leads selected'}), 400
     
     ws_id = get_active_workspace_id()
+    visible_leads = visible_lead_query(ws_id).filter(Lead.id.in_(lead_ids)).all()
     deleted = 0
-    for lead_id in lead_ids:
-        lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first()
-        if lead:
-            db.session.delete(lead)
-            deleted += 1
+    for lead in visible_leads:
+        db.session.delete(lead)
+        deleted += 1
     
     db.session.commit()
     return jsonify({'success': True, 'deleted': deleted})
@@ -7190,31 +7477,42 @@ def api_bulk_delete_leads():
 @require_active_workspace
 def api_bulk_update_leads():
     """Bulk update status, source, or assigned person for multiple leads"""
-    data = request.get_json()
+    data = request.get_json() or {}
     lead_ids = data.get('ids', [])
     
     if not lead_ids:
         return jsonify({'success': False, 'error': 'No leads selected'}), 400
     
+    ws_id = get_active_workspace_id()
+    can_manage_all = workspace_user_can_manage_all_leads(workspace_id=ws_id)
     updates = {}
     if 'status' in data and data['status']:
         updates['status'] = data['status']
     if 'source' in data and data['source']:
         updates['source'] = data['source']
     if 'assigned_to_id' in data:
-        updates['assigned_to_id'] = data['assigned_to_id'] if data['assigned_to_id'] else None
+        if not can_manage_all:
+            return jsonify({'success': False, 'error': 'You cannot bulk reassign leads'}), 403
+        raw_assignee = data.get('assigned_to_id')
+        if raw_assignee == '':
+            pass  # no change
+        elif raw_assignee in ('null', None):
+            updates['assigned_to_id'] = None
+        else:
+            assigned_to_id = _validate_assignee(ws_id, raw_assignee)
+            if not assigned_to_id:
+                return jsonify({'success': False, 'error': 'Assigned user must be in this workspace'}), 400
+            updates['assigned_to_id'] = assigned_to_id
     
     if not updates:
         return jsonify({'success': False, 'error': 'No updates provided'}), 400
     
-    ws_id = get_active_workspace_id()
     updated = 0
-    for lead_id in lead_ids:
-        lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first()
-        if lead:
-            for field, value in updates.items():
-                setattr(lead, field, value)
-            updated += 1
+    visible_leads = visible_lead_query(ws_id).filter(Lead.id.in_(lead_ids)).all()
+    for lead in visible_leads:
+        for field, value in updates.items():
+            setattr(lead, field, value)
+        updated += 1
     
     db.session.commit()
     return jsonify({'success': True, 'updated': updated})
@@ -7223,6 +7521,7 @@ def api_bulk_update_leads():
 @app.route('/api/leads/cleanup-sources', methods=['POST'])
 @login_required
 @require_active_workspace
+@require_workspace_leads_admin
 def api_cleanup_lead_sources():
     """Fix leads with invalid source IDs (like source_12345...) by setting them to 'other'"""
     import json
@@ -7242,7 +7541,7 @@ def api_cleanup_lead_sources():
     
     # Find and fix leads with invalid sources
     fixed = 0
-    leads = Lead.query.filter_by(workspace_id=ws_id).all()
+    leads = scope_query(Lead.query, ws_id).all()
     for lead in leads:
         if lead.source and lead.source not in valid_source_ids:
             lead.source = 'other'
@@ -7258,11 +7557,14 @@ def api_cleanup_lead_sources():
 def api_get_lead_comments(lead_id):
     """Get all comments for a lead"""
     try:
+        from werkzeug.exceptions import HTTPException
         ws_id = get_active_workspace_id()
-        lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first_or_404()
+        lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
         comments = LeadComment.query.filter_by(lead_id=lead_id).order_by(LeadComment.created_at.desc()).all()
         return jsonify({'comments': [c.to_dict() for c in comments]})
-    except Exception as e:
+    except HTTPException:
+        raise
+    except Exception:
         # Table might not exist yet
         return jsonify({'comments': []})
 
@@ -7273,8 +7575,8 @@ def api_get_lead_comments(lead_id):
 def api_add_lead_comment(lead_id):
     """Add a comment to a lead"""
     ws_id = get_active_workspace_id()
-    lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first_or_404()
-    data = request.get_json()
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    data = request.get_json() or {}
     
     content = data.get('content', '').strip()
     if not content:
@@ -7297,11 +7599,11 @@ def api_add_lead_comment(lead_id):
 def api_delete_lead_comment(lead_id, comment_id):
     """Delete a comment from a lead"""
     ws_id = get_active_workspace_id()
-    Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first_or_404()
+    get_visible_lead_or_404(lead_id, workspace_id=ws_id)
     comment = LeadComment.query.filter_by(id=comment_id, lead_id=lead_id).first_or_404()
     
     # Only allow deletion by comment author or admin
-    if comment.user_id != g.user.id and g.user.role != 'admin':
+    if comment.user_id != g.user.id and not workspace_user_can_manage_all_leads(workspace_id=ws_id):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     db.session.delete(comment)
@@ -7313,6 +7615,7 @@ def api_delete_lead_comment(lead_id, comment_id):
 @app.route('/api/leads/refresh-agents', methods=['POST'])
 @login_required
 @require_active_workspace
+@require_workspace_leads_admin
 def api_refresh_lead_agents():
     """Refresh agent names for all PF leads based on listing's assignedTo"""
     ws_id = get_active_workspace_id()
@@ -7366,6 +7669,7 @@ def api_refresh_lead_agents():
 @app.route('/api/leads/auto-assign', methods=['POST'])
 @login_required
 @require_active_workspace
+@require_workspace_leads_admin
 def api_auto_assign_leads():
     """Auto-assign unassigned leads to L-Manager users based on PF agent email matching.
     
@@ -7373,9 +7677,6 @@ def api_auto_assign_leads():
     finds the PF agent's email, and assigns the lead to the L-Manager user with
     the matching email.
     """
-    if g.user.role != 'admin':
-        return jsonify({'success': False, 'error': 'Admin only'}), 403
-    
     ws_id = get_active_workspace_id()
     # Get PF users to map agent ID to email
     pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
@@ -7430,6 +7731,7 @@ def api_auto_assign_leads():
 @app.route('/api/leads/sync-pf', methods=['POST'])
 @login_required
 @require_active_workspace
+@require_workspace_leads_admin
 def api_sync_leads_from_pf():
     """Sync leads from PropertyFinder"""
     from dateutil import parser as date_parser
@@ -7615,7 +7917,7 @@ def api_get_contacts():
 @require_active_workspace
 def api_create_contact():
     """Create a new contact"""
-    data = request.get_json()
+    data = request.get_json() or {}
     ws_id = get_active_workspace_id()
     
     # Validate required fields
@@ -7634,7 +7936,7 @@ def api_create_contact():
         full_phone = country_code + phone.lstrip('0')
     
     if data.get('lead_id'):
-        lead = Lead.query.filter_by(id=data.get('lead_id'), workspace_id=ws_id).first()
+        lead = visible_lead_query(ws_id).filter_by(id=data.get('lead_id')).first()
         if not lead:
             return jsonify({'error': 'Lead not found'}), 404
     
@@ -7717,8 +8019,9 @@ def api_delete_contact(contact_id):
 def api_create_contact_from_lead(lead_id):
     """Create a contact from an existing lead"""
     try:
+        from werkzeug.exceptions import HTTPException
         ws_id = get_active_workspace_id()
-        lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first_or_404()
+        lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
         
         # Check if contact already exists with same phone
         phone = lead.phone or lead.whatsapp or ''
@@ -7761,6 +8064,8 @@ def api_create_contact_from_lead(lead_id):
         db.session.commit()
         
         return jsonify({'success': True, 'contact': contact.to_dict()})
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"[ERROR] Failed to create contact from lead: {e}")
         import traceback
@@ -8873,22 +9178,7 @@ def image_editor():
         return redirect(url_for('workspace_image_editor', workspace_slug=ws.slug))
     # Get all image settings
     ws_id = get_active_workspace_id()
-    settings = {
-        'image_default_ratio': AppSettings.get('image_default_ratio', '', workspace_id=ws_id),
-        'image_default_size': AppSettings.get('image_default_size', 'full_hd', workspace_id=ws_id),
-        'image_quality': AppSettings.get('image_quality', '90', workspace_id=ws_id),
-        'image_format': AppSettings.get('image_format', 'JPEG', workspace_id=ws_id),
-        'image_qr_enabled': AppSettings.get('image_qr_enabled', 'false', workspace_id=ws_id),
-        'image_qr_data': AppSettings.get('image_default_qr_data', '', workspace_id=ws_id),
-        'image_qr_position': AppSettings.get('image_qr_position', 'bottom_right', workspace_id=ws_id),
-        'image_qr_size_percent': AppSettings.get('image_qr_size_percent', '12', workspace_id=ws_id),
-        'image_qr_color': AppSettings.get('image_qr_color', '#000000', workspace_id=ws_id),
-        'image_logo_enabled': AppSettings.get('image_logo_enabled', 'false', workspace_id=ws_id),
-        'image_logo_position': AppSettings.get('image_logo_position', 'bottom_left', workspace_id=ws_id),
-        'image_logo_size': AppSettings.get('image_logo_size', '15', workspace_id=ws_id),
-        'image_logo_opacity': AppSettings.get('image_logo_opacity', '80', workspace_id=ws_id),
-        'image_default_logo': AppSettings.get('image_default_logo', '', workspace_id=ws_id),
-    }
+    settings = get_all_user_image_settings(workspace_id=ws_id)
     return render_template('image_editor.html', settings=settings)
 
 
@@ -8899,43 +9189,43 @@ def api_get_image_settings():
     """Get image processing settings"""
     ws_id = get_active_workspace_id()
     settings = {
-        'default_logo': AppSettings.get('image_default_logo', workspace_id=ws_id),
-        'default_qr_data': AppSettings.get('image_default_qr_data', workspace_id=ws_id),
-        'default_ratio': AppSettings.get('image_default_ratio', '16:9', workspace_id=ws_id),
-        'qr_position': AppSettings.get('image_qr_position', 'bottom-right', workspace_id=ws_id),
-        'qr_size_percent': int(AppSettings.get('image_qr_size_percent', '15', workspace_id=ws_id)),
-        'logo_position': AppSettings.get('image_logo_position', 'bottom-left', workspace_id=ws_id),
-        'logo_opacity': int(AppSettings.get('image_logo_opacity', '80', workspace_id=ws_id))
+        'default_logo': get_user_image_setting('image_default_logo', workspace_id=ws_id),
+        'default_qr_data': get_user_image_setting('image_default_qr_data', workspace_id=ws_id),
+        'default_ratio': get_user_image_setting('image_default_ratio', '16:9', workspace_id=ws_id),
+        'qr_position': get_user_image_setting('image_qr_position', 'bottom-right', workspace_id=ws_id),
+        'qr_size_percent': int(get_user_image_setting('image_qr_size_percent', '15', workspace_id=ws_id) or 15),
+        'logo_position': get_user_image_setting('image_logo_position', 'bottom-left', workspace_id=ws_id),
+        'logo_opacity': int(get_user_image_setting('image_logo_opacity', '80', workspace_id=ws_id) or 80)
     }
     return jsonify(settings)
 
 
 @app.route('/api/images/settings', methods=['POST'])
-@permission_required('settings')
+@login_required
 @require_active_workspace
 def api_save_image_settings():
     """Save image processing settings"""
-    data = request.json
+    data = request.get_json(silent=True) or {}
     ws_id = get_active_workspace_id()
     
     if 'default_qr_data' in data:
-        AppSettings.set('image_default_qr_data', data['default_qr_data'], workspace_id=ws_id)
+        set_user_image_setting('image_default_qr_data', data['default_qr_data'], workspace_id=ws_id)
     if 'default_ratio' in data:
-        AppSettings.set('image_default_ratio', data['default_ratio'], workspace_id=ws_id)
+        set_user_image_setting('image_default_ratio', data['default_ratio'], workspace_id=ws_id)
     if 'qr_position' in data:
-        AppSettings.set('image_qr_position', data['qr_position'], workspace_id=ws_id)
+        set_user_image_setting('image_qr_position', data['qr_position'], workspace_id=ws_id)
     if 'qr_size_percent' in data:
-        AppSettings.set('image_qr_size_percent', str(data['qr_size_percent']), workspace_id=ws_id)
+        set_user_image_setting('image_qr_size_percent', str(data['qr_size_percent']), workspace_id=ws_id)
     if 'logo_position' in data:
-        AppSettings.set('image_logo_position', data['logo_position'], workspace_id=ws_id)
+        set_user_image_setting('image_logo_position', data['logo_position'], workspace_id=ws_id)
     if 'logo_opacity' in data:
-        AppSettings.set('image_logo_opacity', str(data['logo_opacity']), workspace_id=ws_id)
+        set_user_image_setting('image_logo_opacity', str(data['logo_opacity']), workspace_id=ws_id)
     
     return jsonify({'success': True, 'message': 'Settings saved'})
 
 
 @app.route('/api/images/upload-logo', methods=['POST'])
-@permission_required('settings')
+@login_required
 @require_active_workspace
 def api_upload_logo():
     """Upload default logo"""
@@ -8962,7 +9252,7 @@ def api_upload_logo():
     
     # Save path in settings
     relative_path = f'uploads/logos/{logo_filename}'
-    AppSettings.set('image_default_logo', relative_path, workspace_id=ws_id)
+    set_user_image_setting('image_default_logo', relative_path, workspace_id=ws_id)
     
     return jsonify({
         'success': True,
@@ -9038,7 +9328,7 @@ def api_process_single_image():
                 print(f"[ImageProcessor] Logo decode error: {logo_err}")
         elif not logo_data:
             # Check for default logo
-            logo_setting = AppSettings.get('image_default_logo', workspace_id=ws_id)
+            logo_setting = get_user_image_setting('image_default_logo', workspace_id=ws_id)
             if logo_setting:
                 potential_path = str(ROOT_DIR / logo_setting)
                 if Path(potential_path).exists():
@@ -9107,11 +9397,11 @@ def api_get_settings_images():
 
 
 @app.route('/api/settings/images', methods=['POST'])
-@permission_required('settings')
+@login_required
 @require_active_workspace
 def api_save_settings_images():
     """Save image settings"""
-    data = request.json
+    data = request.get_json(silent=True) or {}
     ws_id = get_active_workspace_id()
     
     settings_map = {
@@ -9136,7 +9426,7 @@ def api_save_settings_images():
             # Convert booleans to strings
             if isinstance(value, bool):
                 value = 'true' if value else 'false'
-            AppSettings.set(db_key, str(value), workspace_id=ws_id)
+            set_user_image_setting(db_key, str(value), workspace_id=ws_id)
     
     # Handle logo data if provided as base64
     if data.get('logoData') and data['logoData'].startswith('data:'):
@@ -9157,7 +9447,7 @@ def api_save_settings_images():
             with open(logo_path, 'wb') as f:
                 f.write(logo_bytes)
             
-            AppSettings.set('image_default_logo', f'uploads/logos/{logo_filename}', workspace_id=ws_id)
+            set_user_image_setting('image_default_logo', f'uploads/logos/{logo_filename}', workspace_id=ws_id)
         except Exception as e:
             print(f"Error saving logo: {e}")
     
@@ -9245,20 +9535,20 @@ def api_process_image_with_settings():
         
         # Load saved settings
         settings = {
-            'ratio': AppSettings.get('image_default_ratio', workspace_id=ws_id) or None,
-            'size': AppSettings.get('image_default_size', workspace_id=ws_id) or 'full_hd',
-            'quality': int(AppSettings.get('image_quality', workspace_id=ws_id) or 90),
-            'format': AppSettings.get('image_format', workspace_id=ws_id) or 'JPEG',
-            'qr_enabled': AppSettings.get('image_qr_enabled', workspace_id=ws_id) == 'true',
-            'qr_data': AppSettings.get('image_default_qr_data', workspace_id=ws_id) or '',
-            'qr_position': AppSettings.get('image_qr_position', workspace_id=ws_id) or 'bottom_right',
-            'qr_size': int(AppSettings.get('image_qr_size_percent', workspace_id=ws_id) or 12),
-            'qr_color': AppSettings.get('image_qr_color', workspace_id=ws_id) or '#000000',
-            'logo_enabled': AppSettings.get('image_logo_enabled', workspace_id=ws_id) == 'true',
-            'logo_path': AppSettings.get('image_default_logo', workspace_id=ws_id),
-            'logo_position': AppSettings.get('image_logo_position', workspace_id=ws_id) or 'bottom_left',
-            'logo_size': int(AppSettings.get('image_logo_size', workspace_id=ws_id) or 10),
-            'logo_opacity': float(AppSettings.get('image_logo_opacity', workspace_id=ws_id) or 0.9),
+            'ratio': get_user_image_setting('image_default_ratio', workspace_id=ws_id) or None,
+            'size': get_user_image_setting('image_default_size', 'full_hd', workspace_id=ws_id) or 'full_hd',
+            'quality': int(get_user_image_setting('image_quality', '90', workspace_id=ws_id) or 90),
+            'format': get_user_image_setting('image_format', 'JPEG', workspace_id=ws_id) or 'JPEG',
+            'qr_enabled': get_user_image_setting('image_qr_enabled', 'false', workspace_id=ws_id) == 'true',
+            'qr_data': get_user_image_setting('image_default_qr_data', '', workspace_id=ws_id) or '',
+            'qr_position': get_user_image_setting('image_qr_position', 'bottom_right', workspace_id=ws_id) or 'bottom_right',
+            'qr_size': int(get_user_image_setting('image_qr_size_percent', '12', workspace_id=ws_id) or 12),
+            'qr_color': get_user_image_setting('image_qr_color', '#000000', workspace_id=ws_id) or '#000000',
+            'logo_enabled': get_user_image_setting('image_logo_enabled', 'false', workspace_id=ws_id) == 'true',
+            'logo_path': get_user_image_setting('image_default_logo', workspace_id=ws_id),
+            'logo_position': get_user_image_setting('image_logo_position', 'bottom_left', workspace_id=ws_id) or 'bottom_left',
+            'logo_size': int(get_user_image_setting('image_logo_size', '10', workspace_id=ws_id) or 10),
+            'logo_opacity': float(get_user_image_setting('image_logo_opacity', '0.9', workspace_id=ws_id) or 0.9),
         }
         
         print(f"[ProcessWithSettings] Using settings: ratio={settings['ratio']}, qr={settings['qr_enabled']}, logo={settings['logo_enabled']}")
@@ -9492,8 +9782,20 @@ def api_upload_image():
 def api_get_folders():
     """API: Get all folders"""
     ws_id = get_active_workspace_id()
-    folders = ListingFolder.get_all_with_counts(workspace_id=ws_id)
-    uncategorized_count = scope_query(LocalListing.query, ws_id).filter(LocalListing.folder_id.is_(None)).count()
+    if workspace_user_can_manage_all_listings(workspace_id=ws_id):
+        folders = ListingFolder.get_all_with_counts(workspace_id=ws_id)
+        uncategorized_count = scope_query(LocalListing.query, ws_id).filter(LocalListing.folder_id.is_(None)).count()
+    else:
+        folder_rows = ListingFolder.query.filter_by(workspace_id=ws_id).order_by(ListingFolder.name).all()
+        visible_counts = {}
+        for listing in visible_local_listing_query(ws_id).all():
+            visible_counts[listing.folder_id] = visible_counts.get(listing.folder_id, 0) + 1
+        folders = []
+        for folder in folder_rows:
+            folder_data = folder.to_dict()
+            folder_data['listing_count'] = visible_counts.get(folder.id, 0)
+            folders.append(folder_data)
+        uncategorized_count = visible_counts.get(None, 0)
     return jsonify({
         'folders': folders,
         'uncategorized_count': uncategorized_count
@@ -9503,6 +9805,7 @@ def api_get_folders():
 @app.route('/api/folders', methods=['POST'])
 @login_required
 @require_active_workspace
+@require_workspace_listing_admin
 def api_create_folder():
     """API: Create a new folder"""
     data = request.get_json(silent=True) or request.json or {}
@@ -9547,12 +9850,16 @@ def api_get_folder(folder_id):
     """API: Get a single folder"""
     ws_id = get_active_workspace_id()
     folder = ListingFolder.query.filter_by(id=folder_id, workspace_id=ws_id).first_or_404()
-    return jsonify({'folder': folder.to_dict()})
+    data = folder.to_dict()
+    if not workspace_user_can_manage_all_listings(workspace_id=ws_id):
+        data['listing_count'] = visible_local_listing_query(ws_id).filter_by(folder_id=folder.id).count()
+    return jsonify({'folder': data})
 
 
 @app.route('/api/folders/<int:folder_id>', methods=['PUT', 'PATCH'])
 @login_required
 @require_active_workspace
+@require_workspace_listing_admin
 def api_update_folder(folder_id):
     """API: Update a folder"""
     ws_id = get_active_workspace_id()
@@ -9582,6 +9889,7 @@ def api_update_folder(folder_id):
 @app.route('/api/folders/<int:folder_id>', methods=['DELETE'])
 @login_required
 @require_active_workspace
+@require_workspace_listing_admin
 def api_delete_folder(folder_id):
     """API: Delete a folder (moves listings to uncategorized)"""
     ws_id = get_active_workspace_id()
@@ -9599,6 +9907,7 @@ def api_delete_folder(folder_id):
 @app.route('/api/listings/move-to-folder', methods=['POST'])
 @login_required
 @require_active_workspace
+@require_workspace_listing_admin
 def api_move_listings_to_folder():
     """API: Move listings to a folder"""
     data = request.json
@@ -10279,7 +10588,7 @@ def api_search_listings():
     
     # Build query
     ws_id = get_active_workspace_id()
-    listings_query = LocalListing.query.filter_by(workspace_id=ws_id)
+    listings_query = visible_local_listing_query(ws_id)
     
     if query:
         search = f'%{query}%'

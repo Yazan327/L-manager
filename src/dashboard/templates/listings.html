@@ -4,6 +4,7 @@
 {% block page_title %}Listings{% endblock %}
 
 {% block content %}
+{% set can_manage_listing_admin = ((current_workspace and current_user and current_workspace.is_admin(current_user.id)) or is_system_admin) %}
 <div x-data="listingsPage()" x-init="init()">
     <div class="flex gap-6">
         <!-- Folder Sidebar -->
@@ -13,14 +14,16 @@
                     <h3 class="font-semibold text-gray-800">
                         <i class="fas fa-folder-tree mr-2 text-indigo-600"></i>Folders
                     </h3>
+                    {% if can_manage_listing_admin %}
                     <button @click="showCreateFolderModal = true" 
                             class="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="New Folder">
                         <i class="fas fa-plus"></i>
                     </button>
+                    {% endif %}
                 </div>
                 
                 <!-- All Listings -->
-                <a href="{{ url_for('listings') }}" 
+                <a href="{{ folder_nav_urls['all'] if folder_nav_urls else (url_for('workspace_listings', workspace_slug=current_workspace.slug) if current_workspace else url_for('listings')) }}" 
                    class="flex items-center justify-between px-3 py-2 rounded-lg mb-1 transition
                           {% if not folder_id and request.args.get('folder_id') != '0' %}bg-indigo-50 text-indigo-700{% else %}hover:bg-gray-50 text-gray-700{% endif %}">
                     <span><i class="fas fa-list mr-2"></i>All Listings</span>
@@ -28,7 +31,7 @@
                 </a>
                 
                 <!-- Uncategorized -->
-                <a href="{{ url_for('listings', folder_id=0) }}" 
+                <a href="{{ folder_nav_urls['uncategorized'] if folder_nav_urls else (url_for('workspace_listings', workspace_slug=current_workspace.slug, folder_id=0) if current_workspace else url_for('listings', folder_id=0)) }}" 
                    class="flex items-center justify-between px-3 py-2 rounded-lg mb-1 transition
                           {% if request.args.get('folder_id') == '0' %}bg-indigo-50 text-indigo-700{% else %}hover:bg-gray-50 text-gray-700{% endif %}">
                     <span><i class="fas fa-inbox mr-2 text-gray-400"></i>Uncategorized</span>
@@ -41,7 +44,7 @@
                 <div class="space-y-1">
                     {% for folder in folders %}
                     <div class="group relative">
-                        <a href="{{ url_for('listings', folder_id=folder.id) }}" 
+                        <a href="{{ (folder_nav_urls['folders'].get(folder.id) if folder_nav_urls else None) or (url_for('workspace_listings', workspace_slug=current_workspace.slug, folder_id=folder.id) if current_workspace else url_for('listings', folder_id=folder.id)) }}" 
                            class="flex items-center justify-between px-3 py-2 rounded-lg transition
                                   {% if folder_id == folder.id %}bg-{{ folder.color }}-50 text-{{ folder.color }}-700{% else %}hover:bg-gray-50 text-gray-700{% endif %}">
                             <span>
@@ -51,6 +54,7 @@
                             <span class="text-xs bg-gray-100 px-2 py-0.5 rounded-full">{{ folder.listing_count }}</span>
                         </a>
                         <!-- Folder actions (show on hover) -->
+                        {% if can_manage_listing_admin %}
                         <div class="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1">
                             <button @click.prevent="editFolderById({{ folder.id }})" 
                                     class="p-1 text-gray-400 hover:text-indigo-600 hover:bg-white rounded">
@@ -61,6 +65,7 @@
                                 <i class="fas fa-trash text-xs"></i>
                             </button>
                         </div>
+                        {% endif %}
                     </div>
                     {% endfor %}
                 </div>
@@ -68,9 +73,11 @@
                 {% if not folders %}
                 <p class="text-sm text-gray-500 text-center py-4">
                     No folders yet.<br>
+                    {% if can_manage_listing_admin %}
                     <button @click="showCreateFolderModal = true" class="text-indigo-600 hover:underline mt-1">
                         Create your first folder
                     </button>
+                    {% endif %}
                 </p>
                 {% endif %}
             </div>
@@ -175,7 +182,7 @@
             <p class="text-sm text-{{ current_folder.color }}-600">{{ current_folder.description }}</p>
             {% endif %}
         </div>
-        <a href="{{ url_for('listings') }}" class="ml-auto text-sm text-{{ current_folder.color }}-600 hover:text-{{ current_folder.color }}-800">
+        <a href="{{ folder_nav_urls['clear'] if folder_nav_urls else (url_for('workspace_listings', workspace_slug=current_workspace.slug) if current_workspace else url_for('listings')) }}" class="ml-auto text-sm text-{{ current_folder.color }}-600 hover:text-{{ current_folder.color }}-800">
             <i class="fas fa-times mr-1"></i>Clear folder filter
         </a>
     </div>
@@ -186,7 +193,7 @@
             <h2 class="font-semibold text-gray-800">Uncategorized</h2>
             <p class="text-sm text-gray-600">Listings not assigned to any folder</p>
         </div>
-        <a href="{{ url_for('listings') }}" class="ml-auto text-sm text-gray-600 hover:text-gray-800">
+        <a href="{{ folder_nav_urls['clear'] if folder_nav_urls else (url_for('workspace_listings', workspace_slug=current_workspace.slug) if current_workspace else url_for('listings')) }}" class="ml-auto text-sm text-gray-600 hover:text-gray-800">
             <i class="fas fa-times mr-1"></i>Clear folder filter
         </a>
     </div>
@@ -468,6 +475,7 @@
          x-transition
          class="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-gray-900 text-white px-6 py-3 rounded-lg shadow-lg flex items-center space-x-4 z-50">
         <span class="font-medium"><span x-text="selectedIds.length"></span> selected</span>
+        {% if can_manage_listing_admin %}
         <div class="h-6 w-px bg-gray-600"></div>
         <!-- Move to Folder Button -->
         <div class="relative" x-data="{ showFolderDropdown: false }">
@@ -490,6 +498,20 @@
             </div>
         </div>
         <div class="h-6 w-px bg-gray-600"></div>
+        <div class="flex items-center gap-2">
+            <select x-model="bulkReassignUserId"
+                    class="px-2 py-1.5 rounded bg-white text-gray-800 text-sm border border-gray-300">
+                <option value="">Select assignee...</option>
+                <option value="null">Unassigned</option>
+                {% for member in workspace_members %}
+                <option value="{{ member.id }}">{{ member.name }}</option>
+                {% endfor %}
+            </select>
+            <button @click="bulkReassign()" class="px-3 py-1.5 bg-blue-600 rounded hover:bg-blue-700 transition">
+                <i class="fas fa-user-check mr-1"></i>Reassign
+            </button>
+        </div>
+        {% endif %}
         <button @click="bulkPublish()" class="px-3 py-1.5 bg-green-600 rounded hover:bg-green-700 transition">
             <i class="fas fa-check-circle mr-1"></i>Publish
         </button>
@@ -594,6 +616,7 @@ function listingsPage() {
         showDuplicates: {{ 'true' if show_duplicates else 'false' }},
         pagination: {{ pagination | tojson | safe if pagination else '{}' }},
         selectedIds: [],
+        bulkReassignUserId: '',
         
         // Folders data from server
         allFolders: {{ folders | tojson | safe if folders else '[]' }},
@@ -715,6 +738,35 @@ function listingsPage() {
                 }
             } catch (e) {
                 alert('Failed to move listings');
+            }
+        },
+
+        async bulkReassign() {
+            if (this.selectedIds.length === 0) return;
+            if (this.bulkReassignUserId === '') {
+                alert('Select an assignee first');
+                return;
+            }
+            try {
+                const payload = {
+                    ids: this.selectedIds.map(id => parseInt(id, 10)),
+                    assigned_to_id: this.bulkReassignUserId === 'null' ? null : parseInt(this.bulkReassignUserId, 10)
+                };
+                const response = await fetch('/api/local/listings/bulk-update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json().catch(() => ({}));
+                if (response.ok && data.success) {
+                    this.selectedIds = [];
+                    this.bulkReassignUserId = '';
+                    location.reload();
+                } else {
+                    alert(data.error || 'Failed to reassign listings');
+                }
+            } catch (e) {
+                alert('Failed to reassign listings');
             }
         },
         
