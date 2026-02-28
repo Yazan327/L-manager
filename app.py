@@ -2298,6 +2298,50 @@ def visible_lead_query(workspace_id=None, user=None):
     return query.filter(Lead.assigned_to_id == user.id)
 
 
+def resolve_leads_scope_request(workspace_id=None, user=None):
+    """Resolve scope/filters for lead listing while enforcing permissions."""
+    ws_id = workspace_id or get_active_workspace_id()
+    user = user or getattr(g, 'user', None)
+    requested_scope = (request.args.get('scope') or 'my').strip().lower()
+    if requested_scope not in ('my', 'team'):
+        requested_scope = 'my'
+
+    can_manage_all = workspace_user_can_manage_all_leads(user=user, workspace_id=ws_id)
+    effective_scope = requested_scope if can_manage_all else 'my'
+
+    raw_assigned_to_id = (request.args.get('assigned_to_id') or '').strip()
+    assigned_to_id = None
+    if effective_scope == 'team' and raw_assigned_to_id:
+        assigned_to_id = _validate_assignee(ws_id, raw_assigned_to_id)
+        if not assigned_to_id:
+            raise ValueError('assigned_to_id must belong to a workspace member')
+
+    return {
+        'requested_scope': requested_scope,
+        'effective_scope': effective_scope,
+        'assigned_to_id': assigned_to_id,
+        'can_manage_all': can_manage_all,
+    }
+
+
+def scoped_leads_query(workspace_id=None, user=None):
+    """Build lead query using scope request rules."""
+    ws_id = workspace_id or get_active_workspace_id()
+    user = user or getattr(g, 'user', None)
+    scope_meta = resolve_leads_scope_request(workspace_id=ws_id, user=user)
+
+    query = visible_lead_query(workspace_id=ws_id, user=user)
+    if scope_meta['effective_scope'] == 'my':
+        query = query.filter(Lead.assigned_to_id == user.id)
+    else:
+        # Team scope only includes leads assigned to workspace members.
+        query = query.filter(Lead.assigned_to_id.isnot(None))
+        if scope_meta['assigned_to_id']:
+            query = query.filter(Lead.assigned_to_id == scope_meta['assigned_to_id'])
+
+    return query, scope_meta
+
+
 def get_visible_lead_or_404(lead_id, workspace_id=None, user=None):
     """Fetch a lead through visibility rules (404 if hidden/missing)."""
     ws_id = workspace_id or get_active_workspace_id()
@@ -2448,6 +2492,24 @@ def _validate_assignee(workspace_id, assignee_id):
     if not member:
         return None
     return assignee_id
+
+
+def get_default_assigned_agent_email(workspace_id=None, user=None):
+    """Resolve default assigned agent email for listing forms/creation."""
+    ws_id = workspace_id or get_active_workspace_id()
+    current_user = user or getattr(g, 'user', None)
+    user_email = (getattr(current_user, 'email', '') or '').strip()
+    setting_email = (AppSettings.get('default_agent_email', '', workspace_id=ws_id) or '').strip()
+    config_default_email = (Config.DEFAULT_AGENT_EMAIL or '').strip()
+
+    # Default behavior: use logged-in user's email.
+    # Workspace setting overrides only when explicitly changed from env default.
+    if setting_email:
+        if not user_email:
+            return setting_email
+        if setting_email.lower() != user_email.lower() and setting_email.lower() != config_default_email.lower():
+            return setting_email
+    return user_email or setting_email
 
 
 def _normalize_upload_path(path):
@@ -5647,11 +5709,13 @@ def new_listing():
     ]
     ws_id = get_active_workspace_id()
     members = WorkspaceMember.query.filter_by(workspace_id=ws_id).all() if ws_id else []
+    default_assigned_agent_email = get_default_assigned_agent_email(workspace_id=ws_id, user=g.user)
     return render_template('listing_form.html', 
                          listing=None, 
                          property_types=property_types,
                          edit_mode=False,
-                         workspace_members=[m.user.to_dict() for m in members])
+                         workspace_members=[m.user.to_dict() for m in members],
+                         default_assigned_agent_email=default_assigned_agent_email)
 
 
 @app.route('/listings/<listing_id>')
@@ -5705,6 +5769,7 @@ def edit_listing(listing_id):
     ]
     ws_id = get_active_workspace_id()
     members = WorkspaceMember.query.filter_by(workspace_id=ws_id).all() if ws_id else []
+    default_assigned_agent_email = get_default_assigned_agent_email(workspace_id=ws_id, user=g.user)
     
     # Try local database first (for integer IDs)
     try:
@@ -5717,7 +5782,8 @@ def edit_listing(listing_id):
                                  listing=local_listing,
                                  property_types=property_types,
                                  edit_mode=True,
-                                 workspace_members=[m.user.to_dict() for m in members])
+                                 workspace_members=[m.user.to_dict() for m in members],
+                                 default_assigned_agent_email=default_assigned_agent_email)
     except (ValueError, TypeError):
         pass  # Not an integer ID, try API
     
@@ -5731,7 +5797,8 @@ def edit_listing(listing_id):
                          listing=transformed,
                          property_types=property_types,
                          edit_mode=True,
-                         workspace_members=[m.user.to_dict() for m in members])
+                         workspace_members=[m.user.to_dict() for m in members],
+                         default_assigned_agent_email=default_assigned_agent_email)
 
 
 @app.route('/bulk')
@@ -6918,6 +6985,7 @@ def create_listing_form():
     """Handle listing creation form submission - saves locally first"""
     form = request.form
     ws_id = get_active_workspace_id()
+    default_assigned_agent_email = get_default_assigned_agent_email(workspace_id=ws_id, user=g.user)
     
     can_manage_all = workspace_user_can_manage_all_listings(workspace_id=ws_id)
     assigned_to_id = None
@@ -6944,7 +7012,7 @@ def create_listing_form():
         property_type=form.get('property_type'),
         location=form.get('location'),
         location_id=form.get('location_id') if form.get('location_id') else None,
-        assigned_agent=form.get('assigned_agent'),
+        assigned_agent=(form.get('assigned_agent') or '').strip() or default_assigned_agent_email,
         assigned_to_id=assigned_to_id,
         reference=reference,
         bedrooms=form.get('bedrooms'),
@@ -7615,6 +7683,8 @@ def api_local_create_listing():
     
     listing = LocalListing.from_dict(data)
     listing.workspace_id = ws_id
+    if not (listing.assigned_agent or '').strip():
+        listing.assigned_agent = get_default_assigned_agent_email(workspace_id=ws_id, user=g.user)
     if not workspace_user_can_manage_all_listings(workspace_id=ws_id):
         listing.assigned_to_id = g.user.id
     db.session.add(listing)
@@ -8080,17 +8150,36 @@ def _resolve_lead_assignee_id(pf_agent_id=None, pf_listing_id=None, listing_refe
 def api_get_leads():
     """Get leads based on user permissions.
     
-    - Admin users see all leads (including unassigned)
-    - Non-admin users only see leads assigned to them
-    - Unassigned leads (assigned_to_id is NULL) are only visible to admins
+    Query params:
+    - scope: my | team (admins/system admins only)
+    - assigned_to_id: optional workspace member filter (team scope only)
+
+    Visibility rules:
+    - Non-admin users: always own assigned leads only.
+    - Admin/system users:
+      - my: own assigned leads only (default)
+      - team: assigned team leads only (unassigned excluded)
     """
     from sqlalchemy.orm import joinedload
     
     # Use joinedload to prevent N+1 query problem (each lead would query user separately)
     ws_id = get_active_workspace_id()
-    query = visible_lead_query(ws_id).options(joinedload(Lead.assigned_to)).order_by(Lead.created_at.desc())
+    try:
+        query, scope_meta = scoped_leads_query(workspace_id=ws_id)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
+    query = query.options(joinedload(Lead.assigned_to)).order_by(Lead.created_at.desc())
     leads = query.all()
-    return jsonify({'leads': [l.to_dict() for l in leads]})
+    return jsonify({
+        'leads': [l.to_dict() for l in leads],
+        'meta': {
+            'requested_scope': scope_meta['requested_scope'],
+            'effective_scope': scope_meta['effective_scope'],
+            'assigned_to_id': scope_meta['assigned_to_id'],
+            'can_manage_all': scope_meta['can_manage_all'],
+        }
+    })
 
 
 @app.route('/api/leads', methods=['POST'])

@@ -124,6 +124,13 @@
         <!-- Filters -->
         <div class="bg-white rounded-lg p-4 shadow-sm border mt-6">
             <div class="flex flex-wrap gap-4">
+                {% if can_manage_leads %}
+                <select x-model="leadScope" @change="onLeadScopeChanged()"
+                        class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                    <option value="my">My Leads</option>
+                    <option value="team">Team Leads</option>
+                </select>
+                {% endif %}
                 <div class="flex-1 min-w-[200px]">
                     <input type="text" x-model="filters.search" @input="filterLeads()"
                            placeholder="Search by name, email, phone..."
@@ -143,13 +150,15 @@
                         <option :value="source.id" x-text="source.label"></option>
                     </template>
                 </select>
-                <select x-model="filters.assigned" @change="filterLeads()"
+                {% if can_manage_leads %}
+                <select x-show="leadScope === 'team'" x-cloak x-model="selectedTeamMemberId" @change="loadLeads()"
                         class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
-                    <option value="">All Team</option>
+                    <option value="">All Team Members</option>
                     <template x-for="member in teamMembers" :key="member.id">
                         <option :value="member.id" x-text="member.name"></option>
                     </template>
                 </select>
+                {% endif %}
                 <select x-model="filters.priority" @change="filterLeads()"
                         class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
                     <option value="">All Priority</option>
@@ -296,7 +305,7 @@
                             </td>
                             <td class="px-4 py-3">
                                 {% if can_manage_leads %}
-                                <select :value="lead.assigned_to_id || ''" @change="updateAssignment(lead.id, $event.target.value)"
+                                <select :value="lead.assigned_to_id || ''" @change="updateLeadField(lead.id, 'assigned_to_id', $event.target.value || null)"
                                         class="text-sm border rounded px-2 py-1 max-w-[120px]">
                                     <option value="">Unassigned</option>
                                     <template x-for="member in teamMembers" :key="member.id">
@@ -1230,13 +1239,16 @@ function leadsManager() {
         filteredLeads: [],
         selectedLeads: [],
         loading: true,
+        canManageLeads: {{ 'true' if can_manage_leads else 'false' }},
+        leadScope: 'my',
+        selectedTeamMemberId: '',
         syncing: false,
         refreshingAgents: false,
         autoAssigning: false,
         showAddModal: false,
         showViewModal: false,
         selectedLead: null,
-        filters: { search: '', status: '', source: '', priority: '', assigned: '', lead_type: '' },
+        filters: { search: '', status: '', source: '', priority: '', lead_type: '' },
         sortColumn: 'created_at',
         sortDirection: 'desc',
         stats: { total: 0, new: 0, contacted: 0, qualified: 0, won: 0 },
@@ -1363,8 +1375,25 @@ function leadsManager() {
             this.loading = true;
             this.selectedLeads = [];
             try {
-                const resp = await fetch('/api/leads');
+                const params = new URLSearchParams();
+                params.set('scope', this.leadScope || 'my');
+                if (this.canManageLeads && this.leadScope === 'team' && this.selectedTeamMemberId) {
+                    params.set('assigned_to_id', this.selectedTeamMemberId);
+                }
+                const resp = await fetch(`/api/leads?${params.toString()}`);
                 const data = await resp.json();
+                if (!resp.ok || data.success === false) {
+                    throw new Error(data.error || 'Failed to load leads');
+                }
+                const meta = data.meta || {};
+                if (meta.effective_scope) {
+                    this.leadScope = meta.effective_scope;
+                }
+                if (meta.assigned_to_id) {
+                    this.selectedTeamMemberId = String(meta.assigned_to_id);
+                } else if (this.leadScope !== 'team') {
+                    this.selectedTeamMemberId = '';
+                }
                 this.leads = data.leads || [];
                 this.filterLeads();
                 this.updateStats();
@@ -1543,6 +1572,13 @@ function leadsManager() {
             }
             this.filterLeads();
         },
+
+        onLeadScopeChanged() {
+            if (this.leadScope !== 'team') {
+                this.selectedTeamMemberId = '';
+            }
+            this.loadLeads();
+        },
         
         filterLeads() {
             let filtered = [...this.leads];
@@ -1558,7 +1594,9 @@ function leadsManager() {
             if (this.filters.source) filtered = filtered.filter(l => l.source === this.filters.source);
             if (this.filters.priority) filtered = filtered.filter(l => l.priority === this.filters.priority);
             if (this.filters.lead_type) filtered = filtered.filter(l => l.lead_type === this.filters.lead_type);
-            if (this.filters.assigned) filtered = filtered.filter(l => l.pf_agent_name === this.filters.assigned || l.assigned_to_name === this.filters.assigned);
+            if (this.selectedTeamMemberId && this.leadScope === 'team') {
+                filtered = filtered.filter(l => String(l.assigned_to_id || '') === String(this.selectedTeamMemberId));
+            }
             
             // Apply sorting
             filtered.sort((a, b) => {

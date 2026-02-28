@@ -531,6 +531,15 @@
                                     <i class="fas fa-spinner fa-spin" x-show="processing"></i>
                                     <span x-text="processing ? 'Processing ' + processedCount + '/' + images.length + '...' : 'Process All Images'"></span>
                                 </button>
+                                <button type="button"
+                                        @click="reprocessOriginals()"
+                                        :disabled="processing || !canReprocessOriginals"
+                                        class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                        title="Reprocess from original images with current settings">
+                                    <i class="fas fa-rotate-right" x-show="!processing"></i>
+                                    <i class="fas fa-spinner fa-spin" x-show="processing"></i>
+                                    <span>Reprocess Originals</span>
+                                </button>
                                 <a href="/settings#images" target="_blank" 
                                    class="px-3 py-2 text-gray-600 hover:text-purple-600 hover:bg-white rounded-lg text-sm"
                                    title="Edit image settings">
@@ -538,6 +547,9 @@
                                 </a>
                             </div>
                         </div>
+                        <p class="text-xs text-gray-500 mt-2">
+                            Reprocess uses original image sources with your latest image settings.
+                        </p>
                         
                         <!-- Processing Status -->
                         <div x-show="processMessage" class="mt-3 p-3 rounded-lg text-sm"
@@ -872,7 +884,7 @@ function listingForm() {
         offeringType: {{ (listing.offering_type if listing else "")|tojson }},
         propertyType: {{ (listing.property_type if listing else "")|tojson }},
         location: {{ (listing.location if listing else "")|tojson }},
-        assignedAgent: {{ (listing.assigned_agent if listing else "")|tojson }},
+        assignedAgent: {{ ((listing.assigned_agent if listing and listing.assigned_agent else (default_assigned_agent_email if default_assigned_agent_email is defined else "")))|tojson }},
         reference: {{ (listing.reference if listing else "")|tojson }},
         
         // City options by Emirate
@@ -1119,13 +1131,28 @@ function locationSearch() {
 
 // Image Manager Component
 function imageManager() {
+    const normalizeSource = (value) => {
+        if (typeof value !== 'string') return '';
+        const trimmed = value.trim();
+        if (!trimmed || trimmed === 'None' || trimmed === 'null') return '';
+        return trimmed;
+    };
+
+    const isProcessedUrl = (url) => {
+        const normalized = normalizeSource(url);
+        if (!normalized) return false;
+        return normalized.includes('/processed/') || /\/processed_[^/]+\./i.test(normalized);
+    };
+
     // Parse existing images from the listing
     let existingImages = [];
+    let existingStoredOriginals = [];
     
     {% if listing %}
     try {
         // Get raw images data - handle both model objects and dicts
         let rawImages = {{ (listing.get_images() if listing.get_images else listing.images)|tojson|default('[]', true) }};
+        let rawOriginals = {{ (listing._parse_original_images() if listing._parse_original_images else listing.original_images)|tojson|default('[]', true) }};
         
         // Parse images from various formats
         let serverImages = [];
@@ -1142,26 +1169,52 @@ function imageManager() {
                 serverImages = rawImages.split('|').filter(u => u && u.trim() && u !== 'None');
             }
         }
+
+        // Parse stored originals from various formats
+        let serverOriginals = [];
+        if (Array.isArray(rawOriginals)) {
+            serverOriginals = rawOriginals;
+        } else if (typeof rawOriginals === 'string' && rawOriginals && rawOriginals !== 'None' && rawOriginals !== 'null') {
+            try {
+                const parsedOriginals = JSON.parse(rawOriginals);
+                if (Array.isArray(parsedOriginals)) {
+                    serverOriginals = parsedOriginals;
+                }
+            } catch(e) {
+                serverOriginals = rawOriginals.split('|').filter(u => u && u.trim() && u !== 'None');
+            }
+        }
+        existingStoredOriginals = serverOriginals
+            .map(src => normalizeSource(src))
+            .filter(src => src && !isProcessedUrl(src));
         
         // Filter and map to proper format
         if (Array.isArray(serverImages)) {
             existingImages = serverImages
                 .filter(u => u && u !== 'None' && u !== 'null')
-                .map((url, i) => ({
-                    id: 'existing-' + i,
-                    url: typeof url === 'string' ? url.trim() : (url.url || String(url)),
-                    uploading: false
-                }))
+                .map((url, i) => {
+                    const normalizedUrl = normalizeSource(typeof url === 'string' ? url : (url.url || String(url)));
+                    const originalByIndex = normalizeSource(existingStoredOriginals[i] || '');
+                    return {
+                        id: 'existing-' + i,
+                        url: normalizedUrl,
+                        uploading: false,
+                        processed: isProcessedUrl(normalizedUrl),
+                        originalSource: originalByIndex || null
+                    };
+                })
                 .filter(img => img.url && img.url !== 'None' && img.url !== 'null' && img.url.length > 1);
         }
     } catch(e) {
         console.error('Error loading images:', e);
         existingImages = [];
+        existingStoredOriginals = [];
     }
     {% endif %}
     
     return {
         images: existingImages,
+        storedOriginalSources: existingStoredOriginals,
         dragOver: false,
         dragOverIndex: null,
         draggedIndex: null,
@@ -1172,9 +1225,47 @@ function imageManager() {
         processMessage: '',
         processSuccess: false,
         
+        get canReprocessOriginals() {
+            return this.getResolvableOriginalSources().length > 0;
+        },
+        
         get imagesJson() {
             // Return URLs as JSON array for form submission
             return JSON.stringify(this.images.map(img => img.url || img));
+        },
+
+        normalizeSource(value) {
+            return normalizeSource(value);
+        },
+
+        isProcessedUrl(url) {
+            return isProcessedUrl(url);
+        },
+
+        mergeUniqueOrdered(listA = [], listB = []) {
+            const seen = new Set();
+            const merged = [];
+            for (const item of [...listA, ...listB]) {
+                const normalized = this.normalizeSource(item);
+                if (!normalized || seen.has(normalized)) continue;
+                seen.add(normalized);
+                merged.push(normalized);
+            }
+            return merged;
+        },
+
+        getInMemoryOriginalSources() {
+            return this.images
+                .map((img) => {
+                    const source = this.normalizeSource(img?.originalSource || img?.url || img);
+                    if (!source) return '';
+                    return this.isProcessedUrl(source) ? '' : source;
+                })
+                .filter(Boolean);
+        },
+
+        getResolvableOriginalSources() {
+            return this.mergeUniqueOrdered(this.storedOriginalSources, this.getInMemoryOriginalSources());
         },
         
         handleFiles(event) {
@@ -1201,7 +1292,9 @@ function imageManager() {
                     id: tempId,
                     url: URL.createObjectURL(file),
                     uploading: true,
-                    file: file
+                    file: file,
+                    processed: false,
+                    originalSource: null
                 };
                 this.images.push(placeholder);
                 
@@ -1223,10 +1316,13 @@ function imageManager() {
                         // Update placeholder with real URL
                         const index = this.images.findIndex(img => img.id === tempId);
                         if (index !== -1) {
+                            const normalizedUploadedUrl = this.normalizeSource(data.url);
                             this.images[index] = {
                                 id: data.id || tempId,
-                                url: data.url,
-                                uploading: false
+                                url: normalizedUploadedUrl,
+                                uploading: false,
+                                processed: this.isProcessedUrl(normalizedUploadedUrl),
+                                originalSource: normalizedUploadedUrl
                             };
                         }
                     } else {
@@ -1256,7 +1352,9 @@ function imageManager() {
             this.images.push({
                 id: 'url-' + Date.now(),
                 url: url,
-                uploading: false
+                uploading: false,
+                processed: false,
+                originalSource: url
             });
             this.newImageUrl = '';
         },
@@ -1304,8 +1402,9 @@ function imageManager() {
         },
         
         // Process all images with saved settings
-        async processAllImages() {
+        async processAllImages(options = {}) {
             if (this.images.length === 0) return;
+            const forceReprocess = Boolean(options.forceReprocess);
             
             this.processing = true;
             this.processedCount = 0;
@@ -1317,9 +1416,16 @@ function imageManager() {
             
             for (let i = 0; i < this.images.length; i++) {
                 const img = this.images[i];
+                const source = this.normalizeSource(img?.originalSource || img?.url || '');
                 
-                // Skip already processed images (local URLs)
-                if (img.processed || (img.url.startsWith('/uploads/') && img.url.includes('processed'))) {
+                if (!source) {
+                    errorCount++;
+                    this.processedCount = i + 1;
+                    continue;
+                }
+
+                // Skip already processed images unless force reprocess is requested
+                if (!forceReprocess && (img.processed || this.isProcessedUrl(img.url))) {
                     skippedCount++;
                     this.processedCount = i + 1;
                     continue;
@@ -1328,15 +1434,15 @@ function imageManager() {
                 try {
                     let requestBody;
                     
-                    if (img.url.startsWith('data:')) {
+                    if (source.startsWith('data:')) {
                         // Base64 image - send directly
                         requestBody = {
-                            image: img.url,
+                            image: source,
                             listing_id: this.listingId
                         };
-                    } else if (img.url.startsWith('/uploads/')) {
+                    } else if (source.startsWith('/uploads/')) {
                         // Local upload - need to fetch as base64 first
-                        const response = await fetch(img.url);
+                        const response = await fetch(source);
                         const blob = await response.blob();
                         const base64 = await new Promise((resolve, reject) => {
                             const reader = new FileReader();
@@ -1351,7 +1457,7 @@ function imageManager() {
                     } else {
                         // External URL - let server download it (bypasses CORS)
                         requestBody = {
-                            url: img.url,
+                            url: source,
                             listing_id: this.listingId
                         };
                     }
@@ -1366,11 +1472,13 @@ function imageManager() {
                     if (processResponse.ok) {
                         const result = await processResponse.json();
                         if (result.success && result.url) {
+                            const originalSource = this.normalizeSource(img?.originalSource) || source;
                             // Update image with processed version
                             this.images[i] = {
                                 ...img,
                                 url: result.url,
-                                processed: true
+                                processed: true,
+                                originalSource: originalSource || null
                             };
                             if (result.skipped) {
                                 skippedCount++;
@@ -1408,6 +1516,75 @@ function imageManager() {
             }
             
             // Auto-hide message
+            setTimeout(() => { this.processMessage = ''; }, 8000);
+
+            return {
+                successCount,
+                errorCount,
+                skippedCount
+            };
+        },
+
+        async reprocessOriginals() {
+            if (this.processing) return;
+
+            this.processMessage = '';
+            this.processSuccess = false;
+            let nonBlockingWarning = '';
+
+            if (this.listingId) {
+                try {
+                    const response = await fetch(`/api/listings/${this.listingId}/original-images`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.storedOriginalSources = (data.originals || [])
+                            .map((src) => this.normalizeSource(src))
+                            .filter((src) => src && !this.isProcessedUrl(src));
+                    } else {
+                        nonBlockingWarning = 'Could not refresh stored originals from listing.';
+                    }
+                } catch (e) {
+                    nonBlockingWarning = 'Could not refresh stored originals from listing.';
+                }
+            }
+
+            const mergedOriginals = this.getResolvableOriginalSources();
+            if (mergedOriginals.length === 0) {
+                this.processMessage = 'No original images available to reprocess.';
+                this.processSuccess = false;
+                setTimeout(() => { this.processMessage = ''; }, 8000);
+                return;
+            }
+
+            const now = Date.now();
+            this.images = mergedOriginals.map((src, i) => ({
+                id: `orig-${now}-${i}`,
+                url: src,
+                uploading: false,
+                processed: false,
+                originalSource: src
+            }));
+
+            const summary = await this.processAllImages({ forceReprocess: true }) || {
+                successCount: 0,
+                errorCount: 0
+            };
+
+            if (summary.errorCount === 0) {
+                this.processMessage = `Reprocessed ${summary.successCount} images from originals.`;
+                this.processSuccess = true;
+            } else if (summary.successCount > 0) {
+                this.processMessage = `Reprocessed ${summary.successCount} images from originals, ${summary.errorCount} failed.`;
+                this.processSuccess = false;
+            } else {
+                this.processMessage = 'Failed to reprocess original images.';
+                this.processSuccess = false;
+            }
+
+            if (nonBlockingWarning) {
+                this.processMessage += ` ${nonBlockingWarning}`;
+            }
+
             setTimeout(() => { this.processMessage = ''; }, 8000);
         }
     }
