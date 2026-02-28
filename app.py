@@ -5,6 +5,7 @@ PropertyFinder Dashboard - Web UI for managing listings
 import os
 import sys
 import json
+import math
 import hashlib
 import secrets
 import shutil
@@ -448,6 +449,7 @@ with app.app_context():
 
         # Migration: Add advanced scheduling columns to loop_configs
         loop_schedule_columns = [
+            ('interval_unit', "ALTER TABLE loop_configs ADD COLUMN interval_unit VARCHAR(16) DEFAULT 'hours'"),
             ('schedule_mode', "ALTER TABLE loop_configs ADD COLUMN schedule_mode VARCHAR(32) DEFAULT 'interval'"),
             ('schedule_window_start', "ALTER TABLE loop_configs ADD COLUMN schedule_window_start VARCHAR(5)"),
             ('schedule_window_end', "ALTER TABLE loop_configs ADD COLUMN schedule_window_end VARCHAR(5)"),
@@ -479,6 +481,18 @@ with app.app_context():
                 print("[BACKFILL] loop_configs.schedule_mode normalized to interval")
         except Exception as e:
             print(f"[BACKFILL] loop schedule mode normalization skipped or failed: {e}")
+
+        # Backfill: default interval_unit for existing loops
+        try:
+            with db.engine.connect() as conn:
+                conn.execute(text(
+                    "UPDATE loop_configs SET interval_unit = 'hours' "
+                    "WHERE interval_unit IS NULL OR interval_unit = ''"
+                ))
+                conn.commit()
+                print("[BACKFILL] loop_configs.interval_unit normalized to hours")
+        except Exception as e:
+            print(f"[BACKFILL] loop interval unit normalization skipped or failed: {e}")
         
         # Migration: Update app_settings constraints for workspace scoping
         try:
@@ -1062,21 +1076,73 @@ def _loop_schedule_mode(loop):
     return mode if mode in LoopConfig.SCHEDULE_MODES else LoopConfig.SCHEDULE_INTERVAL
 
 
-def _loop_interval_delta(loop):
+def _normalize_interval_unit(interval_unit):
+    unit = str(interval_unit or 'hours').strip().lower()
+    if unit not in LoopConfig.INTERVAL_UNITS:
+        raise ValueError('Invalid interval_unit. Allowed: hours, minutes, seconds')
+    return unit
+
+
+def _loop_interval_unit(loop):
+    if hasattr(loop, 'get_interval_unit'):
+        return loop.get_interval_unit()
+    try:
+        return _normalize_interval_unit(getattr(loop, 'interval_unit', 'hours'))
+    except ValueError:
+        return 'hours'
+
+
+def _loop_interval_value(loop):
+    if hasattr(loop, 'get_interval_value'):
+        try:
+            value = float(loop.get_interval_value())
+            if value > 0:
+                return value
+        except (TypeError, ValueError):
+            pass
     hours = float(getattr(loop, 'interval_hours', 0) or 0)
     if hours <= 0:
         hours = 1.0
-    return timedelta(hours=hours)
+    unit = _loop_interval_unit(loop)
+    if unit == 'minutes':
+        return hours * 60.0
+    if unit == 'seconds':
+        return hours * 3600.0
+    return hours
 
 
-def _format_interval_hours(hours_value):
-    try:
-        hours = float(hours_value or 0)
-    except (TypeError, ValueError):
-        hours = 0
-    if hours.is_integer():
-        return f'{int(hours)}h'
-    return f'{hours:g}h'
+def _interval_hours_from_value(interval_value, interval_unit):
+    if interval_unit == 'minutes':
+        return interval_value / 60.0
+    if interval_unit == 'seconds':
+        return interval_value / 3600.0
+    return interval_value
+
+
+def _loop_interval_delta(loop):
+    value = _loop_interval_value(loop)
+    unit = _loop_interval_unit(loop)
+    if unit == 'minutes':
+        return timedelta(minutes=value)
+    if unit == 'seconds':
+        return timedelta(seconds=value)
+    return timedelta(hours=value)
+
+
+def _format_loop_interval(loop):
+    value = _loop_interval_value(loop)
+    unit = _loop_interval_unit(loop)
+    if abs(value - round(value)) < 1e-9:
+        value_str = str(int(round(value)))
+    else:
+        value_str = f'{value:g}'
+    label = {
+        'hours': 'hour',
+        'minutes': 'minute',
+        'seconds': 'second',
+    }.get(unit, 'hour')
+    suffix = '' if value_str == '1' else 's'
+    return f'{value_str} {label}{suffix}'
 
 
 def _is_local_time_in_window(local_dt, start_time, end_time):
@@ -1115,41 +1181,62 @@ def validate_loop_schedule_payload(data):
     data = data or {}
     normalized = {}
 
-    # interval_hours remains required for interval and windowed mode
-    interval_hours_raw = data.get('interval_hours', None)
-    if interval_hours_raw is not None:
-        try:
-            interval_hours = float(interval_hours_raw)
-        except (TypeError, ValueError):
-            raise ValueError('interval_hours must be greater than 0')
-        if interval_hours <= 0:
-            raise ValueError('interval_hours must be greater than 0')
-        normalized['interval_hours'] = interval_hours
-
     schedule_mode = data.get('schedule_mode', LoopConfig.SCHEDULE_INTERVAL) or LoopConfig.SCHEDULE_INTERVAL
     schedule_mode = str(schedule_mode).strip()
     if schedule_mode not in LoopConfig.SCHEDULE_MODES:
         raise ValueError('Invalid schedule_mode')
     normalized['schedule_mode'] = schedule_mode
 
-    if schedule_mode == LoopConfig.SCHEDULE_INTERVAL:
-        if ('interval_hours' not in normalized) and ('interval_hours' in data):
+    if schedule_mode == LoopConfig.SCHEDULE_DAILY_TIMES:
+        exact_times = normalize_exact_times(data.get('schedule_exact_times', []))
+        if not exact_times:
+            raise ValueError('At least one exact time is required for daily_times')
+        normalized['schedule_window_start'] = None
+        normalized['schedule_window_end'] = None
+        normalized['schedule_exact_times'] = exact_times
+        return normalized
+
+    interval_unit_raw = data.get('interval_unit', 'hours')
+    interval_unit = _normalize_interval_unit(interval_unit_raw)
+
+    interval_value_raw = data.get('interval_value', None)
+    interval_hours_raw = data.get('interval_hours', None)
+    interval_value = None
+
+    if interval_value_raw is not None:
+        try:
+            interval_value = float(interval_value_raw)
+        except (TypeError, ValueError):
+            raise ValueError('interval_value must be greater than 0')
+        if (not math.isfinite(interval_value)) or interval_value <= 0:
+            raise ValueError('interval_value must be greater than 0')
+    elif interval_hours_raw is not None:
+        try:
+            interval_hours = float(interval_hours_raw)
+        except (TypeError, ValueError):
             raise ValueError('interval_hours must be greater than 0')
+        if (not math.isfinite(interval_hours)) or interval_hours <= 0:
+            raise ValueError('interval_hours must be greater than 0')
+        interval_value = interval_hours if interval_unit == 'hours' else (
+            interval_hours * 60.0 if interval_unit == 'minutes' else interval_hours * 3600.0
+        )
+
+    if interval_value is not None:
+        normalized['interval_unit'] = interval_unit
+        normalized['interval_value'] = interval_value
+        normalized['interval_hours'] = _interval_hours_from_value(interval_value, interval_unit)
+
+    if schedule_mode == LoopConfig.SCHEDULE_INTERVAL:
+        if 'interval_hours' not in normalized:
+            raise ValueError('interval_value must be greater than 0')
         normalized['schedule_window_start'] = None
         normalized['schedule_window_end'] = None
         normalized['schedule_exact_times'] = []
         return normalized
 
     if schedule_mode == LoopConfig.SCHEDULE_WINDOWED_INTERVAL:
-        interval_value = normalized.get('interval_hours')
-        if interval_value is None:
-            try:
-                interval_value = float(data.get('interval_hours', 0))
-            except (TypeError, ValueError):
-                interval_value = 0
-            if interval_value <= 0:
-                raise ValueError('interval_hours must be greater than 0')
-            normalized['interval_hours'] = interval_value
+        if 'interval_hours' not in normalized:
+            raise ValueError('interval_value must be greater than 0')
 
         start_raw = data.get('schedule_window_start')
         end_raw = data.get('schedule_window_end')
@@ -1163,14 +1250,6 @@ def validate_loop_schedule_payload(data):
         normalized['schedule_window_end'] = end_time.strftime('%H:%M')
         normalized['schedule_exact_times'] = []
         return normalized
-
-    # daily_times
-    exact_times = normalize_exact_times(data.get('schedule_exact_times', []))
-    if not exact_times:
-        raise ValueError('At least one exact time is required for daily_times')
-    normalized['schedule_window_start'] = None
-    normalized['schedule_window_end'] = None
-    normalized['schedule_exact_times'] = exact_times
     return normalized
 
 
@@ -1246,7 +1325,7 @@ def compute_next_loop_run_at(loop, now_utc=None):
 def get_loop_schedule_summary(loop, workspace_id=None):
     """Human-readable schedule summary for loop table/API."""
     mode = _loop_schedule_mode(loop)
-    interval_text = _format_interval_hours(loop.interval_hours)
+    interval_text = _format_loop_interval(loop)
     if mode == LoopConfig.SCHEDULE_WINDOWED_INTERVAL:
         if loop.schedule_window_start and loop.schedule_window_end:
             return f'Every {interval_text} in {loop.schedule_window_start}-{loop.schedule_window_end}'
@@ -1553,17 +1632,23 @@ def delete_and_republish_listing(loop, listing, client):
 def start_loop_scheduler():
     """Initialize and start the loop scheduler"""
     try:
-        # Add a job that checks for pending loops every minute
+        # Add a job that checks for pending loops frequently (seconds precision for second-based intervals).
+        poll_seconds_raw = os.getenv('LOOP_SCHEDULER_POLL_SECONDS', '1')
+        try:
+            poll_seconds = max(1, int(float(poll_seconds_raw)))
+        except (TypeError, ValueError):
+            poll_seconds = 1
+
         loop_scheduler.add_job(
             func=check_and_run_loops,
-            trigger=IntervalTrigger(minutes=1),
+            trigger=IntervalTrigger(seconds=poll_seconds),
             id='loop_checker',
             name='Check and run pending loops',
             replace_existing=True
         )
         
         loop_scheduler.start()
-        print("[SCHEDULER] Loop scheduler started")
+        print(f"[SCHEDULER] Loop scheduler started (poll every {poll_seconds}s)")
         
         # Shutdown scheduler when app exits
         atexit.register(lambda: loop_scheduler.shutdown())
@@ -10434,6 +10519,8 @@ def api_create_loop():
     try:
         schedule_payload = validate_loop_schedule_payload({
             'schedule_mode': data.get('schedule_mode', LoopConfig.SCHEDULE_INTERVAL),
+            'interval_value': data.get('interval_value'),
+            'interval_unit': data.get('interval_unit', 'hours'),
             'interval_hours': data.get('interval_hours', 1),
             'schedule_window_start': data.get('schedule_window_start'),
             'schedule_window_end': data.get('schedule_window_end'),
@@ -10447,6 +10534,7 @@ def api_create_loop():
         name=data['name'],
         loop_type=data.get('loop_type', 'duplicate'),
         interval_hours=float(schedule_payload.get('interval_hours', data.get('interval_hours', 1))),
+        interval_unit=schedule_payload.get('interval_unit', 'hours'),
         keep_duplicates=data.get('keep_duplicates', True),
         max_duplicates=int(data.get('max_duplicates', 0)),
         is_active=data.get('is_active', False)
@@ -10514,6 +10602,8 @@ def api_update_loop(loop_id):
 
     schedule_input = {
         'schedule_mode': data.get('schedule_mode', loop.schedule_mode or LoopConfig.SCHEDULE_INTERVAL),
+        'interval_value': data.get('interval_value', _loop_interval_value(loop)),
+        'interval_unit': data.get('interval_unit', _loop_interval_unit(loop)),
         'interval_hours': data.get('interval_hours', loop.interval_hours),
         'schedule_window_start': data.get('schedule_window_start', loop.schedule_window_start),
         'schedule_window_end': data.get('schedule_window_end', loop.schedule_window_end),
@@ -10528,8 +10618,9 @@ def api_update_loop(loop_id):
         loop.name = data['name']
     if 'loop_type' in data:
         loop.loop_type = data['loop_type']
-    if ('interval_hours' in data) or (schedule_payload.get('interval_hours') is not None):
+    if ('interval_hours' in data) or ('interval_value' in data) or ('interval_unit' in data) or (schedule_payload.get('interval_hours') is not None):
         loop.interval_hours = float(schedule_payload.get('interval_hours', loop.interval_hours))
+        loop.interval_unit = schedule_payload.get('interval_unit', _loop_interval_unit(loop))
     loop.schedule_mode = schedule_payload['schedule_mode']
     loop.schedule_window_start = schedule_payload.get('schedule_window_start')
     loop.schedule_window_end = schedule_payload.get('schedule_window_end')
@@ -10560,7 +10651,10 @@ def api_update_loop(loop_id):
         # Reset index
         loop.current_index = 0
 
-    schedule_fields = {'schedule_mode', 'interval_hours', 'schedule_window_start', 'schedule_window_end', 'schedule_exact_times'}
+    schedule_fields = {
+        'schedule_mode', 'interval_hours', 'interval_value', 'interval_unit',
+        'schedule_window_start', 'schedule_window_end', 'schedule_exact_times'
+    }
     if loop.is_active and not loop.is_paused and schedule_fields.intersection(data.keys()):
         loop.next_run_at = compute_next_loop_run_at(loop, now_utc=datetime.utcnow())
     

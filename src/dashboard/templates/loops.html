@@ -106,7 +106,7 @@
                             </span>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            <div class="font-medium text-gray-700" x-text="loop.schedule_summary || ('Every ' + loop.interval_hours + ' hour(s)')"></div>
+                            <div class="font-medium text-gray-700" x-text="loop.schedule_summary || ('Every ' + (loop.interval_value || 1) + ' ' + (loop.interval_unit || 'hours'))"></div>
                             <div class="text-xs text-gray-400" x-text="loop.schedule_timezone || 'Asia/Dubai'"></div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
@@ -261,9 +261,14 @@
                                 <label class="block text-sm font-medium text-gray-700 mb-1">Run Interval</label>
                                 <div class="flex items-center space-x-2">
                                     <span class="text-gray-500">Every</span>
-                                    <input type="number" x-model="formData.interval_hours" min="0.5" step="0.5" required
+                                    <input type="number" x-model="formData.interval_value" min="0.1" step="0.1" required
                                            class="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
-                                    <span class="text-gray-500">hour(s)</span>
+                                    <select x-model="formData.interval_unit"
+                                            class="px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                                        <option value="hours">hour(s)</option>
+                                        <option value="minutes">minute(s)</option>
+                                        <option value="seconds">second(s)</option>
+                                    </select>
                                 </div>
                                 <p class="text-xs text-gray-500 mt-1">For multi-listing loops, this is the interval between each listing.</p>
                             </div>
@@ -576,7 +581,8 @@ function loopsManager() {
             id: null,
             name: '',
             loop_type: 'duplicate',
-            interval_hours: 1,
+            interval_value: 1,
+            interval_unit: 'hours',
             schedule_mode: 'interval',
             schedule_window_start: '09:00',
             schedule_window_end: '18:00',
@@ -634,7 +640,8 @@ function loopsManager() {
                 id: null,
                 name: '',
                 loop_type: 'duplicate',
-                interval_hours: 1,
+                interval_value: 1,
+                interval_unit: 'hours',
                 schedule_mode: 'interval',
                 schedule_window_start: '09:00',
                 schedule_window_end: '18:00',
@@ -681,6 +688,15 @@ function loopsManager() {
                         ? this.formData.schedule_exact_times.map(t => String(t || '').trim()).filter(Boolean)
                         : []
                 };
+                payload.interval_unit = ['hours', 'minutes', 'seconds'].includes(payload.interval_unit)
+                    ? payload.interval_unit
+                    : 'hours';
+                payload.interval_value = Number(payload.interval_value);
+                if (payload.schedule_mode !== 'daily_times' && (!Number.isFinite(payload.interval_value) || payload.interval_value <= 0)) {
+                    this.showToast('Interval must be greater than 0', 'error');
+                    return;
+                }
+                delete payload.interval_hours;
                 if (payload.schedule_mode === 'daily_times' && payload.schedule_exact_times.length === 0) {
                     this.showToast('Add at least one exact time', 'error');
                     return;
@@ -713,7 +729,8 @@ function loopsManager() {
                 id: loop.id,
                 name: loop.name,
                 loop_type: loop.loop_type,
-                interval_hours: loop.interval_hours,
+                interval_value: loop.interval_value || loop.interval_hours || 1,
+                interval_unit: loop.interval_unit || 'hours',
                 schedule_mode: loop.schedule_mode || 'interval',
                 schedule_window_start: loop.schedule_window_start || '09:00',
                 schedule_window_end: loop.schedule_window_end || '18:00',
@@ -732,6 +749,8 @@ function loopsManager() {
                 .then(data => {
                     if (data.success && data.loop.listings) {
                         this.formData.listing_ids = data.loop.listings.map(l => l.listing_id);
+                        this.formData.interval_value = data.loop.interval_value || data.loop.interval_hours || this.formData.interval_value;
+                        this.formData.interval_unit = data.loop.interval_unit || this.formData.interval_unit;
                         this.formData.schedule_mode = data.loop.schedule_mode || this.formData.schedule_mode;
                         this.formData.schedule_window_start = data.loop.schedule_window_start || this.formData.schedule_window_start;
                         this.formData.schedule_window_end = data.loop.schedule_window_end || this.formData.schedule_window_end;

@@ -2372,6 +2372,7 @@ class LoopConfig(db.Model):
     
     # Timing
     interval_hours = db.Column(db.Float, default=1.0)  # Hours between each action
+    interval_unit = db.Column(db.String(16), default='hours')  # hours, minutes, seconds
     schedule_mode = db.Column(db.String(32), default='interval')  # interval, windowed_interval, daily_times
     schedule_window_start = db.Column(db.String(5), nullable=True)  # HH:MM
     schedule_window_end = db.Column(db.String(5), nullable=True)    # HH:MM
@@ -2403,6 +2404,29 @@ class LoopConfig(db.Model):
     SCHEDULE_WINDOWED_INTERVAL = 'windowed_interval'
     SCHEDULE_DAILY_TIMES = 'daily_times'
     SCHEDULE_MODES = [SCHEDULE_INTERVAL, SCHEDULE_WINDOWED_INTERVAL, SCHEDULE_DAILY_TIMES]
+    INTERVAL_UNITS = ['hours', 'minutes', 'seconds']
+
+    def get_interval_unit(self):
+        unit = (self.interval_unit or 'hours').strip().lower()
+        return unit if unit in self.INTERVAL_UNITS else 'hours'
+
+    def get_interval_value(self):
+        try:
+            hours = float(self.interval_hours or 1.0)
+        except (TypeError, ValueError):
+            hours = 1.0
+        if hours <= 0:
+            hours = 1.0
+        unit = self.get_interval_unit()
+        if unit == 'minutes':
+            value = hours * 60.0
+        elif unit == 'seconds':
+            value = hours * 3600.0
+        else:
+            value = hours
+        if abs(value - round(value)) < 1e-9:
+            return int(round(value))
+        return value
 
     def get_schedule_exact_times(self):
         """Return exact times schedule as a list of HH:MM strings."""
@@ -2432,6 +2456,8 @@ class LoopConfig(db.Model):
             'name': self.name,
             'loop_type': self.loop_type,
             'interval_hours': self.interval_hours,
+            'interval_unit': self.get_interval_unit(),
+            'interval_value': self.get_interval_value(),
             'schedule_mode': self.schedule_mode or self.SCHEDULE_INTERVAL,
             'schedule_window_start': self.schedule_window_start,
             'schedule_window_end': self.schedule_window_end,
