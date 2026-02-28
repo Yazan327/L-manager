@@ -154,7 +154,7 @@ db.init_app(app)
 
 # Create tables and default admin user
 with app.app_context():
-    from sqlalchemy import text, inspect
+    from sqlalchemy import text, inspect, func
     
     # Run migrations BEFORE create_all - add missing columns to existing tables
     print("[MIGRATION] Checking for required migrations...")
@@ -447,8 +447,25 @@ with app.app_context():
         except Exception as e:
             print(f"[MIGRATION] original_images column migration skipped or failed: {e}")
 
+        # Migration: Add owner_user_id to listing_folders for per-user folder isolation
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='listing_folders' AND column_name='owner_user_id'"
+                ))
+                if not result.fetchone():
+                    print("[MIGRATION] Adding owner_user_id column to listing_folders...")
+                    conn.execute(text("ALTER TABLE listing_folders ADD COLUMN owner_user_id INTEGER REFERENCES users(id)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_folders_owner_user_id ON listing_folders(owner_user_id)"))
+                    conn.commit()
+                    print("[MIGRATION] owner_user_id column added to listing_folders")
+        except Exception as e:
+            print(f"[MIGRATION] owner_user_id column for listing_folders skipped or failed: {e}")
+
         # Migration: Add advanced scheduling columns to loop_configs
         loop_schedule_columns = [
+            ('owner_user_id', "ALTER TABLE loop_configs ADD COLUMN owner_user_id INTEGER REFERENCES users(id)"),
             ('interval_unit', "ALTER TABLE loop_configs ADD COLUMN interval_unit VARCHAR(16) DEFAULT 'hours'"),
             ('schedule_mode', "ALTER TABLE loop_configs ADD COLUMN schedule_mode VARCHAR(32) DEFAULT 'interval'"),
             ('schedule_window_start', "ALTER TABLE loop_configs ADD COLUMN schedule_window_start VARCHAR(5)"),
@@ -493,6 +510,60 @@ with app.app_context():
                 print("[BACKFILL] loop_configs.interval_unit normalized to hours")
         except Exception as e:
             print(f"[BACKFILL] loop interval unit normalization skipped or failed: {e}")
+
+        # Backfill: assign folder/loop ownership defaults where missing
+        try:
+            preferred_owner_email = (os.getenv('DEFAULT_WORKSPACE_OWNER_EMAIL') or 'yazan757274@gmail.com').strip().lower()
+
+            def _resolve_workspace_owner_user_id(workspace_id):
+                preferred_owner = db.session.query(User.id).join(
+                    WorkspaceMember, WorkspaceMember.user_id == User.id
+                ).filter(
+                    WorkspaceMember.workspace_id == workspace_id,
+                    func.lower(User.email) == preferred_owner_email
+                ).first()
+                if preferred_owner:
+                    return preferred_owner[0]
+
+                owner_member = WorkspaceMember.query.filter_by(
+                    workspace_id=workspace_id,
+                    role='owner'
+                ).order_by(WorkspaceMember.user_id.asc()).first()
+                if owner_member:
+                    return owner_member.user_id
+
+                admin_member = WorkspaceMember.query.filter(
+                    WorkspaceMember.workspace_id == workspace_id,
+                    WorkspaceMember.role.in_(('admin', 'member'))
+                ).order_by(WorkspaceMember.user_id.asc()).first()
+                if admin_member:
+                    return admin_member.user_id
+                return None
+
+            workspace_ids = [row[0] for row in db.session.query(Workspace.id).filter_by(is_active=True).all()]
+            for ws_id in workspace_ids:
+                owner_user_id = _resolve_workspace_owner_user_id(ws_id)
+                if not owner_user_id:
+                    continue
+                db.session.execute(
+                    text(
+                        "UPDATE loop_configs SET owner_user_id = :owner_user_id "
+                        "WHERE workspace_id = :ws_id AND owner_user_id IS NULL"
+                    ),
+                    {'owner_user_id': owner_user_id, 'ws_id': ws_id}
+                )
+                db.session.execute(
+                    text(
+                        "UPDATE listing_folders SET owner_user_id = :owner_user_id "
+                        "WHERE workspace_id = :ws_id AND owner_user_id IS NULL"
+                    ),
+                    {'owner_user_id': owner_user_id, 'ws_id': ws_id}
+                )
+            db.session.commit()
+            print("[BACKFILL] loop_configs/listing_folders ownership normalized")
+        except Exception as e:
+            db.session.rollback()
+            print(f"[BACKFILL] loop/folder ownership normalization skipped or failed: {e}")
         
         # Migration: Update app_settings constraints for workspace scoping
         try:
@@ -1502,10 +1573,16 @@ def create_duplicate_listing(loop, original_listing, client):
         
         # Get or create "Duplicated" folder
         ws_id = loop.workspace_id or original_listing.workspace_id
-        dup_folder = ListingFolder.query.filter_by(name='Duplicated', workspace_id=ws_id).first()
+        owner_user_id = loop.owner_user_id or original_listing.assigned_to_id
+        dup_folder = ListingFolder.query.filter_by(
+            name='Duplicated',
+            workspace_id=ws_id,
+            owner_user_id=owner_user_id
+        ).first()
         if not dup_folder:
             dup_folder = ListingFolder(
                 workspace_id=ws_id,
+                owner_user_id=owner_user_id,
                 name='Duplicated',
                 color='#9333ea',  # Purple
                 icon='copy',
@@ -1845,6 +1922,7 @@ def permission_required(permission):
                     'bulk_upload': ('listings', 'bulk'),
                     'manage_leads': ('leads', 'read'),
                     'manage_users': ('users', 'read'),
+                    'manage_loops': ('listings', 'read'),
                     'settings': ('settings', 'edit'),
                 }
                 module_action = module_action_map.get(permission)
@@ -1902,16 +1980,29 @@ def load_user():
 def inject_user():
     """Make user and workspace available in all templates"""
     sys_admin = False
+    can_access_loops = False
+    workspace = getattr(g, 'workspace', None)
+    if not workspace:
+        try:
+            workspace = get_active_workspace()
+        except Exception:
+            workspace = None
     try:
         sys_admin = is_system_admin(g.user)
     except Exception:
         sys_admin = False
+    try:
+        if workspace and g.user:
+            can_access_loops = workspace_user_can_manage_loops(user=g.user, workspace_id=workspace.id)
+    except Exception:
+        can_access_loops = False
     return dict(
         current_user=g.user,
-        current_workspace=getattr(g, 'workspace', None),
+        current_workspace=workspace,
         is_workspace_context=getattr(g, 'is_workspace_context', False),
         is_admin_context=getattr(g, 'is_admin_context', False),
-        is_system_admin=sys_admin
+        is_system_admin=sys_admin,
+        can_access_loops=can_access_loops
     )
 
 
@@ -2153,6 +2244,22 @@ def visible_local_listing_query(workspace_id=None, user=None):
     return query.filter(LocalListing.assigned_to_id == user.id)
 
 
+def visible_folder_query(workspace_id=None, user=None):
+    """Folder query scoped to workspace and current user's personal folders."""
+    ws_id = workspace_id or get_active_workspace_id()
+    query = scope_query(ListingFolder.query, ws_id)
+    user = user or getattr(g, 'user', None)
+    if not user:
+        return query.filter(ListingFolder.id == -1)
+    # Folder/category organization is per-user; folders are never shared.
+    return query.filter(ListingFolder.owner_user_id == user.id)
+
+
+def get_visible_folder_or_404(folder_id, workspace_id=None, user=None):
+    ws_id = workspace_id or get_active_workspace_id()
+    return visible_folder_query(workspace_id=ws_id, user=user).filter_by(id=folder_id).first_or_404()
+
+
 def require_workspace_listing_admin(f):
     """Decorator: listing organization actions are admin-only within a workspace."""
     @wraps(f)
@@ -2218,19 +2325,48 @@ def require_workspace_leads_admin(f):
 
 
 def workspace_user_can_manage_loops(user=None, workspace_id=None):
-    """Loops are restricted to workspace admins/owners (and system admins)."""
+    """Loops are available to workspace admins and users with explicit manage_loops permission."""
+    user = user or getattr(g, 'user', None)
+    if not user:
+        return False
+    ws_id = workspace_id or get_active_workspace_id()
+    if workspace_user_can_manage_all_listings(user=user, workspace_id=ws_id):
+        return True
+    extra_permissions = set(get_workspace_user_extra_permissions(user.id, workspace_id=ws_id))
+    return 'manage_loops' in extra_permissions
+
+
+def workspace_user_can_manage_all_loops(user=None, workspace_id=None):
+    """Workspace admins/system admins can manage all loops."""
     return workspace_user_can_manage_all_listings(user=user, workspace_id=workspace_id)
 
 
+def visible_loop_query(workspace_id=None, user=None):
+    """Loop query scoped by workspace and per-user loop ownership."""
+    ws_id = workspace_id or get_active_workspace_id()
+    query = scope_query(LoopConfig.query, ws_id)
+    user = user or getattr(g, 'user', None)
+    if not user:
+        return query.filter(LoopConfig.id == -1)
+    if workspace_user_can_manage_all_loops(user=user, workspace_id=ws_id):
+        return query
+    return query.filter(LoopConfig.owner_user_id == user.id)
+
+
+def get_visible_loop_or_404(loop_id, workspace_id=None, user=None):
+    ws_id = workspace_id or get_active_workspace_id()
+    return visible_loop_query(workspace_id=ws_id, user=user).filter_by(id=loop_id).first_or_404()
+
+
 def require_workspace_loops_admin(f):
-    """Decorator: loops are admin-only until loop ownership is implemented."""
+    """Decorator: loops require explicit workspace access (admin or manage_loops)."""
     @wraps(f)
     def decorated(*args, **kwargs):
         ws_id = get_active_workspace_id()
         if workspace_user_can_manage_loops(workspace_id=ws_id):
             return f(*args, **kwargs)
 
-        message = 'Loops are visible to workspace admins only.'
+        message = 'You do not have permission to access loops.'
         if request.path.startswith('/api/'):
             return jsonify({'success': False, 'error': message}), 403
 
@@ -4053,9 +4189,9 @@ def workspace_image_editor(workspace_slug):
 def workspace_loops(workspace_slug):
     """Workspace-scoped loops page"""
     ws_id = g.workspace.id if g.workspace else get_active_workspace_id()
-    loops = LoopConfig.query.filter_by(workspace_id=ws_id).order_by(LoopConfig.created_at.desc()).all()
+    loops = visible_loop_query(workspace_id=ws_id).order_by(LoopConfig.created_at.desc()).all()
 
-    duplicated_folder = ListingFolder.query.filter_by(name='Duplicated', workspace_id=ws_id).first()
+    duplicated_folder = visible_folder_query(workspace_id=ws_id).filter_by(name='Duplicated').first()
     if duplicated_folder:
         listings = visible_local_listing_query(ws_id).filter(
             db.or_(
@@ -5362,10 +5498,7 @@ def _render_listings_page(workspace_id):
     query = visible_local_listing_query(workspace_id)
     
     # Get the Duplicated folder ID
-    duplicated_folder = ListingFolder.query.filter_by(
-        name='Duplicated',
-        workspace_id=workspace_id
-    ).first()
+    duplicated_folder = visible_folder_query(workspace_id=workspace_id).filter_by(name='Duplicated').first()
     
     # Filter by folder
     if folder_id is not None:
@@ -5373,7 +5506,11 @@ def _render_listings_page(workspace_id):
             # Show uncategorized listings (no folder)
             query = query.filter(LocalListing.folder_id.is_(None))
         else:
-            query = query.filter_by(folder_id=folder_id)
+            selected_folder = visible_folder_query(workspace_id=workspace_id).filter_by(id=folder_id).first()
+            if selected_folder:
+                query = query.filter_by(folder_id=folder_id)
+            else:
+                query = query.filter(LocalListing.id == -1)
     else:
         # When viewing all listings, hide duplicated folder unless show_duplicates is on
         if not show_duplicates and duplicated_folder:
@@ -5433,21 +5570,21 @@ def _render_listings_page(workspace_id):
     
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     
-    # Get folders for sidebar (counts are visibility-aware for non-admins)
-    if workspace_user_can_manage_all_listings(workspace_id=workspace_id):
-        folders = ListingFolder.get_all_with_counts(workspace_id=workspace_id)
-    else:
-        visible_counts = {}
-        for listing in visible_local_listing_query(workspace_id).all():
-            visible_counts[listing.folder_id] = visible_counts.get(listing.folder_id, 0) + 1
-        folders = []
-        for folder in ListingFolder.query.filter_by(workspace_id=workspace_id).order_by(ListingFolder.name).all():
-            data = folder.to_dict()
-            data['listing_count'] = visible_counts.get(folder.id, 0)
-            folders.append(data)
+    # Get personal folders for sidebar (user-owned categories only)
+    personal_folders = visible_folder_query(workspace_id=workspace_id).order_by(ListingFolder.name).all()
+    personal_folder_ids = {f.id for f in personal_folders}
+    visible_counts = {}
+    for listing in visible_local_listing_query(workspace_id).all():
+        normalized_folder_id = listing.folder_id if listing.folder_id in personal_folder_ids else None
+        visible_counts[normalized_folder_id] = visible_counts.get(normalized_folder_id, 0) + 1
+    folders = []
+    for folder in personal_folders:
+        data = folder.to_dict()
+        data['listing_count'] = visible_counts.get(folder.id, 0)
+        folders.append(data)
     current_folder = None
     if folder_id:
-        current_folder = ListingFolder.query.filter_by(id=folder_id, workspace_id=workspace_id).first()
+        current_folder = visible_folder_query(workspace_id=workspace_id).filter_by(id=folder_id).first()
     uncategorized_count = visible_local_listing_query(workspace_id).filter(
         LocalListing.folder_id.is_(None)
     ).count()
@@ -5480,8 +5617,18 @@ def _render_listings_page(workspace_id):
                 **base_query_args
             )
     
+    listing_rows = []
+    current_user_id = g.user.id if g.user else None
+    for listing in pagination.items:
+        row = listing.to_dict()
+        folder = row.get('folder')
+        if folder and folder.get('owner_user_id') != current_user_id:
+            row['folder'] = None
+            row['folder_id'] = None
+        listing_rows.append(row)
+
     return render_template('listings.html', 
-                         listings=[l.to_dict() for l in pagination.items],
+                         listings=listing_rows,
                          pagination={
                              'current_page': pagination.page,
                              'last_page': pagination.pages,
@@ -5504,7 +5651,7 @@ def _render_listings_page(workspace_id):
                          status=status or '',
                          assigned_to_id=assigned_to_filter or '',
                          folder_nav_urls=folder_nav_urls,
-                         current_user_id=g.user.id if g.user else None,
+                         current_user_id=current_user_id,
                          workspace_members=[
                              m.user.to_dict() for m in WorkspaceMember.query.filter_by(workspace_id=workspace_id).all()
                          ])
@@ -10299,20 +10446,18 @@ def api_upload_image():
 def api_get_folders():
     """API: Get all folders"""
     ws_id = get_active_workspace_id()
-    if workspace_user_can_manage_all_listings(workspace_id=ws_id):
-        folders = ListingFolder.get_all_with_counts(workspace_id=ws_id)
-        uncategorized_count = scope_query(LocalListing.query, ws_id).filter(LocalListing.folder_id.is_(None)).count()
-    else:
-        folder_rows = ListingFolder.query.filter_by(workspace_id=ws_id).order_by(ListingFolder.name).all()
-        visible_counts = {}
-        for listing in visible_local_listing_query(ws_id).all():
-            visible_counts[listing.folder_id] = visible_counts.get(listing.folder_id, 0) + 1
-        folders = []
-        for folder in folder_rows:
-            folder_data = folder.to_dict()
-            folder_data['listing_count'] = visible_counts.get(folder.id, 0)
-            folders.append(folder_data)
-        uncategorized_count = visible_counts.get(None, 0)
+    personal_folders = visible_folder_query(workspace_id=ws_id).order_by(ListingFolder.name).all()
+    personal_folder_ids = {f.id for f in personal_folders}
+    visible_counts = {}
+    for listing in visible_local_listing_query(ws_id).all():
+        normalized_folder_id = listing.folder_id if listing.folder_id in personal_folder_ids else None
+        visible_counts[normalized_folder_id] = visible_counts.get(normalized_folder_id, 0) + 1
+    folders = []
+    for folder in personal_folders:
+        folder_data = folder.to_dict()
+        folder_data['listing_count'] = visible_counts.get(folder.id, 0)
+        folders.append(folder_data)
+    uncategorized_count = visible_counts.get(None, 0)
     return jsonify({
         'folders': folders,
         'uncategorized_count': uncategorized_count
@@ -10322,7 +10467,6 @@ def api_get_folders():
 @app.route('/api/folders', methods=['POST'])
 @login_required
 @require_active_workspace
-@require_workspace_listing_admin
 def api_create_folder():
     """API: Create a new folder"""
     data = request.get_json(silent=True) or request.json or {}
@@ -10333,18 +10477,19 @@ def api_create_folder():
 
     parent_id = data.get('parent_id')
     if parent_id:
-        parent = ListingFolder.query.filter_by(id=parent_id, workspace_id=ws_id).first()
+        parent = visible_folder_query(workspace_id=ws_id).filter_by(id=parent_id).first()
         if not parent:
             return jsonify({'error': 'Parent folder not found'}), 404
     
     # Check if folder with same name exists
-    existing = ListingFolder.query.filter_by(name=data['name'], workspace_id=ws_id).first()
+    existing = visible_folder_query(workspace_id=ws_id).filter_by(name=data['name']).first()
     if existing:
         return jsonify({'error': 'A folder with this name already exists'}), 400
     
     try:
         folder = ListingFolder(
             workspace_id=ws_id,
+            owner_user_id=g.user.id if g.user else None,
             name=data['name'],
             color=data.get('color', 'indigo'),
             icon=data.get('icon', 'fa-folder'),
@@ -10366,21 +10511,19 @@ def api_create_folder():
 def api_get_folder(folder_id):
     """API: Get a single folder"""
     ws_id = get_active_workspace_id()
-    folder = ListingFolder.query.filter_by(id=folder_id, workspace_id=ws_id).first_or_404()
+    folder = get_visible_folder_or_404(folder_id, workspace_id=ws_id)
     data = folder.to_dict()
-    if not workspace_user_can_manage_all_listings(workspace_id=ws_id):
-        data['listing_count'] = visible_local_listing_query(ws_id).filter_by(folder_id=folder.id).count()
+    data['listing_count'] = visible_local_listing_query(ws_id).filter_by(folder_id=folder.id).count()
     return jsonify({'folder': data})
 
 
 @app.route('/api/folders/<int:folder_id>', methods=['PUT', 'PATCH'])
 @login_required
 @require_active_workspace
-@require_workspace_listing_admin
 def api_update_folder(folder_id):
     """API: Update a folder"""
     ws_id = get_active_workspace_id()
-    folder = ListingFolder.query.filter_by(id=folder_id, workspace_id=ws_id).first_or_404()
+    folder = get_visible_folder_or_404(folder_id, workspace_id=ws_id)
     data = request.json
     
     if 'name' in data:
@@ -10394,7 +10537,7 @@ def api_update_folder(folder_id):
     if 'parent_id' in data:
         parent_id = data['parent_id']
         if parent_id:
-            parent = ListingFolder.query.filter_by(id=parent_id, workspace_id=ws_id).first()
+            parent = visible_folder_query(workspace_id=ws_id).filter_by(id=parent_id).first()
             if not parent:
                 return jsonify({'error': 'Parent folder not found'}), 404
         folder.parent_id = parent_id
@@ -10406,14 +10549,13 @@ def api_update_folder(folder_id):
 @app.route('/api/folders/<int:folder_id>', methods=['DELETE'])
 @login_required
 @require_active_workspace
-@require_workspace_listing_admin
 def api_delete_folder(folder_id):
     """API: Delete a folder (moves listings to uncategorized)"""
     ws_id = get_active_workspace_id()
-    folder = ListingFolder.query.filter_by(id=folder_id, workspace_id=ws_id).first_or_404()
+    folder = get_visible_folder_or_404(folder_id, workspace_id=ws_id)
     
     # Move all listings in this folder to uncategorized
-    LocalListing.query.filter_by(folder_id=folder_id, workspace_id=ws_id).update({'folder_id': None})
+    visible_local_listing_query(ws_id).filter_by(folder_id=folder_id).update({'folder_id': None}, synchronize_session=False)
     
     db.session.delete(folder)
     db.session.commit()
@@ -10424,7 +10566,6 @@ def api_delete_folder(folder_id):
 @app.route('/api/listings/move-to-folder', methods=['POST'])
 @login_required
 @require_active_workspace
-@require_workspace_listing_admin
 def api_move_listings_to_folder():
     """API: Move listings to a folder"""
     data = request.json
@@ -10437,14 +10578,13 @@ def api_move_listings_to_folder():
     
     # Verify folder exists if specified
     if folder_id is not None:
-        folder = ListingFolder.query.filter_by(id=folder_id, workspace_id=ws_id).first()
+        folder = visible_folder_query(workspace_id=ws_id).filter_by(id=folder_id).first()
         if not folder:
             return jsonify({'error': 'Folder not found'}), 404
     
     # Update listings
-    updated = LocalListing.query.filter(
+    updated = visible_local_listing_query(ws_id).filter(
         LocalListing.id.in_(listing_ids),
-        LocalListing.workspace_id == ws_id
     ).update(
         {'folder_id': folder_id},
         synchronize_session=False
@@ -10469,20 +10609,19 @@ def loops_page():
     if ws:
         return redirect(url_for('workspace_loops', workspace_slug=ws.slug))
     ws_id = get_active_workspace_id()
-    loops = LoopConfig.query.filter_by(workspace_id=ws_id).order_by(LoopConfig.created_at.desc()).all()
+    loops = visible_loop_query(workspace_id=ws_id).order_by(LoopConfig.created_at.desc()).all()
     
     # Get primary listings only (exclude "Duplicated" folder)
-    duplicated_folder = ListingFolder.query.filter_by(name='Duplicated', workspace_id=ws_id).first()
+    duplicated_folder = visible_folder_query(workspace_id=ws_id).filter_by(name='Duplicated').first()
     if duplicated_folder:
-        listings = LocalListing.query.filter(
+        listings = visible_local_listing_query(ws_id).filter(
             db.or_(
                 LocalListing.folder_id != duplicated_folder.id,
                 LocalListing.folder_id == None
-            ),
-            LocalListing.workspace_id == ws_id
+            )
         ).order_by(LocalListing.reference).all()
     else:
-        listings = LocalListing.query.filter_by(workspace_id=ws_id).order_by(LocalListing.reference).all()
+        listings = visible_local_listing_query(ws_id).order_by(LocalListing.reference).all()
     
     return render_template('loops.html', loops=loops, listings=listings)
 
@@ -10494,7 +10633,7 @@ def loops_page():
 def api_get_loops():
     """Get all loop configurations"""
     ws_id = get_active_workspace_id()
-    loops = LoopConfig.query.filter_by(workspace_id=ws_id).order_by(LoopConfig.created_at.desc()).all()
+    loops = visible_loop_query(workspace_id=ws_id).order_by(LoopConfig.created_at.desc()).all()
     return jsonify({
         'success': True,
         'loops': [serialize_loop_for_api(loop) for loop in loops]
@@ -10531,6 +10670,7 @@ def api_create_loop():
     
     loop = LoopConfig(
         workspace_id=ws_id,
+        owner_user_id=g.user.id if g.user else None,
         name=data['name'],
         loop_type=data.get('loop_type', 'duplicate'),
         interval_hours=float(schedule_payload.get('interval_hours', data.get('interval_hours', 1))),
@@ -10578,7 +10718,7 @@ def api_create_loop():
 def api_get_loop(loop_id):
     """Get a single loop configuration"""
     ws_id = get_active_workspace_id()
-    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
+    loop = get_visible_loop_or_404(loop_id, workspace_id=ws_id)
     
     # Include listings with details
     loop_data = serialize_loop_for_api(loop)
@@ -10597,7 +10737,7 @@ def api_get_loop(loop_id):
 def api_update_loop(loop_id):
     """Update a loop configuration"""
     ws_id = get_active_workspace_id()
-    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
+    loop = get_visible_loop_or_404(loop_id, workspace_id=ws_id)
     data = request.get_json() or {}
 
     schedule_input = {
@@ -10673,7 +10813,7 @@ def api_update_loop(loop_id):
 def api_delete_loop(loop_id):
     """Delete a loop configuration"""
     ws_id = get_active_workspace_id()
-    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
+    loop = get_visible_loop_or_404(loop_id, workspace_id=ws_id)
     
     # Delete associated records
     LoopListing.query.filter_by(loop_config_id=loop.id).delete()
@@ -10695,7 +10835,7 @@ def api_delete_loop(loop_id):
 def api_start_loop(loop_id):
     """Start a loop"""
     ws_id = get_active_workspace_id()
-    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
+    loop = get_visible_loop_or_404(loop_id, workspace_id=ws_id)
     
     loop.is_active = True
     loop.is_paused = False
@@ -10718,7 +10858,7 @@ def api_start_loop(loop_id):
 def api_stop_loop(loop_id):
     """Stop a loop"""
     ws_id = get_active_workspace_id()
-    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
+    loop = get_visible_loop_or_404(loop_id, workspace_id=ws_id)
     
     loop.is_active = False
     loop.is_paused = False
@@ -10739,7 +10879,7 @@ def api_stop_loop(loop_id):
 def api_pause_loop(loop_id):
     """Pause a loop"""
     ws_id = get_active_workspace_id()
-    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
+    loop = get_visible_loop_or_404(loop_id, workspace_id=ws_id)
     
     loop.is_paused = True
     
@@ -10759,7 +10899,7 @@ def api_pause_loop(loop_id):
 def api_resume_loop(loop_id):
     """Resume a paused loop"""
     ws_id = get_active_workspace_id()
-    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
+    loop = get_visible_loop_or_404(loop_id, workspace_id=ws_id)
     
     loop.is_paused = False
     loop.next_run_at = compute_next_loop_run_at(loop, now_utc=datetime.utcnow())
@@ -10780,7 +10920,7 @@ def api_resume_loop(loop_id):
 def api_run_loop_now(loop_id):
     """Manually trigger a loop execution"""
     ws_id = get_active_workspace_id()
-    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
+    loop = get_visible_loop_or_404(loop_id, workspace_id=ws_id)
     
     if not loop.is_active:
         loop.is_active = True
@@ -10803,7 +10943,7 @@ def api_run_loop_now(loop_id):
 def api_get_loop_logs(loop_id):
     """Get execution logs for a loop"""
     ws_id = get_active_workspace_id()
-    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
+    loop = get_visible_loop_or_404(loop_id, workspace_id=ws_id)
     
     limit = request.args.get('limit', 50, type=int)
     logs = LoopExecutionLog.query.filter_by(loop_config_id=loop_id).order_by(
@@ -10829,7 +10969,7 @@ def api_get_loop_logs(loop_id):
 def api_get_loop_duplicates(loop_id):
     """Get duplicates created by a loop"""
     ws_id = get_active_workspace_id()
-    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
+    loop = get_visible_loop_or_404(loop_id, workspace_id=ws_id)
     
     duplicates = DuplicatedListing.query.filter_by(loop_config_id=loop_id).order_by(
         DuplicatedListing.created_at.desc()
@@ -10856,7 +10996,7 @@ def api_get_loop_duplicates(loop_id):
 def api_cleanup_loop_duplicates(loop_id):
     """Delete all duplicates created by a loop from PropertyFinder"""
     ws_id = get_active_workspace_id()
-    loop = LoopConfig.query.filter_by(id=loop_id, workspace_id=ws_id).first_or_404()
+    loop = get_visible_loop_or_404(loop_id, workspace_id=ws_id)
     
     # Stop the loop first
     loop.is_active = False

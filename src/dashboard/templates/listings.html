@@ -5,6 +5,7 @@
 
 {% block content %}
 {% set can_manage_listing_admin = ((current_workspace and current_user and current_workspace.is_admin(current_user.id)) or is_system_admin) %}
+{% set can_manage_personal_folders = (current_user is not none) %}
 <div x-data="listingsPage()" x-init="init()">
     <div class="flex gap-6">
         <!-- Folder Sidebar -->
@@ -14,7 +15,7 @@
                     <h3 class="font-semibold text-gray-800">
                         <i class="fas fa-folder-tree mr-2 text-indigo-600"></i>Folders
                     </h3>
-                    {% if can_manage_listing_admin %}
+                    {% if can_manage_personal_folders %}
                     <button @click="showCreateFolderModal = true" 
                             class="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="New Folder">
                         <i class="fas fa-plus"></i>
@@ -54,7 +55,7 @@
                             <span class="text-xs bg-gray-100 px-2 py-0.5 rounded-full">{{ folder.listing_count }}</span>
                         </a>
                         <!-- Folder actions (show on hover) -->
-                        {% if can_manage_listing_admin %}
+                        {% if can_manage_personal_folders %}
                         <div class="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1">
                             <button @click.prevent="editFolderById({{ folder.id }})" 
                                     class="p-1 text-gray-400 hover:text-indigo-600 hover:bg-white rounded">
@@ -73,7 +74,7 @@
                 {% if not folders %}
                 <p class="text-sm text-gray-500 text-center py-4">
                     No folders yet.<br>
-                    {% if can_manage_listing_admin %}
+                    {% if can_manage_personal_folders %}
                     <button @click="showCreateFolderModal = true" class="text-indigo-600 hover:underline mt-1">
                         Create your first folder
                     </button>
@@ -475,7 +476,7 @@
          x-transition
          class="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-gray-900 text-white px-6 py-3 rounded-lg shadow-lg flex items-center space-x-4 z-50">
         <span class="font-medium"><span x-text="selectedIds.length"></span> selected</span>
-        {% if can_manage_listing_admin %}
+        {% if can_manage_personal_folders %}
         <div class="h-6 w-px bg-gray-600"></div>
         <!-- Move to Folder Button -->
         <div class="relative" x-data="{ showFolderDropdown: false }">
@@ -497,6 +498,8 @@
                 {% endfor %}
             </div>
         </div>
+        {% endif %}
+        {% if can_manage_listing_admin %}
         <div class="h-6 w-px bg-gray-600"></div>
         <div class="flex items-center gap-2">
             <select x-model="bulkReassignUserId"

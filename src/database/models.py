@@ -161,7 +161,7 @@ class User(db.Model):
     # Legacy permission list (for backward compatibility)
     ALL_PERMISSIONS = [
         'view', 'create', 'edit', 'delete', 'publish', 
-        'bulk_upload', 'manage_leads', 'manage_users', 'settings'
+        'bulk_upload', 'manage_leads', 'manage_users', 'settings', 'manage_loops'
     ]
     
     def set_password(self, password):
@@ -251,6 +251,8 @@ class User(db.Model):
                 elif perm == 'settings':
                     perms.setdefault('settings', {})['view'] = True
                     perms.setdefault('settings', {})['edit'] = True
+                elif perm == 'manage_loops':
+                    perms.setdefault('listings', {})['view'] = True
             self.set_section_permissions(perms)
         else:
             self.section_permissions = '{}'
@@ -273,7 +275,8 @@ class User(db.Model):
             'bulk_upload': ('listings', 'bulk_upload'),
             'manage_leads': ('leads', 'view'),
             'manage_users': ('users', 'view'),
-            'settings': ('settings', 'view')
+            'settings': ('settings', 'view'),
+            'manage_loops': ('listings', 'view'),
         }
         if permission in mapping:
             section, action = mapping[permission]
@@ -304,6 +307,8 @@ class User(db.Model):
             perms.append('manage_users')
         if section_perms.get('settings', {}).get('view'):
             perms.append('settings')
+        if section_perms.get('listings', {}).get('view'):
+            perms.append('manage_loops')
         return perms
     
     def to_dict(self):
@@ -1202,10 +1207,12 @@ class ListingFolder(db.Model):
         db.Index('idx_folders_parent_id', 'parent_id'),
         db.Index('idx_folders_name', 'name'),
         db.Index('idx_folders_workspace_id', 'workspace_id'),
+        db.Index('idx_folders_owner_user_id', 'owner_user_id'),
     )
     
     id = db.Column(db.Integer, primary_key=True)
     workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id'), nullable=True, index=True)
+    owner_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)
     name = db.Column(db.String(100), nullable=False)
     color = db.Column(db.String(20), default='indigo')  # CSS color class
     icon = db.Column(db.String(50), default='fa-folder')  # FontAwesome icon
@@ -1216,6 +1223,7 @@ class ListingFolder(db.Model):
     
     # Relationships
     workspace = db.relationship('Workspace', foreign_keys=[workspace_id])
+    owner = db.relationship('User', foreign_keys=[owner_user_id])
     parent = db.relationship('ListingFolder', remote_side=[id], backref='subfolders')
     listings = db.relationship('LocalListing', backref='folder', lazy='dynamic')
     
@@ -1233,6 +1241,7 @@ class ListingFolder(db.Model):
         """Convert to dictionary"""
         return {
             'id': self.id,
+            'owner_user_id': self.owner_user_id,
             'name': self.name,
             'color': self.color,
             'icon': self.icon,
@@ -1244,20 +1253,21 @@ class ListingFolder(db.Model):
         }
     
     @classmethod
-    def get_all_with_counts(cls, workspace_id=None):
+    def get_all_with_counts(cls, workspace_id=None, owner_user_id=None):
         """Get all folders with listing counts (workspace-aware)."""
         query = cls.query.order_by(cls.name)
         if workspace_id:
             query = query.filter_by(workspace_id=workspace_id)
+        if owner_user_id is not None:
+            query = query.filter_by(owner_user_id=owner_user_id)
         folders = query.all()
         results = []
         for folder in folders:
             data = folder.to_dict()
+            listing_query = LocalListing.query.filter_by(folder_id=folder.id)
             if workspace_id:
-                data['listing_count'] = LocalListing.query.filter_by(
-                    folder_id=folder.id,
-                    workspace_id=workspace_id
-                ).count()
+                listing_query = listing_query.filter_by(workspace_id=workspace_id)
+            data['listing_count'] = listing_query.count()
             results.append(data)
         return results
 
@@ -2359,12 +2369,14 @@ class LoopConfig(db.Model):
     __tablename__ = 'loop_configs'
     __table_args__ = (
         db.Index('idx_loop_configs_workspace_id', 'workspace_id'),
+        db.Index('idx_loop_configs_owner_user_id', 'owner_user_id'),
         db.Index('idx_loop_configs_is_active', 'is_active'),
         db.Index('idx_loop_configs_next_run', 'next_run_at'),
     )
     
     id = db.Column(db.Integer, primary_key=True)
     workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id'), nullable=True, index=True)
+    owner_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)
     name = db.Column(db.String(100), nullable=False)
     
     # Loop type: 'duplicate' = create copy & publish, 'delete_republish' = delete from PF & republish
@@ -2399,6 +2411,7 @@ class LoopConfig(db.Model):
     # Relationships
     listings = db.relationship('LoopListing', backref='loop_config', lazy='dynamic', cascade='all, delete-orphan')
     duplicates = db.relationship('DuplicatedListing', backref='loop_config', lazy='dynamic')
+    owner = db.relationship('User', foreign_keys=[owner_user_id])
 
     SCHEDULE_INTERVAL = 'interval'
     SCHEDULE_WINDOWED_INTERVAL = 'windowed_interval'
@@ -2453,6 +2466,8 @@ class LoopConfig(db.Model):
     def to_dict(self):
         return {
             'id': self.id,
+            'owner_user_id': self.owner_user_id,
+            'owner_name': self.owner.name if self.owner else None,
             'name': self.name,
             'loop_type': self.loop_type,
             'interval_hours': self.interval_hours,
