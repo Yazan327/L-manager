@@ -337,7 +337,9 @@
                     <div class="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-3 bg-gray-50">
                         <template x-for="perm in allPermissions" :key="perm">
                             <label class="flex items-center gap-2 text-sm text-gray-700">
-                                <input type="checkbox" :value="perm" x-model="editingUser.workspace_custom_permissions"
+                                <input type="checkbox"
+                                       :checked="hasExtraPermission(perm)"
+                                       @change="toggleExtraPermission(perm, $event.target.checked)"
                                        class="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500">
                                 <span x-text="perm"></span>
                             </label>
@@ -366,7 +368,7 @@
 function usersPage() {
     return {
         showEditModal: false,
-        editingUser: {},
+        editingUser: { workspace_custom_permissions: [] },
         users: {{ users|tojson|safe }},
         workspaceId: {{ workspace.id if workspace else 'null' }},
         workspaceRoleOptions: {{ workspace_member_roles|tojson|safe if workspace_member_roles is defined else '{}' }},
@@ -398,6 +400,28 @@ function usersPage() {
                     : []
             };
             this.showEditModal = true;
+        },
+
+        hasExtraPermission(permission) {
+            if (!Array.isArray(this.editingUser.workspace_custom_permissions)) {
+                this.editingUser.workspace_custom_permissions = [];
+            }
+            return this.editingUser.workspace_custom_permissions.includes(permission);
+        },
+
+        toggleExtraPermission(permission, isChecked) {
+            if (!Array.isArray(this.editingUser.workspace_custom_permissions)) {
+                this.editingUser.workspace_custom_permissions = [];
+            }
+            if (isChecked) {
+                if (!this.editingUser.workspace_custom_permissions.includes(permission)) {
+                    this.editingUser.workspace_custom_permissions.push(permission);
+                }
+                return;
+            }
+            this.editingUser.workspace_custom_permissions = this.editingUser.workspace_custom_permissions.filter(
+                p => p !== permission
+            );
         },
 
         async loadInvites() {
