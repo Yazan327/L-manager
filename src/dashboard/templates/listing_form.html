@@ -406,6 +406,7 @@
             
             <!-- Hidden input for form submission -->
             <input type="hidden" name="images" x-model="imagesJson">
+            <input type="hidden" name="original_images" x-model="originalImagesJson">
             
             <div class="grid grid-cols-1 gap-6">
                 <!-- Image Upload Zone -->
@@ -1234,6 +1235,11 @@ function imageManager() {
             return JSON.stringify(this.images.map(img => img.url || img));
         },
 
+        get originalImagesJson() {
+            // Keep original sources so listing can be reprocessed later.
+            return JSON.stringify(this.getResolvableOriginalSources());
+        },
+
         normalizeSource(value) {
             return normalizeSource(value);
         },
@@ -1317,12 +1323,13 @@ function imageManager() {
                         const index = this.images.findIndex(img => img.id === tempId);
                         if (index !== -1) {
                             const normalizedUploadedUrl = this.normalizeSource(data.url);
+                            const normalizedOriginalUrl = this.normalizeSource(data.original_url || data.url);
                             this.images[index] = {
                                 id: data.id || tempId,
                                 url: normalizedUploadedUrl,
                                 uploading: false,
                                 processed: this.isProcessedUrl(normalizedUploadedUrl),
-                                originalSource: normalizedUploadedUrl
+                                originalSource: normalizedOriginalUrl || normalizedUploadedUrl
                             };
                         }
                     } else {
@@ -1438,7 +1445,8 @@ function imageManager() {
                         // Base64 image - send directly
                         requestBody = {
                             image: source,
-                            listing_id: this.listingId
+                            listing_id: this.listingId,
+                            source_url: source
                         };
                     } else if (source.startsWith('/uploads/')) {
                         // Local upload - need to fetch as base64 first
@@ -1452,13 +1460,15 @@ function imageManager() {
                         });
                         requestBody = {
                             image: base64,
-                            listing_id: this.listingId
+                            listing_id: this.listingId,
+                            source_url: source
                         };
                     } else {
                         // External URL - let server download it (bypasses CORS)
                         requestBody = {
                             url: source,
-                            listing_id: this.listingId
+                            listing_id: this.listingId,
+                            source_url: source
                         };
                     }
                     

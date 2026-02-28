@@ -6,7 +6,7 @@ from .models import (
     LoopConfig, LoopListing, DuplicatedListing, LoopExecutionLog,
     TaskBoard, TaskLabel, Task, TaskComment, task_label_association,
     BoardMember, task_assignee_association, BOARD_PERMISSIONS,
-    Workspace, WorkspaceMember, WorkspaceConnection, WorkspaceInvite, PasswordResetToken,
+    Workspace, WorkspaceMember, WorkspaceConnection, WorkspaceApiCredential, WorkspaceInvite, PasswordResetToken,
     SystemRole, UserSystemRole, WorkspaceRole, ModulePermission, ObjectACL, FeatureFlag, AuditLog
 )
 
@@ -15,6 +15,6 @@ __all__ = [
     'LoopConfig', 'LoopListing', 'DuplicatedListing', 'LoopExecutionLog',
     'TaskBoard', 'TaskLabel', 'Task', 'TaskComment', 'task_label_association',
     'BoardMember', 'task_assignee_association', 'BOARD_PERMISSIONS',
-    'Workspace', 'WorkspaceMember', 'WorkspaceConnection', 'WorkspaceInvite', 'PasswordResetToken',
+    'Workspace', 'WorkspaceMember', 'WorkspaceConnection', 'WorkspaceApiCredential', 'WorkspaceInvite', 'PasswordResetToken',
     'SystemRole', 'UserSystemRole', 'WorkspaceRole', 'ModulePermission', 'ObjectACL', 'FeatureFlag', 'AuditLog'
 ]

@@ -17,12 +17,14 @@ from zoneinfo import ZoneInfo
 # Get the src directory
 ROOT_DIR = Path(__file__).parent
 SRC_DIR = ROOT_DIR / 'src'
+DOCUMENTATION_DIR = ROOT_DIR / 'documentation'
 
 # Add src directory to path
 sys.path.insert(0, str(SRC_DIR))
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session, g, has_request_context
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session, g, has_request_context, send_file
 from werkzeug.utils import secure_filename
+from sqlalchemy.exc import IntegrityError
 
 from api import PropertyFinderClient, PropertyFinderAPIError, Config
 from models import PropertyListing, PropertyType, OfferingType, Location, Price
@@ -32,7 +34,7 @@ from database import (
     LoopConfig, LoopListing, DuplicatedListing, LoopExecutionLog, 
     Lead, LeadComment, Contact, Customer,
     TaskBoard, TaskLabel, Task, TaskComment, BoardMember, BOARD_PERMISSIONS, task_assignee_association,
-    Workspace, WorkspaceMember, WorkspaceConnection, WorkspaceInvite, PasswordResetToken,
+    Workspace, WorkspaceMember, WorkspaceConnection, WorkspaceApiCredential, WorkspaceInvite, PasswordResetToken,
     SystemRole, UserSystemRole, WorkspaceRole, ModulePermission, ObjectACL, FeatureFlag, AuditLog
 )
 from images import ImageProcessor
@@ -59,7 +61,7 @@ print(f"[STARTUP] APP_PUBLIC_URL: {APP_PUBLIC_URL or 'NOT SET - local images wil
 # Reserved slugs must never be used for workspace routes.
 RESERVED_WORKSPACE_SLUGS = {
     'system-admin', 'login', 'logout', 'register', 'api',
-    'workspaces', 'workspace', 'static', 'ping', 'favicon.ico'
+    'workspaces', 'workspace', 'static', 'ping', 'favicon.ico', 'open-api'
 }
 
 # Storage Configuration - Use Railway Volume in production
@@ -640,6 +642,61 @@ with app.app_context():
                     print("[MIGRATION] password_reset_tokens table created successfully")
         except Exception as e:
             print(f"[MIGRATION] password_reset_tokens table creation skipped or failed: {e}")
+
+        # Migration: Create workspace_api_credentials table
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='workspace_api_credentials'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating workspace_api_credentials table...")
+                    conn.execute(text("""
+                        CREATE TABLE workspace_api_credentials (
+                            id SERIAL PRIMARY KEY,
+                            workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                            name VARCHAR(120) NOT NULL,
+                            key_id VARCHAR(64) NOT NULL UNIQUE,
+                            secret_hash VARCHAR(255) NOT NULL,
+                            scopes_json TEXT DEFAULT '["listings:create"]',
+                            is_active BOOLEAN DEFAULT TRUE,
+                            rate_limit_per_min INTEGER DEFAULT 60,
+                            created_by_id INTEGER REFERENCES users(id),
+                            revoked_by_id INTEGER REFERENCES users(id),
+                            last_used_at TIMESTAMP,
+                            last_used_ip VARCHAR(50),
+                            expires_at TIMESTAMP,
+                            revoked_at TIMESTAMP,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX idx_workspace_api_credentials_workspace ON workspace_api_credentials(workspace_id)"))
+                    conn.execute(text("CREATE INDEX idx_workspace_api_credentials_active ON workspace_api_credentials(is_active)"))
+                    conn.execute(text("CREATE INDEX idx_workspace_api_credentials_revoked_at ON workspace_api_credentials(revoked_at)"))
+                    conn.commit()
+                    print("[MIGRATION] workspace_api_credentials table created successfully")
+        except Exception as e:
+            print(f"[MIGRATION] workspace_api_credentials table creation skipped or failed: {e}")
+
+        # Migration: Ensure newer open-api credential columns exist
+        open_api_columns = [
+            ('scopes_json', "ALTER TABLE workspace_api_credentials ADD COLUMN scopes_json TEXT DEFAULT '[\"listings:create\"]'"),
+            ('rate_limit_per_min', "ALTER TABLE workspace_api_credentials ADD COLUMN rate_limit_per_min INTEGER DEFAULT 60"),
+            ('revoked_by_id', "ALTER TABLE workspace_api_credentials ADD COLUMN revoked_by_id INTEGER REFERENCES users(id)"),
+        ]
+        for column_name, ddl in open_api_columns:
+            try:
+                with db.engine.connect() as conn:
+                    result = conn.execute(text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name='workspace_api_credentials' AND column_name=:column_name"
+                    ), {'column_name': column_name})
+                    if not result.fetchone():
+                        print(f"[MIGRATION] Adding {column_name} to workspace_api_credentials...")
+                        conn.execute(text(ddl))
+                        conn.commit()
+                        print(f"[MIGRATION] {column_name} column added to workspace_api_credentials")
+            except Exception as e:
+                print(f"[MIGRATION] {column_name} migration for workspace_api_credentials skipped or failed: {e}")
         
         # ==================== BITRIX24-STYLE PERMISSION SYSTEM MIGRATION ====================
         
@@ -2461,6 +2518,151 @@ def _generate_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+_open_api_rate_limit_cache = {}
+
+
+def _generate_open_api_key_id() -> str:
+    return f"wsk_{secrets.token_hex(12)}"
+
+
+def _generate_open_api_secret() -> str:
+    return f"wss_{secrets.token_urlsafe(36)}"
+
+
+def _mask_open_api_key_id(key_id: str) -> str:
+    text_value = str(key_id or '').strip()
+    if len(text_value) <= 10:
+        return text_value[:4] + '****'
+    return text_value[:8] + '****' + text_value[-4:]
+
+
+def _parse_iso_datetime_value(value):
+    if not value:
+        return None
+    try:
+        normalized = str(value).strip()
+        if normalized.endswith('Z'):
+            normalized = normalized[:-1] + '+00:00'
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+    except Exception:
+        return None
+
+
+def _open_api_error_response(status_code: int, code: str, message: str, request_id=None, details=None):
+    payload = {
+        'success': False,
+        'code': code,
+        'error': message,
+        'request_id': request_id or f"oa_{secrets.token_hex(8)}"
+    }
+    if details is not None:
+        payload['details'] = details
+    response = jsonify(payload)
+    response.status_code = status_code
+    response.headers['X-Request-Id'] = payload['request_id']
+    return response
+
+
+def _check_open_api_rate_limit(credential: WorkspaceApiCredential):
+    """Best-effort in-memory rate limiter per credential per minute."""
+    limit = int(getattr(credential, 'rate_limit_per_min', 60) or 60)
+    if limit <= 0:
+        return True, None
+
+    now = datetime.utcnow()
+    window = now.strftime('%Y%m%d%H%M')
+    cache_key = f"{credential.id}:{window}"
+    record = _open_api_rate_limit_cache.get(cache_key)
+    if not record:
+        _open_api_rate_limit_cache[cache_key] = {'count': 1, 'created_at': now}
+        # opportunistic cleanup of old buckets
+        if len(_open_api_rate_limit_cache) > 5000:
+            threshold = now - timedelta(minutes=5)
+            stale_keys = [k for k, v in _open_api_rate_limit_cache.items() if v.get('created_at') and v['created_at'] < threshold]
+            for stale_key in stale_keys:
+                _open_api_rate_limit_cache.pop(stale_key, None)
+        return True, None
+
+    if int(record.get('count', 0)) >= limit:
+        return False, 60
+
+    record['count'] = int(record.get('count', 0)) + 1
+    return True, None
+
+
+def _resolve_open_api_credential(required_scope='listings:create', request_id=None):
+    """Authenticate Open API request using X-API-Key and X-API-Secret headers."""
+    key_id = (request.headers.get('X-API-Key') or '').strip()
+    api_secret = (request.headers.get('X-API-Secret') or '').strip()
+    request_id = request_id or request.headers.get('X-Request-Id') or f"oa_{secrets.token_hex(8)}"
+
+    if not key_id or not api_secret:
+        return None, _open_api_error_response(401, 'invalid_credentials', 'Missing API credentials headers.', request_id=request_id)
+
+    credential = WorkspaceApiCredential.query.filter_by(key_id=key_id).first()
+    if not credential:
+        return None, _open_api_error_response(401, 'invalid_credentials', 'Invalid API credentials.', request_id=request_id)
+
+    if not credential.verify_secret(api_secret):
+        return None, _open_api_error_response(401, 'invalid_credentials', 'Invalid API credentials.', request_id=request_id)
+
+    if not credential.is_active:
+        return None, _open_api_error_response(403, 'credential_inactive', 'Credential is inactive.', request_id=request_id)
+    if credential.is_revoked():
+        return None, _open_api_error_response(403, 'credential_revoked', 'Credential is revoked.', request_id=request_id)
+    if credential.is_expired():
+        return None, _open_api_error_response(403, 'credential_expired', 'Credential is expired.', request_id=request_id)
+
+    scopes = credential.get_scopes()
+    if required_scope and required_scope not in scopes:
+        return None, _open_api_error_response(403, 'insufficient_scope', 'Credential scope does not allow this action.', request_id=request_id)
+
+    allowed, retry_after = _check_open_api_rate_limit(credential)
+    if not allowed:
+        response = _open_api_error_response(
+            429,
+            'rate_limited',
+            f'Rate limit exceeded. Maximum {credential.rate_limit_per_min or 60} requests per minute.',
+            request_id=request_id
+        )
+        if retry_after:
+            response.headers['Retry-After'] = str(retry_after)
+        return None, response
+
+    if has_request_context():
+        g.open_api_workspace_id = credential.workspace_id
+        g.open_api_credential_id = credential.id
+
+    return credential, None
+
+
+def _log_open_api_request(request_id, status_code, credential=None, workspace_id=None, error_code=None, started_at=None):
+    """Write concise structured logs for open-api traffic."""
+    try:
+        elapsed_ms = None
+        if started_at:
+            elapsed_ms = int((datetime.utcnow() - started_at).total_seconds() * 1000)
+        key_raw = ''
+        if credential and getattr(credential, 'key_id', None):
+            key_raw = credential.key_id
+        elif has_request_context():
+            key_raw = request.headers.get('X-API-Key') or ''
+        masked_key = _mask_open_api_key_id(key_raw) if key_raw else 'missing'
+        resolved_workspace_id = workspace_id
+        if resolved_workspace_id is None and credential:
+            resolved_workspace_id = credential.workspace_id
+        print(
+            f"[OPEN-API] request_id={request_id} status={status_code} "
+            f"workspace_id={resolved_workspace_id} key_id={masked_key} "
+            f"code={error_code or 'ok'} latency_ms={elapsed_ms if elapsed_ms is not None else 'n/a'}"
+        )
+    except Exception:
+        pass
+
+
 def _public_base_url():
     if APP_PUBLIC_URL:
         return APP_PUBLIC_URL.rstrip('/')
@@ -2509,7 +2711,96 @@ def get_default_assigned_agent_email(workspace_id=None, user=None):
             return setting_email
         if setting_email.lower() != user_email.lower() and setting_email.lower() != config_default_email.lower():
             return setting_email
-    return user_email or setting_email
+    return user_email or setting_email or config_default_email
+
+
+def _validate_open_api_listing_payload(data):
+    """Validate required fields for external open-api listing creation."""
+    if not isinstance(data, dict):
+        return {'payload': 'JSON object is required.'}
+
+    errors = {}
+    required_fields = ['reference', 'offering_type', 'property_type', 'category', 'price']
+    for field in required_fields:
+        value = data.get(field)
+        if value is None or str(value).strip() == '':
+            errors[field] = 'This field is required.'
+
+    title_en = str(data.get('title_en') or '').strip()
+    title_ar = str(data.get('title_ar') or '').strip()
+    if not title_en and not title_ar:
+        errors['title'] = 'At least one title is required (title_en or title_ar).'
+
+    if data.get('price') not in (None, ''):
+        try:
+            price_value = float(data.get('price'))
+            if price_value <= 0:
+                errors['price'] = 'Price must be greater than 0.'
+        except (TypeError, ValueError):
+            errors['price'] = 'Price must be a valid number.'
+
+    return errors
+
+
+def _create_local_listing_record(data, workspace_id, actor_user=None, can_manage_all=True, force_draft=False):
+    """Shared listing creation helper used by internal and open APIs."""
+    reference = (data.get('reference') or '').strip()
+    if not reference:
+        return None, ('validation_error', 'Reference is required.', 422, {'reference': 'This field is required.'})
+
+    existing = LocalListing.query.filter_by(reference=reference, workspace_id=workspace_id).first()
+    if existing:
+        return None, ('duplicate_reference', 'Reference already exists in this workspace.', 409, None)
+
+    listing = LocalListing.from_dict(data)
+    listing.workspace_id = workspace_id
+
+    if force_draft or not (listing.status or '').strip():
+        listing.status = 'draft'
+
+    if not (listing.assigned_agent or '').strip():
+        listing.assigned_agent = get_default_assigned_agent_email(workspace_id=workspace_id, user=actor_user)
+
+    if can_manage_all:
+        if 'assigned_to_id' in (data or {}):
+            assigned_to_id = _validate_assignee(workspace_id, data.get('assigned_to_id'))
+            if data.get('assigned_to_id') and not assigned_to_id:
+                return None, ('validation_error', 'Assigned user must be in this workspace.', 422, {'assigned_to_id': 'Invalid workspace member.'})
+            listing.assigned_to_id = assigned_to_id
+    elif actor_user:
+        listing.assigned_to_id = actor_user.id
+
+    db.session.add(listing)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return None, ('duplicate_reference', 'Reference already exists.', 409, None)
+
+    return listing, None
+
+
+def _create_audit_log(action, action_result='allowed', workspace_id=None, user=None, details=None, resource_type=None, resource_id=None):
+    """Best-effort audit logger that never raises to callers."""
+    try:
+        log = AuditLog(
+            user_id=user.id if user else None,
+            user_email=user.email if user else None,
+            action=action,
+            action_result=action_result,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            workspace_id=workspace_id,
+            ip_address=request.remote_addr if has_request_context() else None,
+            user_agent=request.headers.get('User-Agent') if has_request_context() else None,
+        )
+        if details is not None:
+            log.set_details(details)
+        db.session.add(log)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        pass
 
 
 def _normalize_upload_path(path):
@@ -4838,6 +5129,331 @@ def api_test_connection(workspace_id, connection_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ==================== WORKSPACE OPEN API CREDENTIALS ====================
+
+@app.route('/api/workspaces/<int:workspace_id>/open-api/credentials', methods=['GET'])
+@login_required
+def api_list_workspace_open_api_credentials(workspace_id):
+    """List workspace Open API credentials (no secrets)."""
+    Workspace.query.get_or_404(workspace_id)
+    if not can_manage_workspace_members(g.user, workspace_id):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+
+    credentials = WorkspaceApiCredential.query.filter_by(workspace_id=workspace_id).order_by(
+        WorkspaceApiCredential.created_at.desc()
+    ).all()
+
+    items = []
+    for credential in credentials:
+        row = credential.to_dict()
+        row['key_id_masked'] = _mask_open_api_key_id(row.get('key_id'))
+        row.pop('key_id', None)
+        items.append(row)
+
+    return jsonify({'success': True, 'credentials': items})
+
+
+@app.route('/api/workspaces/<int:workspace_id>/open-api/credentials', methods=['POST'])
+@login_required
+def api_create_workspace_open_api_credential(workspace_id):
+    """Create a new workspace Open API credential and return secret once."""
+    Workspace.query.get_or_404(workspace_id)
+    if not can_manage_workspace_members(g.user, workspace_id):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+
+    data = request.get_json(silent=True) or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'success': False, 'error': 'Credential name is required'}), 400
+
+    expires_at_raw = (data.get('expires_at') or '').strip()
+    expires_at = _parse_iso_datetime_value(expires_at_raw) if expires_at_raw else None
+    if expires_at_raw and not expires_at:
+        return jsonify({'success': False, 'error': 'Invalid expires_at format (expected ISO datetime)'}), 400
+    if expires_at and expires_at <= datetime.utcnow():
+        return jsonify({'success': False, 'error': 'expires_at must be in the future'}), 400
+
+    key_id = None
+    for _ in range(8):
+        candidate = _generate_open_api_key_id()
+        if not WorkspaceApiCredential.query.filter_by(key_id=candidate).first():
+            key_id = candidate
+            break
+    if not key_id:
+        return jsonify({'success': False, 'error': 'Failed to generate unique key_id'}), 500
+
+    api_secret = _generate_open_api_secret()
+
+    credential = WorkspaceApiCredential(
+        workspace_id=workspace_id,
+        name=name,
+        key_id=key_id,
+        is_active=True,
+        created_by_id=g.user.id,
+        expires_at=expires_at,
+        rate_limit_per_min=60
+    )
+    credential.set_scopes(['listings:create'])
+    credential.set_secret(api_secret)
+
+    db.session.add(credential)
+    db.session.commit()
+
+    _create_audit_log(
+        action='open_api_credential_created',
+        workspace_id=workspace_id,
+        user=g.user,
+        resource_type='workspace_api_credential',
+        resource_id=credential.id,
+        details={'key_id_masked': _mask_open_api_key_id(credential.key_id), 'name': credential.name}
+    )
+
+    return jsonify({
+        'success': True,
+        'credential': credential.to_dict(),
+        'key_id': credential.key_id,
+        'api_secret': api_secret,
+        'message': 'Credential created. Save the secret now; it will not be shown again.'
+    }), 201
+
+
+@app.route('/api/workspaces/<int:workspace_id>/open-api/credentials/<int:credential_id>/revoke', methods=['POST'])
+@login_required
+def api_revoke_workspace_open_api_credential(workspace_id, credential_id):
+    """Soft-revoke workspace Open API credential."""
+    Workspace.query.get_or_404(workspace_id)
+    if not can_manage_workspace_members(g.user, workspace_id):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+
+    credential = WorkspaceApiCredential.query.filter_by(
+        id=credential_id,
+        workspace_id=workspace_id
+    ).first_or_404()
+
+    if credential.revoked_at:
+        return jsonify({'success': True, 'credential': credential.to_dict(), 'message': 'Credential already revoked'})
+
+    credential.revoked_at = datetime.utcnow()
+    credential.revoked_by_id = g.user.id
+    credential.is_active = False
+    credential.updated_at = datetime.utcnow()
+    db.session.commit()
+
+    _create_audit_log(
+        action='open_api_credential_revoked',
+        workspace_id=workspace_id,
+        user=g.user,
+        resource_type='workspace_api_credential',
+        resource_id=credential.id,
+        details={'key_id_masked': _mask_open_api_key_id(credential.key_id)}
+    )
+
+    return jsonify({'success': True, 'credential': credential.to_dict(), 'message': 'Credential revoked'})
+
+
+@app.route('/api/workspaces/<int:workspace_id>/open-api/credentials/<int:credential_id>/regenerate-secret', methods=['POST'])
+@login_required
+def api_regenerate_workspace_open_api_credential_secret(workspace_id, credential_id):
+    """Rotate API secret for an existing workspace credential."""
+    Workspace.query.get_or_404(workspace_id)
+    if not can_manage_workspace_members(g.user, workspace_id):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+
+    credential = WorkspaceApiCredential.query.filter_by(
+        id=credential_id,
+        workspace_id=workspace_id
+    ).first_or_404()
+
+    if credential.revoked_at:
+        return jsonify({'success': False, 'error': 'Cannot regenerate a revoked credential'}), 400
+
+    api_secret = _generate_open_api_secret()
+    credential.set_secret(api_secret)
+    credential.updated_at = datetime.utcnow()
+    db.session.commit()
+
+    _create_audit_log(
+        action='open_api_credential_secret_regenerated',
+        workspace_id=workspace_id,
+        user=g.user,
+        resource_type='workspace_api_credential',
+        resource_id=credential.id,
+        details={'key_id_masked': _mask_open_api_key_id(credential.key_id)}
+    )
+
+    return jsonify({
+        'success': True,
+        'credential': credential.to_dict(),
+        'key_id': credential.key_id,
+        'api_secret': api_secret,
+        'message': 'Secret regenerated. Save it now; it will not be shown again.'
+    })
+
+
+# ==================== EXTERNAL OPEN API ====================
+
+@app.route('/api/open/v1/listings', methods=['POST'])
+def api_open_v1_create_listing():
+    """Create local listing via workspace credential-based Open API."""
+    request_id = request.headers.get('X-Request-Id') or f"oa_{secrets.token_hex(8)}"
+    started_at = datetime.utcnow()
+    credential = None
+
+    try:
+        credential, auth_error = _resolve_open_api_credential(required_scope='listings:create', request_id=request_id)
+        if auth_error:
+            _log_open_api_request(
+                request_id=request_id,
+                status_code=auth_error.status_code,
+                credential=credential,
+                error_code=(auth_error.get_json(silent=True) or {}).get('code'),
+                started_at=started_at
+            )
+            return auth_error
+
+        payload = request.get_json(silent=True)
+        if payload is None:
+            response = _open_api_error_response(
+                422,
+                'validation_error',
+                'JSON request body is required.',
+                request_id=request_id,
+                details={'payload': 'JSON object is required.'}
+            )
+            _log_open_api_request(
+                request_id=request_id,
+                status_code=422,
+                credential=credential,
+                error_code='validation_error',
+                started_at=started_at
+            )
+            return response
+
+        validation_errors = _validate_open_api_listing_payload(payload)
+        if validation_errors:
+            response = _open_api_error_response(
+                422,
+                'validation_error',
+                'Payload validation failed.',
+                request_id=request_id,
+                details=validation_errors
+            )
+            _log_open_api_request(
+                request_id=request_id,
+                status_code=422,
+                credential=credential,
+                error_code='validation_error',
+                started_at=started_at
+            )
+            return response
+
+        listing, create_error = _create_local_listing_record(
+            data=payload,
+            workspace_id=credential.workspace_id,
+            actor_user=None,
+            can_manage_all=True,
+            force_draft=True
+        )
+        if create_error:
+            error_code, message, status_code, details = create_error
+            mapped_code = {
+                'duplicate_reference': 'duplicate_reference',
+                'validation_error': 'validation_error',
+            }.get(error_code, 'internal_error')
+            response = _open_api_error_response(
+                status_code,
+                mapped_code,
+                message,
+                request_id=request_id,
+                details=details
+            )
+            _log_open_api_request(
+                request_id=request_id,
+                status_code=status_code,
+                credential=credential,
+                error_code=mapped_code,
+                started_at=started_at
+            )
+            return response
+
+        credential.last_used_at = datetime.utcnow()
+        credential.last_used_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+        db.session.commit()
+
+        _create_audit_log(
+            action='open_api_listing_created',
+            workspace_id=credential.workspace_id,
+            user=None,
+            resource_type='listing',
+            resource_id=listing.id,
+            details={
+                'reference': listing.reference,
+                'credential_id': credential.id,
+                'key_id_masked': _mask_open_api_key_id(credential.key_id),
+                'request_id': request_id
+            }
+        )
+
+        response = jsonify({
+            'success': True,
+            'data': listing.to_dict(),
+            'meta': {
+                'workspace_id': credential.workspace_id
+            },
+            'request_id': request_id
+        })
+        response.status_code = 201
+        response.headers['X-Request-Id'] = request_id
+        _log_open_api_request(
+            request_id=request_id,
+            status_code=201,
+            credential=credential,
+            started_at=started_at
+        )
+        return response
+
+    except Exception as exc:
+        db.session.rollback()
+        response = _open_api_error_response(
+            500,
+            'internal_error',
+            'Internal server error.',
+            request_id=request_id
+        )
+        _log_open_api_request(
+            request_id=request_id,
+            status_code=500,
+            credential=credential,
+            error_code='internal_error',
+            started_at=started_at
+        )
+        print(f"[OPEN-API] request_id={request_id} unhandled_error={exc}")
+        return response
+
+
+@app.route('/api/open/v1/spec', methods=['GET'])
+def api_open_v1_spec():
+    """Serve OpenAPI specification JSON for external clients."""
+    spec_path = DOCUMENTATION_DIR / 'lmanager-openapi-v1.json'
+    if not spec_path.exists():
+        return jsonify({'success': False, 'error': 'OpenAPI spec not found'}), 404
+    return send_file(spec_path, mimetype='application/json')
+
+
+@app.route('/open-api/docs', methods=['GET'])
+def open_api_docs_page():
+    """Human-readable Open API documentation page."""
+    markdown_path = DOCUMENTATION_DIR / 'OPEN_API_LISTINGS.md'
+    docs_markdown = ''
+    if markdown_path.exists():
+        docs_markdown = markdown_path.read_text(encoding='utf-8')
+    return render_template(
+        'open_api_docs.html',
+        docs_markdown=docs_markdown,
+        spec_url=url_for('api_open_v1_spec')
+    )
+
+
 # ==================== WORKSPACE SESSION ====================
 
 @app.route('/api/workspace/switch/<int:workspace_id>', methods=['POST'])
@@ -7042,6 +7658,9 @@ def create_listing_form():
     images = form.get('images', '')
     if images:
         local_listing.images = process_image_urls(images)
+    original_images = form.get('original_images', '')
+    if original_images:
+        local_listing.original_images = process_image_urls(original_images)
     
     # Handle amenities
     amenities = form.getlist('amenities')
@@ -7117,6 +7736,9 @@ def update_listing_form(listing_id):
             images = form.get('images', '')
             if images:
                 local_listing.images = process_image_urls(images)
+            original_images = form.get('original_images', '')
+            if original_images:
+                local_listing.original_images = process_image_urls(original_images)
             local_listing.video_tour = convert_google_drive_url(form.get('video_tour')) if form.get('video_tour') else None
             local_listing.video_360 = convert_google_drive_url(form.get('video_360')) if form.get('video_360') else None
             
@@ -7673,23 +8295,23 @@ def api_local_get_listings():
 @require_active_workspace
 def api_local_create_listing():
     """Create a local listing"""
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     ws_id = get_active_workspace_id()
-    
-    # Check if reference already exists
-    existing = LocalListing.query.filter_by(reference=data.get('reference'), workspace_id=ws_id).first()
-    if existing:
-        return jsonify({'error': 'Reference already exists'}), 400
-    
-    listing = LocalListing.from_dict(data)
-    listing.workspace_id = ws_id
-    if not (listing.assigned_agent or '').strip():
-        listing.assigned_agent = get_default_assigned_agent_email(workspace_id=ws_id, user=g.user)
-    if not workspace_user_can_manage_all_listings(workspace_id=ws_id):
-        listing.assigned_to_id = g.user.id
-    db.session.add(listing)
-    db.session.commit()
-    
+    can_manage_all = workspace_user_can_manage_all_listings(workspace_id=ws_id)
+    listing, error = _create_local_listing_record(
+        data=data,
+        workspace_id=ws_id,
+        actor_user=g.user,
+        can_manage_all=can_manage_all,
+        force_draft=False
+    )
+    if error:
+        _code, message, status_code, details = error
+        payload = {'success': False, 'error': message}
+        if details:
+            payload['details'] = details
+        return jsonify(payload), status_code
+
     return jsonify({'success': True, 'data': listing.to_dict()}), 201
 
 
@@ -7727,6 +8349,11 @@ def api_local_update_listing(listing_id):
         if hasattr(listing, key) and key not in ['id', 'created_at', 'assigned_to_id']:
             if key == 'images' and isinstance(value, list):
                 value = '|'.join(value)
+            elif key == 'original_images':
+                if isinstance(value, list):
+                    value = json.dumps([v for v in value if isinstance(v, str) and v.strip()])
+                elif isinstance(value, str):
+                    value = process_image_urls(value)
             elif key == 'amenities' and isinstance(value, list):
                 value = ','.join(value)
             setattr(listing, key, value)
@@ -10277,6 +10904,7 @@ def api_process_image_with_settings():
             return jsonify({'error': 'No data provided'}), 400
         
         listing_id = data.get('listing_id')
+        source_url = (data.get('source_url') or data.get('url') or '').strip()
         ws_id = get_active_workspace_id()
         if listing_id:
             listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first()
@@ -10325,6 +10953,54 @@ def api_process_image_with_settings():
                 return jsonify({'error': f'Invalid image data: {decode_err}'}), 400
         else:
             return jsonify({'error': 'No image or url provided'}), 400
+
+        # Persist a local copy of the original bytes for reprocessing on saved listings.
+        # Skip if source already points to this listing storage path.
+        stored_original_relative_path = None
+        if listing_id and listing and image_bytes:
+            source_lower = source_url.lower()
+            listing_prefixes = (
+                f'/uploads/listings/{listing_id}/',
+                f'listings/{listing_id}/',
+            )
+            is_existing_listing_file = source_lower.startswith(listing_prefixes)
+            is_existing_original = f'/uploads/listings/{listing_id}/originals/' in source_lower or f'listings/{listing_id}/originals/' in source_lower
+
+            if not is_existing_listing_file and not is_existing_original:
+                try:
+                    ext = 'jpg'
+                    source_no_query = source_url.split('?', 1)[0]
+                    if '.' in source_no_query:
+                        ext_candidate = source_no_query.rsplit('.', 1)[-1].lower()
+                        if ext_candidate in {'jpg', 'jpeg', 'png', 'webp', 'gif'}:
+                            ext = 'jpg' if ext_candidate == 'jpeg' else ext_candidate
+                    if data.get('image') and isinstance(data.get('image'), str):
+                        image_header = data['image'].split(',', 1)[0].lower()
+                        if 'image/png' in image_header:
+                            ext = 'png'
+                        elif 'image/webp' in image_header:
+                            ext = 'webp'
+                        elif 'image/gif' in image_header:
+                            ext = 'gif'
+
+                    originals_dir = LISTING_IMAGES_FOLDER / str(listing_id) / 'originals'
+                    originals_dir.mkdir(parents=True, exist_ok=True)
+                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    unique_id = str(uuid.uuid4())[:8]
+                    original_filename = f'orig_{timestamp}_{unique_id}.{ext}'
+                    original_path = originals_dir / original_filename
+                    with open(original_path, 'wb') as f:
+                        f.write(image_bytes)
+
+                    stored_original_relative_path = f'listings/{listing_id}/originals/{original_filename}'
+                    existing_originals = _load_original_images_raw(listing)
+                    merged_originals = _merge_unique_paths(existing_originals, [stored_original_relative_path])
+                    listing.original_images = json.dumps(merged_originals)
+                    listing.updated_at = datetime.utcnow()
+                    db.session.commit()
+                except Exception as store_error:
+                    db.session.rollback()
+                    print(f"[ProcessWithSettings] Failed to store original image copy: {store_error}")
         
         # Load saved settings
         settings = {
@@ -10405,6 +11081,7 @@ def api_process_image_with_settings():
         return jsonify({
             'success': True,
             'url': url,
+            'original_url': f'/uploads/{stored_original_relative_path}' if stored_original_relative_path else None,
             'metadata': {
                 'original_size': list(metadata['original_size']),
                 'final_size': list(metadata['final_size']),
@@ -10526,19 +11203,24 @@ def api_upload_image():
         
         print(f"[ImageUpload] Saved: {relative_path} ({file_size} bytes){' [optimized]' if optimized else ''}")
 
-        # Save original copy if listing_id was provided
+        # Save original copy for later reprocessing
         original_relative_path = None
-        if listing_id and listing:
-            try:
+        try:
+            if listing_id and listing:
                 originals_dir = LISTING_IMAGES_FOLDER / str(listing_id) / 'originals'
-                originals_dir.mkdir(parents=True, exist_ok=True)
-                orig_filename = f'orig_{timestamp}_{unique_id}.{original_ext}'
-                orig_path = originals_dir / orig_filename
-                with open(orig_path, 'wb') as f:
-                    f.write(original_bytes)
-                original_relative_path = f'listings/{listing_id}/originals/{orig_filename}'
-            except Exception as e:
-                print(f"[ImageUpload] Failed to store original image: {e}")
+                original_relative_prefix = f'listings/{listing_id}/originals'
+            else:
+                originals_dir = UPLOAD_FOLDER / 'temp' / 'originals'
+                original_relative_prefix = 'temp/originals'
+
+            originals_dir.mkdir(parents=True, exist_ok=True)
+            orig_filename = f'orig_{timestamp}_{unique_id}.{original_ext}'
+            orig_path = originals_dir / orig_filename
+            with open(orig_path, 'wb') as f:
+                f.write(original_bytes)
+            original_relative_path = f'{original_relative_prefix}/{orig_filename}'
+        except Exception as e:
+            print(f"[ImageUpload] Failed to store original image: {e}")
         
         if listing_id and listing and original_relative_path:
             try:
@@ -10554,6 +11236,7 @@ def api_upload_image():
             'success': True,
             'id': unique_id,
             'url': url,
+            'original_url': f'/uploads/{original_relative_path}' if original_relative_path else None,
             'filename': filename,
             'size': file_size,
             'original_size': original_size,

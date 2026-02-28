@@ -43,6 +43,11 @@
                         class="py-4 px-6 border-b-2 font-medium text-sm">
                     <i class="fas fa-plug mr-2"></i>Connections
                 </button>
+                <button @click="activeTab = 'openapi'" 
+                        :class="activeTab === 'openapi' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                        class="py-4 px-6 border-b-2 font-medium text-sm">
+                    <i class="fas fa-key mr-2"></i>Open API
+                </button>
                 <button @click="activeTab = 'settings'" 
                         :class="activeTab === 'settings' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
                         class="py-4 px-6 border-b-2 font-medium text-sm">
@@ -240,6 +245,121 @@
             </a>
         </div>
     </div>
+
+    <!-- Open API Tab -->
+    <div x-show="activeTab === 'openapi'" class="space-y-6">
+        <div class="bg-white rounded-lg shadow">
+            <div class="px-6 py-4 border-b flex items-center justify-between">
+                <div>
+                    <h3 class="text-lg font-semibold">Open API Credentials</h3>
+                    <p class="text-sm text-gray-500">Generate workspace credentials for external listing creation.</p>
+                </div>
+                <a href="/open-api/docs" target="_blank" class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm">
+                    <i class="fas fa-book mr-1"></i> Docs
+                </a>
+            </div>
+            <div class="p-6 border-b bg-gray-50">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div class="md:col-span-1">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Credential Name</label>
+                        <input type="text" x-model="openApiForm.name" class="w-full border rounded-lg px-3 py-2" placeholder="CRM Integration">
+                    </div>
+                    <div class="md:col-span-1">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Expires At (optional)</label>
+                        <input type="datetime-local" x-model="openApiForm.expiresAt" class="w-full border rounded-lg px-3 py-2">
+                    </div>
+                    <div class="md:col-span-1 flex items-end">
+                        <button @click="createOpenApiCredential()" :disabled="creatingOpenApiCredential || !openApiForm.name.trim()"
+                                class="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50">
+                            <i class="fas fa-plus mr-1"></i>
+                            <span x-text="creatingOpenApiCredential ? 'Creating...' : 'Create Credential'"></span>
+                        </button>
+                    </div>
+                </div>
+                <div class="text-xs text-gray-500 mt-3">
+                    Secrets are shown only once. Save them in your secure vault.
+                </div>
+            </div>
+            <div class="p-6 border-b" x-show="openApiSecretBundle">
+                <div class="border border-yellow-300 bg-yellow-50 rounded-lg p-4">
+                    <div class="font-semibold text-yellow-800 mb-2">New Credential Secret (Shown Once)</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                        <div>
+                            <div class="text-gray-600 mb-1">X-API-Key</div>
+                            <div class="font-mono break-all" x-text="openApiSecretBundle?.key_id"></div>
+                        </div>
+                        <div>
+                            <div class="text-gray-600 mb-1">X-API-Secret</div>
+                            <div class="font-mono break-all" x-text="openApiSecretBundle?.api_secret"></div>
+                        </div>
+                    </div>
+                    <div class="mt-3 flex items-center gap-2">
+                        <button @click="copyOpenApiCredentialPair()" class="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-xs">
+                            <i class="fas fa-copy mr-1"></i> Copy Headers
+                        </button>
+                        <button @click="openApiSecretBundle = null" class="px-3 py-1.5 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-xs">
+                            Dismiss
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Key ID</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Used</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Expires</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        <template x-if="openApiCredentials.length === 0">
+                            <tr>
+                                <td colspan="7" class="px-6 py-6 text-sm text-gray-500">No credentials created yet.</td>
+                            </tr>
+                        </template>
+                        <template x-for="credential in openApiCredentials" :key="credential.id">
+                            <tr>
+                                <td class="px-6 py-4 text-sm text-gray-900" x-text="credential.name"></td>
+                                <td class="px-6 py-4 text-sm font-mono text-gray-700" x-text="credential.key_id_masked || credential.key_id"></td>
+                                <td class="px-6 py-4 text-sm">
+                                    <span class="px-2 py-1 rounded text-xs"
+                                          :class="{
+                                              'bg-green-100 text-green-700': credential.status === 'active',
+                                              'bg-red-100 text-red-700': credential.status === 'revoked',
+                                              'bg-yellow-100 text-yellow-700': credential.status === 'expired',
+                                              'bg-gray-100 text-gray-700': credential.status === 'inactive'
+                                          }"
+                                          x-text="credential.status || 'inactive'"></span>
+                                </td>
+                                <td class="px-6 py-4 text-sm text-gray-500" x-text="formatDate(credential.created_at)"></td>
+                                <td class="px-6 py-4 text-sm text-gray-500" x-text="formatDate(credential.last_used_at)"></td>
+                                <td class="px-6 py-4 text-sm text-gray-500" x-text="formatDate(credential.expires_at)"></td>
+                                <td class="px-6 py-4 text-sm">
+                                    <div class="flex gap-2">
+                                        <button @click="regenerateOpenApiSecret(credential)"
+                                                class="px-2 py-1 bg-indigo-100 text-indigo-700 rounded hover:bg-indigo-200 text-xs"
+                                                :disabled="credential.status === 'revoked'">
+                                            Regenerate
+                                        </button>
+                                        <button @click="revokeOpenApiCredential(credential)"
+                                                class="px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 text-xs"
+                                                :disabled="credential.status === 'revoked'">
+                                            Revoke
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
     
     <!-- Settings Tab -->
     <div x-show="activeTab === 'settings'" class="space-y-6">
@@ -388,6 +508,7 @@ function workspaceAdminManager() {
         showCreateRoleModal: false,
         showModuleModal: false,
         showDeleteConfirm: false,
+        creatingOpenApiCredential: false,
         
         inviteEmail: '',
         inviteRole: 'member',
@@ -395,6 +516,12 @@ function workspaceAdminManager() {
         selectedRole: null,
         modulePermissions: {},
         modules: ['dashboard', 'listings', 'leads', 'tasks', 'contacts', 'insights'],
+        openApiCredentials: [],
+        openApiForm: {
+            name: '',
+            expiresAt: ''
+        },
+        openApiSecretBundle: null,
         
         workspaceSettings: {
             name: '{{ workspace.name }}',
@@ -406,7 +533,8 @@ function workspaceAdminManager() {
         async init() {
             await Promise.all([
                 this.loadWorkspaceRoles(),
-                this.loadPendingInvites()
+                this.loadPendingInvites(),
+                this.loadOpenApiCredentials()
             ]);
         },
         
@@ -480,7 +608,99 @@ function workspaceAdminManager() {
                 console.error('Failed to revoke invite:', e);
             }
         },
-        
+
+        async loadOpenApiCredentials() {
+            try {
+                const resp = await fetch(`/api/workspaces/${this.workspaceId}/open-api/credentials`);
+                const data = await resp.json();
+                if (data.success) {
+                    this.openApiCredentials = data.credentials || [];
+                } else {
+                    console.error('Failed to load Open API credentials:', data.error || 'Unknown error');
+                }
+            } catch (e) {
+                console.error('Failed to load Open API credentials:', e);
+            }
+        },
+
+        async createOpenApiCredential() {
+            const name = (this.openApiForm.name || '').trim();
+            if (!name || this.creatingOpenApiCredential) return;
+            this.creatingOpenApiCredential = true;
+            try {
+                const payload = { name };
+                if (this.openApiForm.expiresAt) {
+                    payload.expires_at = new Date(this.openApiForm.expiresAt).toISOString();
+                }
+                const resp = await fetch(`/api/workspaces/${this.workspaceId}/open-api/credentials`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.openApiSecretBundle = {
+                        key_id: data.key_id,
+                        api_secret: data.api_secret
+                    };
+                    this.openApiForm = { name: '', expiresAt: '' };
+                    await this.loadOpenApiCredentials();
+                } else {
+                    alert('Failed to create credential: ' + (data.error || 'Unknown error'));
+                }
+            } catch (e) {
+                console.error('Failed to create Open API credential:', e);
+            } finally {
+                this.creatingOpenApiCredential = false;
+            }
+        },
+
+        async revokeOpenApiCredential(credential) {
+            if (!credential || credential.status === 'revoked') return;
+            if (!confirm(`Revoke credential "${credential.name}"?`)) return;
+            try {
+                const resp = await fetch(`/api/workspaces/${this.workspaceId}/open-api/credentials/${credential.id}/revoke`, {
+                    method: 'POST'
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    await this.loadOpenApiCredentials();
+                } else {
+                    alert('Failed to revoke credential: ' + (data.error || 'Unknown error'));
+                }
+            } catch (e) {
+                console.error('Failed to revoke Open API credential:', e);
+            }
+        },
+
+        async regenerateOpenApiSecret(credential) {
+            if (!credential || credential.status === 'revoked') return;
+            if (!confirm(`Regenerate secret for "${credential.name}"? Existing integrations will stop working until updated.`)) return;
+            try {
+                const resp = await fetch(`/api/workspaces/${this.workspaceId}/open-api/credentials/${credential.id}/regenerate-secret`, {
+                    method: 'POST'
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.openApiSecretBundle = {
+                        key_id: data.key_id,
+                        api_secret: data.api_secret
+                    };
+                    await this.loadOpenApiCredentials();
+                } else {
+                    alert('Failed to regenerate secret: ' + (data.error || 'Unknown error'));
+                }
+            } catch (e) {
+                console.error('Failed to regenerate Open API secret:', e);
+            }
+        },
+
+        copyOpenApiCredentialPair() {
+            if (!this.openApiSecretBundle) return;
+            const headersText = `X-API-Key: ${this.openApiSecretBundle.key_id}\nX-API-Secret: ${this.openApiSecretBundle.api_secret}`;
+            navigator.clipboard.writeText(headersText);
+        },
+
         async updateMemberRole(member) {
             try {
                 const resp = await fetch(`/api/workspaces/${this.workspaceId}/members/${member.id}`, {

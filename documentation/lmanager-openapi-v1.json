@@ -1,0 +1,270 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "L-Manager Open API",
+    "version": "1.0.0",
+    "description": "External credential-based API for workspace listing creation."
+  },
+  "servers": [
+    {
+      "url": "https://l-manager.up.railway.app",
+      "description": "Production"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Listings",
+      "description": "Create local draft listings in the credential workspace."
+    }
+  ],
+  "paths": {
+    "/api/open/v1/listings": {
+      "post": {
+        "tags": [
+          "Listings"
+        ],
+        "summary": "Create listing (draft)",
+        "description": "Creates a local listing in draft state. Workspace is inferred from the API credential.",
+        "operationId": "openApiCreateListing",
+        "security": [
+          {
+            "ApiKeyHeader": [],
+            "ApiSecretHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenListingCreateRequest"
+              },
+              "examples": {
+                "sale_apartment": {
+                  "summary": "Basic sale listing",
+                  "value": {
+                    "reference": "CRM-20260228-0001",
+                    "offering_type": "sale",
+                    "property_type": "apartment",
+                    "category": "residential",
+                    "price": 1750000,
+                    "title_en": "Two Bedroom in Marina",
+                    "description_en": "Generated from partner CRM",
+                    "assigned_agent": "agent@example.com"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Listing created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenListingCreateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Credential inactive/revoked/expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate listing reference in workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Seconds to wait before retrying."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Workspace credential key_id."
+      },
+      "ApiSecretHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Secret",
+        "description": "Workspace credential secret."
+      }
+    },
+    "schemas": {
+      "OpenListingCreateRequest": {
+        "type": "object",
+        "required": [
+          "reference",
+          "offering_type",
+          "property_type",
+          "category",
+          "price"
+        ],
+        "properties": {
+          "reference": {
+            "type": "string",
+            "maxLength": 64,
+            "example": "CRM-20260228-0001"
+          },
+          "offering_type": {
+            "type": "string",
+            "example": "sale"
+          },
+          "property_type": {
+            "type": "string",
+            "example": "apartment"
+          },
+          "category": {
+            "type": "string",
+            "example": "residential"
+          },
+          "price": {
+            "type": "number",
+            "example": 1750000
+          },
+          "title_en": {
+            "type": "string",
+            "example": "Two Bedroom in Marina"
+          },
+          "title_ar": {
+            "type": "string",
+            "example": "شقة غرفتين في المارينا"
+          },
+          "description_en": {
+            "type": "string"
+          },
+          "description_ar": {
+            "type": "string"
+          },
+          "assigned_to_id": {
+            "type": "integer",
+            "description": "Optional workspace user ID for assignee."
+          },
+          "assigned_agent": {
+            "type": "string",
+            "format": "email",
+            "description": "If omitted, workspace default agent email is used."
+          }
+        },
+        "description": "At least one title is required: title_en or title_ar."
+      },
+      "OpenListingCreateResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "description": "Local listing object.",
+            "additionalProperties": true
+          },
+          "meta": {
+            "type": "object",
+            "properties": {
+              "workspace_id": {
+                "type": "integer",
+                "example": 1
+              }
+            }
+          },
+          "request_id": {
+            "type": "string",
+            "example": "oa_1d2c3b4a5e6f7g8h"
+          }
+        }
+      },
+      "OpenApiError": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": false
+          },
+          "code": {
+            "type": "string",
+            "example": "validation_error"
+          },
+          "error": {
+            "type": "string",
+            "example": "Payload validation failed."
+          },
+          "request_id": {
+            "type": "string",
+            "example": "oa_1d2c3b4a5e6f7g8h"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  }
+}

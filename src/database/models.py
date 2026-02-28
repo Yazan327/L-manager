@@ -356,6 +356,7 @@ class Workspace(db.Model):
     created_by = db.relationship('User', foreign_keys=[created_by_id])
     members = db.relationship('WorkspaceMember', back_populates='workspace', cascade='all, delete-orphan')
     connections = db.relationship('WorkspaceConnection', back_populates='workspace', cascade='all, delete-orphan')
+    api_credentials = db.relationship('WorkspaceApiCredential', back_populates='workspace', cascade='all, delete-orphan')
     
     # Available colors
     COLORS = ['indigo', 'blue', 'green', 'yellow', 'red', 'purple', 'pink', 'gray', 'orange', 'teal', 'cyan', 'emerald']
@@ -600,6 +601,106 @@ class WorkspaceConnection(db.Model):
                 else:
                     masked[key] = '****' if value else ''
             data['credentials_masked'] = masked
+        return data
+
+
+class WorkspaceApiCredential(db.Model):
+    """Credential pair used by workspace-scoped external Open API clients."""
+    __tablename__ = 'workspace_api_credentials'
+    __table_args__ = (
+        db.UniqueConstraint('key_id', name='uq_workspace_api_credentials_key_id'),
+        db.Index('idx_workspace_api_credentials_workspace', 'workspace_id'),
+        db.Index('idx_workspace_api_credentials_active', 'is_active'),
+        db.Index('idx_workspace_api_credentials_revoked_at', 'revoked_at'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=False)
+    name = db.Column(db.String(120), nullable=False)
+    key_id = db.Column(db.String(64), nullable=False, unique=True)
+    secret_hash = db.Column(db.String(255), nullable=False)
+    scopes_json = db.Column(db.Text, nullable=True, default='["listings:create"]')
+    is_active = db.Column(db.Boolean, default=True)
+    rate_limit_per_min = db.Column(db.Integer, default=60)
+
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    revoked_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+
+    last_used_at = db.Column(db.DateTime, nullable=True)
+    last_used_ip = db.Column(db.String(50), nullable=True)
+    expires_at = db.Column(db.DateTime, nullable=True)
+    revoked_at = db.Column(db.DateTime, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    workspace = db.relationship('Workspace', back_populates='api_credentials')
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+    revoked_by = db.relationship('User', foreign_keys=[revoked_by_id])
+
+    def set_secret(self, raw_secret):
+        self.secret_hash = generate_password_hash(raw_secret)
+
+    def verify_secret(self, raw_secret):
+        if not raw_secret or not self.secret_hash:
+            return False
+        return check_password_hash(self.secret_hash, raw_secret)
+
+    def get_scopes(self):
+        import json
+        if not self.scopes_json:
+            return ['listings:create']
+        try:
+            parsed = json.loads(self.scopes_json)
+            if isinstance(parsed, list) and parsed:
+                return [str(s).strip() for s in parsed if str(s).strip()]
+        except Exception:
+            pass
+        return ['listings:create']
+
+    def set_scopes(self, scopes):
+        import json
+        normalized = []
+        for scope in scopes or []:
+            text = str(scope or '').strip()
+            if text and text not in normalized:
+                normalized.append(text)
+        if not normalized:
+            normalized = ['listings:create']
+        self.scopes_json = json.dumps(normalized)
+
+    def is_expired(self):
+        return bool(self.expires_at and self.expires_at <= datetime.utcnow())
+
+    def is_revoked(self):
+        return bool(self.revoked_at)
+
+    def is_usable(self):
+        return self.is_active and not self.is_revoked() and not self.is_expired()
+
+    def to_dict(self, include_secret_hash=False):
+        data = {
+            'id': self.id,
+            'workspace_id': self.workspace_id,
+            'name': self.name,
+            'key_id': self.key_id,
+            'is_active': self.is_active,
+            'scopes': self.get_scopes(),
+            'rate_limit_per_min': self.rate_limit_per_min or 60,
+            'created_by_id': self.created_by_id,
+            'created_by_name': self.created_by.name if self.created_by else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'last_used_at': self.last_used_at.isoformat() if self.last_used_at else None,
+            'last_used_ip': self.last_used_ip,
+            'expires_at': self.expires_at.isoformat() if self.expires_at else None,
+            'revoked_at': self.revoked_at.isoformat() if self.revoked_at else None,
+            'revoked_by_id': self.revoked_by_id,
+            'status': 'active' if self.is_usable() else ('revoked' if self.is_revoked() else ('expired' if self.is_expired() else 'inactive'))
+        }
+        if include_secret_hash:
+            data['secret_hash'] = self.secret_hash
         return data
 
 
@@ -1530,6 +1631,10 @@ class LocalListing(db.Model):
                 images = '|'.join([img.get('original', {}).get('url', '') for img in images if img.get('original', {}).get('url')])
             else:
                 images = '|'.join([str(img) for img in images if img])
+
+        original_images = data.get('original_images')
+        if isinstance(original_images, list):
+            original_images = '|'.join([str(img) for img in original_images if img])
         
         # Handle media object (PF format)
         media = data.get('media', {})
@@ -1621,6 +1726,7 @@ class LocalListing(db.Model):
             description_en=description_en,
             description_ar=description_ar,
             images=images,
+            original_images=original_images,
             video_tour=video_tour,
             video_360=video_360,
             amenities=amenities,

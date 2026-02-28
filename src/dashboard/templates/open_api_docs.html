@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>L-Manager Open API v1 Docs</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body class="bg-gray-50 text-gray-900">
+    <main class="max-w-5xl mx-auto px-4 py-8">
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold mb-2">L-Manager Open API v1</h1>
+            <p class="text-gray-600">Workspace credential-based API for creating property listings in draft mode.</p>
+            <div class="mt-4 flex flex-wrap gap-3">
+                <a href="{{ spec_url }}" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
+                    Download OpenAPI JSON
+                </a>
+                <a href="/" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300">
+                    Back to App
+                </a>
+            </div>
+        </header>
+
+        <section class="bg-white rounded-lg shadow p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-3">Quick Start</h2>
+            <ol class="list-decimal ml-6 space-y-2 text-sm">
+                <li>Workspace admin creates a credential from <code>Workspace Admin - Open API</code>.</li>
+                <li>Store <code>X-API-Key</code> and <code>X-API-Secret</code> securely.</li>
+                <li>Call <code>POST /api/open/v1/listings</code> with JSON payload.</li>
+                <li>Listing is created in the credential workspace as <code>draft</code>.</li>
+            </ol>
+        </section>
+
+        <section class="bg-white rounded-lg shadow p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-3">Authentication</h2>
+            <p class="text-sm text-gray-700 mb-3">Every request must send both headers:</p>
+            <pre class="text-xs bg-gray-900 text-gray-100 rounded p-4 overflow-x-auto"><code>X-API-Key: wsk_xxxxxxxxxxxxxxxxxxxxxxxx
+X-API-Secret: wss_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</code></pre>
+            <p class="text-xs text-gray-500 mt-3">Secret is shown only once at create/regenerate time.</p>
+        </section>
+
+        <section class="bg-white rounded-lg shadow p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-3">Create Listing Endpoint</h2>
+            <p class="text-sm mb-2"><code>POST /api/open/v1/listings</code></p>
+            <p class="text-sm text-gray-700 mb-3">Required fields: <code>reference</code>, <code>offering_type</code>, <code>property_type</code>, <code>category</code>, <code>price</code>, and at least one of <code>title_en</code> or <code>title_ar</code>.</p>
+            <pre class="text-xs bg-gray-900 text-gray-100 rounded p-4 overflow-x-auto"><code>curl -X POST "https://your-domain/api/open/v1/listings" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: wsk_xxxxxxxxx" \
+  -H "X-API-Secret: wss_xxxxxxxxx" \
+  -d '{
+    "reference": "CRM-20260228-0001",
+    "offering_type": "sale",
+    "property_type": "apartment",
+    "category": "residential",
+    "price": 1750000,
+    "title_en": "Two Bedroom in Marina",
+    "description_en": "Generated from partner CRM"
+  }'</code></pre>
+        </section>
+
+        <section class="bg-white rounded-lg shadow p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-3">Error Codes</h2>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead>
+                        <tr class="border-b">
+                            <th class="text-left py-2 pr-4">HTTP</th>
+                            <th class="text-left py-2 pr-4">code</th>
+                            <th class="text-left py-2">When</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr class="border-b"><td class="py-2 pr-4">401</td><td class="py-2 pr-4">invalid_credentials</td><td class="py-2">Missing/invalid API key or secret.</td></tr>
+                        <tr class="border-b"><td class="py-2 pr-4">403</td><td class="py-2 pr-4">credential_inactive / revoked / expired</td><td class="py-2">Credential is not usable.</td></tr>
+                        <tr class="border-b"><td class="py-2 pr-4">409</td><td class="py-2 pr-4">duplicate_reference</td><td class="py-2">Reference already exists in workspace.</td></tr>
+                        <tr class="border-b"><td class="py-2 pr-4">422</td><td class="py-2 pr-4">validation_error</td><td class="py-2">Payload validation failed.</td></tr>
+                        <tr class="border-b"><td class="py-2 pr-4">429</td><td class="py-2 pr-4">rate_limited</td><td class="py-2">Per-credential rate limit exceeded.</td></tr>
+                        <tr><td class="py-2 pr-4">500</td><td class="py-2 pr-4">internal_error</td><td class="py-2">Unexpected server error.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        {% if docs_markdown %}
+        <section class="bg-white rounded-lg shadow p-6">
+            <h2 class="text-xl font-semibold mb-3">Full Markdown Guide</h2>
+            <pre class="text-xs bg-gray-900 text-gray-100 rounded p-4 overflow-x-auto whitespace-pre-wrap">{{ docs_markdown }}</pre>
+        </section>
+        {% endif %}
+    </main>
+</body>
+</html>
