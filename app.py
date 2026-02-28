@@ -2860,28 +2860,7 @@ def sync_pf_leads_to_db(pf_leads, workspace_id=None):
     
     ws_id = _resolve_pf_workspace_id(workspace_id)
     
-    # Build a map of PF agent email -> L-Manager user for auto-assignment
-    pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
-    if ws_id:
-        lm_users = User.query.join(
-            WorkspaceMember, WorkspaceMember.user_id == User.id
-        ).filter(
-            WorkspaceMember.workspace_id == ws_id,
-            User.is_active == True
-        ).all()
-    else:
-        lm_users = User.query.filter_by(is_active=True).all()
-    
-    # Map PF agent email to L-Manager user
-    email_to_lm_user = {u.email.lower(): u for u in lm_users}
-    
-    # Map PF agent ID to their email
-    pf_agent_email_map = {}
-    for pf_user in pf_users:
-        pf_id = pf_user.get('publicProfile', {}).get('id')
-        pf_email = pf_user.get('email', '').lower()
-        if pf_id and pf_email:
-            pf_agent_email_map[str(pf_id)] = pf_email
+    assignment_maps = _build_lead_auto_assign_maps(ws_id)
     
     imported = 0
     updated = 0
@@ -2942,13 +2921,14 @@ def sync_pf_leads_to_db(pf_leads, workspace_id=None):
                     updated += 1
                 continue
             
-            # Auto-assign to L-Manager user based on PF agent email
+            # Auto-assign using agent ID/email and listing assignment fallback.
             pf_agent_id_str = str(public_profile.get('id', ''))
-            assigned_to_id = None
-            if pf_agent_id_str and pf_agent_id_str in pf_agent_email_map:
-                pf_agent_email = pf_agent_email_map[pf_agent_id_str]
-                if pf_agent_email in email_to_lm_user:
-                    assigned_to_id = email_to_lm_user[pf_agent_email].id
+            assigned_to_id, _assign_method = _resolve_lead_assignee_id(
+                pf_agent_id=pf_agent_id_str,
+                pf_listing_id=listing_id,
+                listing_reference=listing_ref,
+                assignment_maps=assignment_maps
+            )
             
             # Create new lead
             lead = Lead(
@@ -7995,6 +7975,105 @@ def api_update_leads_config():
     return jsonify({'success': True})
 
 
+def _normalize_pf_agent_id(value):
+    if value is None:
+        return ''
+    return str(value).strip()
+
+
+def _normalize_email(value):
+    return str(value or '').strip().lower()
+
+
+def _normalize_listing_lookup_key(value):
+    return str(value or '').strip().lower()
+
+
+def _build_lead_auto_assign_maps(workspace_id, pf_users=None):
+    """Build lookup maps for lead auto-assignment."""
+    if pf_users is None:
+        pf_users = PFCache.get_cache('users', workspace_id=workspace_id) or []
+        if not pf_users:
+            try:
+                users_result = get_client(workspace_id=workspace_id).get_users(per_page=200)
+                pf_users = users_result.get('data', []) if isinstance(users_result, dict) else []
+                if pf_users:
+                    PFCache.set_cache('users', pf_users, len(pf_users), workspace_id=workspace_id)
+            except Exception:
+                pf_users = []
+
+    lm_users = User.query.join(
+        WorkspaceMember, WorkspaceMember.user_id == User.id
+    ).filter(
+        WorkspaceMember.workspace_id == workspace_id,
+        User.is_active == True
+    ).all()
+
+    email_to_lm_user = {}
+    pf_agent_id_to_lm_user = {}
+    for user in lm_users:
+        email_key = _normalize_email(user.email)
+        if email_key:
+            email_to_lm_user[email_key] = user
+        pf_agent_id_key = _normalize_pf_agent_id(getattr(user, 'pf_agent_id', None))
+        if pf_agent_id_key:
+            pf_agent_id_to_lm_user[pf_agent_id_key] = user
+
+    pf_agent_email_map = {}
+    for pf_user in pf_users or []:
+        pf_id = _normalize_pf_agent_id((pf_user.get('publicProfile') or {}).get('id'))
+        pf_email = _normalize_email(pf_user.get('email'))
+        if pf_id and pf_email:
+            pf_agent_email_map[pf_id] = pf_email
+
+    listing_assignee_map = {}
+    listing_rows = LocalListing.query.filter(
+        LocalListing.workspace_id == workspace_id,
+        LocalListing.assigned_to_id.isnot(None)
+    ).all()
+    for listing in listing_rows:
+        pf_listing_key = _normalize_listing_lookup_key(listing.pf_listing_id)
+        if pf_listing_key:
+            listing_assignee_map[pf_listing_key] = listing.assigned_to_id
+        reference_key = _normalize_listing_lookup_key(listing.reference)
+        if reference_key:
+            listing_assignee_map[reference_key] = listing.assigned_to_id
+
+    return {
+        'email_to_lm_user': email_to_lm_user,
+        'pf_agent_email_map': pf_agent_email_map,
+        'pf_agent_id_to_lm_user': pf_agent_id_to_lm_user,
+        'listing_assignee_map': listing_assignee_map,
+    }
+
+
+def _resolve_lead_assignee_id(pf_agent_id=None, pf_listing_id=None, listing_reference=None, assignment_maps=None):
+    """Resolve assignee for a lead using multiple matching strategies."""
+    maps = assignment_maps or {}
+    pf_agent_id_key = _normalize_pf_agent_id(pf_agent_id)
+    pf_listing_key = _normalize_listing_lookup_key(pf_listing_id)
+    listing_ref_key = _normalize_listing_lookup_key(listing_reference)
+
+    pf_agent_id_to_lm_user = maps.get('pf_agent_id_to_lm_user', {})
+    if pf_agent_id_key and pf_agent_id_key in pf_agent_id_to_lm_user:
+        return pf_agent_id_to_lm_user[pf_agent_id_key].id, 'pf_agent_id'
+
+    pf_agent_email_map = maps.get('pf_agent_email_map', {})
+    email_to_lm_user = maps.get('email_to_lm_user', {})
+    if pf_agent_id_key and pf_agent_id_key in pf_agent_email_map:
+        pf_email = pf_agent_email_map[pf_agent_id_key]
+        if pf_email in email_to_lm_user:
+            return email_to_lm_user[pf_email].id, 'pf_email'
+
+    listing_assignee_map = maps.get('listing_assignee_map', {})
+    if pf_listing_key and pf_listing_key in listing_assignee_map:
+        return listing_assignee_map[pf_listing_key], 'listing'
+    if listing_ref_key and listing_ref_key in listing_assignee_map:
+        return listing_assignee_map[listing_ref_key], 'listing'
+
+    return None, None
+
+
 @app.route('/api/leads', methods=['GET'])
 @login_required
 @require_active_workspace
@@ -8335,60 +8414,50 @@ def api_refresh_lead_agents():
 @require_active_workspace
 @require_workspace_leads_admin
 def api_auto_assign_leads():
-    """Auto-assign unassigned leads to L-Manager users based on PF agent email matching.
-    
-    This endpoint looks at leads that have a pf_agent_id but no assigned_to_id,
-    finds the PF agent's email, and assigns the lead to the L-Manager user with
-    the matching email.
-    """
+    """Auto-assign unassigned leads using agent ID, agent email, then listing owner fallback."""
     ws_id = get_active_workspace_id()
-    # Get PF users to map agent ID to email
-    pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
-    pf_agent_email_map = {}
-    for pf_user in pf_users:
-        pf_id = pf_user.get('publicProfile', {}).get('id')
-        pf_email = pf_user.get('email', '').lower()
-        if pf_id and pf_email:
-            pf_agent_email_map[str(pf_id)] = pf_email
-    
-    # Get L-Manager users by email
-    lm_users = User.query.join(
-        WorkspaceMember, WorkspaceMember.user_id == User.id
-    ).filter(
-        WorkspaceMember.workspace_id == ws_id,
-        User.is_active == True
-    ).all()
-    email_to_lm_user = {u.email.lower(): u for u in lm_users}
-    
-    # Find unassigned leads that have a PF agent
+    assignment_maps = _build_lead_auto_assign_maps(ws_id)
+
+    # Find all unassigned leads (some can still be assigned by listing fallback)
     unassigned_leads = Lead.query.filter(
         Lead.assigned_to_id.is_(None),
-        Lead.pf_agent_id.isnot(None),
-        Lead.pf_agent_id != '',
         Lead.workspace_id == ws_id
     ).all()
     
     assigned_count = 0
-    no_match_count = 0
+    by_method = {'pf_agent_id': 0, 'pf_email': 0, 'listing': 0}
+    unmatched_by_agent = {}
     
     for lead in unassigned_leads:
-        if lead.pf_agent_id in pf_agent_email_map:
-            pf_email = pf_agent_email_map[lead.pf_agent_id]
-            if pf_email in email_to_lm_user:
-                lead.assigned_to_id = email_to_lm_user[pf_email].id
-                assigned_count += 1
-            else:
-                no_match_count += 1
+        assignee_id, method = _resolve_lead_assignee_id(
+            pf_agent_id=lead.pf_agent_id,
+            pf_listing_id=lead.pf_listing_id,
+            listing_reference=lead.listing_reference,
+            assignment_maps=assignment_maps
+        )
+        if assignee_id:
+            lead.assigned_to_id = assignee_id
+            assigned_count += 1
+            by_method[method] = by_method.get(method, 0) + 1
         else:
-            no_match_count += 1
+            agent_key = _normalize_pf_agent_id(lead.pf_agent_id) or '<none>'
+            unmatched_by_agent[agent_key] = unmatched_by_agent.get(agent_key, 0) + 1
     
     db.session.commit()
+
+    unmatched_agents = sorted(
+        [{'pf_agent_id': k, 'count': v} for k, v in unmatched_by_agent.items()],
+        key=lambda row: row['count'],
+        reverse=True
+    )[:10]
     
     return jsonify({
         'success': True,
         'assigned': assigned_count,
-        'no_match': no_match_count,
-        'total_unassigned': len(unassigned_leads)
+        'no_match': len(unassigned_leads) - assigned_count,
+        'total_unassigned': len(unassigned_leads),
+        'methods': by_method,
+        'unmatched_agents': unmatched_agents
     })
 
 
@@ -8423,22 +8492,7 @@ def api_sync_leads_from_pf():
         pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
         user_map = {u.get('publicProfile', {}).get('id'): u for u in pf_users}
         
-        # Build map of PF agent email -> L-Manager user for auto-assignment
-        lm_users = User.query.join(
-            WorkspaceMember, WorkspaceMember.user_id == User.id
-        ).filter(
-            WorkspaceMember.workspace_id == ws_id,
-            User.is_active == True
-        ).all()
-        email_to_lm_user = {u.email.lower(): u for u in lm_users}
-        
-        # Map PF agent ID to their email
-        pf_agent_email_map = {}
-        for pf_user in pf_users:
-            pf_id = pf_user.get('publicProfile', {}).get('id')
-            pf_email = pf_user.get('email', '').lower()
-            if pf_id and pf_email:
-                pf_agent_email_map[str(pf_id)] = pf_email
+        assignment_maps = _build_lead_auto_assign_maps(ws_id, pf_users=pf_users)
         
         # Get PF listings to map listing owners (assignedTo)
         pf_listings = PFCache.get_cache('listings', workspace_id=ws_id) or []
@@ -8504,12 +8558,13 @@ def api_sync_leads_from_pf():
                     user = user_map[agent_id_int]
                     pf_agent_name = f"{user.get('firstName', '')} {user.get('lastName', '')}".strip()
             
-            # Auto-assign to L-Manager user based on PF agent email
-            assigned_to_id = None
-            if pf_agent_id and pf_agent_id in pf_agent_email_map:
-                pf_agent_email = pf_agent_email_map[pf_agent_id]
-                if pf_agent_email in email_to_lm_user:
-                    assigned_to_id = email_to_lm_user[pf_agent_email].id
+            # Auto-assign using agent ID/email and listing assignment fallback
+            assigned_to_id, _assign_method = _resolve_lead_assignee_id(
+                pf_agent_id=pf_agent_id,
+                pf_listing_id=str(listing.get('id')) if listing.get('id') else None,
+                listing_reference=listing.get('reference'),
+                assignment_maps=assignment_maps
+            )
             
             lead = Lead(
                 workspace_id=ws_id,
@@ -9773,31 +9828,16 @@ def webhook_propertyfinder():
         db.session.commit()
         return jsonify({'success': True, 'lead_id': existing.id, 'event_id': event_id})
 
-    # Auto-assign to L-Manager user based on PF agent email
-    pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
-    if ws_id:
-        lm_users = User.query.join(
-            WorkspaceMember, WorkspaceMember.user_id == User.id
-        ).filter(
-            WorkspaceMember.workspace_id == ws_id,
-            User.is_active == True
-        ).all()
-    else:
-        lm_users = User.query.filter_by(is_active=True).all()
-    email_to_lm_user = {u.email.lower(): u for u in lm_users}
-    pf_agent_email_map = {}
-    for pf_user in pf_users:
-        pf_id = pf_user.get('publicProfile', {}).get('id')
-        pf_email = pf_user.get('email', '').lower()
-        if pf_id and pf_email:
-            pf_agent_email_map[str(pf_id)] = pf_email
+    # Auto-assign to L-Manager user with the same strategy as sync/auto-assign.
+    assignment_maps = _build_lead_auto_assign_maps(ws_id)
 
     pf_agent_id = str(public_profile.get('id', '')) if public_profile else ''
-    assigned_to_id = None
-    if pf_agent_id and pf_agent_id in pf_agent_email_map:
-        pf_agent_email = pf_agent_email_map[pf_agent_id]
-        if pf_agent_email in email_to_lm_user:
-            assigned_to_id = email_to_lm_user[pf_agent_email].id
+    assigned_to_id, _assign_method = _resolve_lead_assignee_id(
+        pf_agent_id=pf_agent_id,
+        pf_listing_id=str(listing.get('id')) if listing.get('id') else None,
+        listing_reference=listing.get('reference'),
+        assignment_maps=assignment_maps
+    )
 
     lead = Lead(
         workspace_id=ws_id,
