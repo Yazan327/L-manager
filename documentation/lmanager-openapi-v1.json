@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "L-Manager Open API",
-    "version": "1.0.0",
-    "description": "External credential-based API for workspace listing creation."
+    "version": "1.1.0",
+    "description": "External credential-based API for workspace listing creation (draft-only)."
   },
   "servers": [
     {
@@ -23,8 +23,8 @@
         "tags": [
           "Listings"
         ],
-        "summary": "Create listing (draft)",
-        "description": "Creates a local listing in draft state. Workspace is inferred from the API credential.",
+        "summary": "Create listing (draft-only)",
+        "description": "Creates a local listing in draft state. Workspace is inferred from API credential. `status` is accepted but always forced to `draft`.",
         "operationId": "openApiCreateListing",
         "security": [
           {
@@ -40,17 +40,123 @@
                 "$ref": "#/components/schemas/OpenListingCreateRequest"
               },
               "examples": {
-                "sale_apartment": {
-                  "summary": "Basic sale listing",
+                "canonical_sale_full": {
+                  "summary": "Canonical sale listing",
                   "value": {
-                    "reference": "CRM-20260228-0001",
+                    "reference": "CRM-20260301-0001",
+                    "emirate": "dubai",
+                    "city": "Dubai Marina",
+                    "location": "Marina Gate 1",
+                    "location_id": 123,
+                    "category": "residential",
                     "offering_type": "sale",
                     "property_type": "apartment",
+                    "bedrooms": "2",
+                    "bathrooms": "2",
+                    "size": 1320,
+                    "furnishing_type": "furnished",
+                    "project_status": "completed",
+                    "parking_slots": 1,
+                    "floor_number": "23",
+                    "unit_number": "2304",
+                    "price": 1950000,
+                    "downpayment": 250000,
+                    "title_en": "2BR Marina Gate High Floor",
+                    "description_en": "Ready to move apartment with full marina view.",
+                    "images": [
+                      "https://cdn.example.com/listings/2304/1.jpg",
+                      "https://cdn.example.com/listings/2304/2.jpg"
+                    ],
+                    "video_tour": "https://www.youtube.com/watch?v=abc123",
+                    "amenities": [
+                      "balcony",
+                      "shared-pool",
+                      "shared-gym"
+                    ],
+                    "assigned_agent": "agent@agency.com",
+                    "assigned_to_id": 12,
+                    "owner_name": "John Owner",
+                    "developer": "Emaar",
+                    "permit_number": "71123456789",
+                    "available_from": "immediately"
+                  }
+                },
+                "canonical_rent_full": {
+                  "summary": "Canonical rent listing",
+                  "value": {
+                    "reference": "CRM-20260301-0002",
+                    "emirate": "abu_dhabi",
+                    "city": "Yas Island",
+                    "location": "Waters Edge",
+                    "location_id": 987,
                     "category": "residential",
-                    "price": 1750000,
-                    "title_en": "Two Bedroom in Marina",
-                    "description_en": "Generated from partner CRM",
-                    "assigned_agent": "agent@example.com"
+                    "offering_type": "rent",
+                    "property_type": "apartment",
+                    "bedrooms": "1",
+                    "bathrooms": "2",
+                    "size": 840,
+                    "furnishing_type": "semi-furnished",
+                    "project_status": "completed",
+                    "price": 92000,
+                    "rent_frequency": "yearly",
+                    "title_en": "1BR Waters Edge",
+                    "description_en": "Close to Yas Mall and theme parks.",
+                    "assigned_agent": "rentals@agency.com"
+                  }
+                },
+                "alias_pf_style": {
+                  "summary": "PF/camelCase-compatible payload",
+                  "value": {
+                    "reference": "CRM-20260301-0003",
+                    "uaeEmirate": "dubai",
+                    "city": "Business Bay",
+                    "category": "commercial",
+                    "type": "office-space",
+                    "projectStatus": "completed",
+                    "furnishingType": "unfurnished",
+                    "parkingSlots": 2,
+                    "floorNumber": "15",
+                    "unitNumber": "1502",
+                    "location": {
+                      "id": 4555
+                    },
+                    "title": {
+                      "en": "Fitted Office in Business Bay"
+                    },
+                    "description": {
+                      "en": "Near metro station"
+                    },
+                    "price": {
+                      "type": "yearly",
+                      "amounts": {
+                        "yearly": 350000
+                      },
+                      "downpayment": 0
+                    },
+                    "assignedTo": {
+                      "id": "123456"
+                    },
+                    "compliance": {
+                      "listingAdvertisementNumber": "6512345678"
+                    },
+                    "media": {
+                      "images": [
+                        {
+                          "original": {
+                            "url": "https://cdn.example.com/offices/1502-a.jpg"
+                          }
+                        },
+                        {
+                          "original": {
+                            "url": "https://cdn.example.com/offices/1502-b.jpg"
+                          }
+                        }
+                      ],
+                      "videos": {
+                        "default": "https://youtu.be/xyz987",
+                        "view360": "https://example.com/360"
+                      }
+                    }
                   }
                 }
               }
@@ -59,7 +165,15 @@
         },
         "responses": {
           "201": {
-            "description": "Listing created",
+            "description": "Listing created (always draft)",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Request trace id."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -79,7 +193,7 @@
             }
           },
           "403": {
-            "description": "Credential inactive/revoked/expired",
+            "description": "Credential inactive/revoked/expired/insufficient scope",
             "content": {
               "application/json": {
                 "schema": {
@@ -165,27 +279,136 @@
           "category",
           "price"
         ],
+        "anyOf": [
+          {
+            "required": [
+              "title_en"
+            ]
+          },
+          {
+            "required": [
+              "title_ar"
+            ]
+          },
+          {
+            "required": [
+              "title"
+            ]
+          }
+        ],
         "properties": {
           "reference": {
             "type": "string",
             "maxLength": 64,
-            "example": "CRM-20260228-0001"
+            "example": "CRM-20260301-0001"
+          },
+          "emirate": {
+            "type": "string",
+            "enum": [
+              "dubai",
+              "abu_dhabi",
+              "northern_emirates"
+            ],
+            "example": "dubai"
+          },
+          "city": {
+            "type": "string",
+            "example": "Dubai Marina"
+          },
+          "location": {
+            "description": "Canonical location text or alias object with location id.",
+            "anyOf": [
+              {
+                "type": "string",
+                "example": "Marina Gate 1"
+              },
+              {
+                "$ref": "#/components/schemas/OpenLocationAlias"
+              }
+            ]
+          },
+          "location_id": {
+            "type": "integer",
+            "example": 123
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "residential",
+              "commercial"
+            ],
+            "example": "residential"
           },
           "offering_type": {
             "type": "string",
+            "enum": [
+              "sale",
+              "rent"
+            ],
             "example": "sale"
           },
           "property_type": {
             "type": "string",
             "example": "apartment"
           },
-          "category": {
+          "bedrooms": {
             "type": "string",
-            "example": "residential"
+            "example": "2"
+          },
+          "bathrooms": {
+            "type": "string",
+            "example": "2"
+          },
+          "size": {
+            "type": "number",
+            "example": 1320
+          },
+          "furnishing_type": {
+            "type": "string",
+            "example": "furnished"
+          },
+          "project_status": {
+            "type": "string",
+            "example": "completed"
+          },
+          "parking_slots": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 1
+          },
+          "floor_number": {
+            "type": "string",
+            "example": "23"
+          },
+          "unit_number": {
+            "type": "string",
+            "example": "2304"
           },
           "price": {
+            "description": "Canonical numeric price or alias PF price object.",
+            "anyOf": [
+              {
+                "type": "number",
+                "example": 1950000
+              },
+              {
+                "$ref": "#/components/schemas/OpenPriceAlias"
+              }
+            ]
+          },
+          "downpayment": {
             "type": "number",
-            "example": 1750000
+            "example": 250000
+          },
+          "rent_frequency": {
+            "type": "string",
+            "enum": [
+              "yearly",
+              "monthly",
+              "weekly",
+              "daily"
+            ],
+            "example": "yearly"
           },
           "title_en": {
             "type": "string",
@@ -195,23 +418,132 @@
             "type": "string",
             "example": "شقة غرفتين في المارينا"
           },
+          "title": {
+            "$ref": "#/components/schemas/OpenLocalizedText"
+          },
           "description_en": {
-            "type": "string"
+            "type": "string",
+            "example": "Generated from partner CRM"
           },
           "description_ar": {
             "type": "string"
           },
-          "assigned_to_id": {
-            "type": "integer",
-            "description": "Optional workspace user ID for assignee."
+          "description": {
+            "$ref": "#/components/schemas/OpenLocalizedText"
+          },
+          "images": {
+            "description": "Canonical image URL list or PF media image objects.",
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "format": "uri"
+                },
+                {
+                  "$ref": "#/components/schemas/OpenMediaImageObject"
+                }
+              ]
+            }
+          },
+          "original_images": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "video_tour": {
+            "type": "string",
+            "format": "uri"
+          },
+          "video_360": {
+            "type": "string",
+            "format": "uri"
+          },
+          "media": {
+            "$ref": "#/components/schemas/OpenMediaAlias"
+          },
+          "amenities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "assigned_agent": {
             "type": "string",
-            "format": "email",
-            "description": "If omitted, workspace default agent email is used."
+            "description": "Agent email or PF public profile id as string.",
+            "example": "agent@example.com"
+          },
+          "assigned_to_id": {
+            "type": "integer",
+            "description": "Optional workspace user id for internal assignee."
+          },
+          "assignedTo": {
+            "$ref": "#/components/schemas/OpenAssignedToAlias"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "owner_name": {
+            "type": "string"
+          },
+          "developer": {
+            "type": "string"
+          },
+          "permit_number": {
+            "type": "string"
+          },
+          "available_from": {
+            "type": "string",
+            "example": "immediately"
+          },
+          "status": {
+            "type": "string",
+            "description": "Accepted for compatibility but ignored; server always stores draft.",
+            "example": "published"
+          },
+          "uaeEmirate": {
+            "type": "string",
+            "description": "Alias of emirate."
+          },
+          "type": {
+            "type": "string",
+            "description": "Alias of property_type."
+          },
+          "furnishingType": {
+            "type": "string",
+            "description": "Alias of furnishing_type."
+          },
+          "projectStatus": {
+            "type": "string",
+            "description": "Alias of project_status."
+          },
+          "parkingSlots": {
+            "type": "integer",
+            "description": "Alias of parking_slots."
+          },
+          "floorNumber": {
+            "type": "string",
+            "description": "Alias of floor_number."
+          },
+          "unitNumber": {
+            "type": "string",
+            "description": "Alias of unit_number."
+          },
+          "ownerName": {
+            "type": "string",
+            "description": "Alias of owner_name."
+          },
+          "availableFrom": {
+            "type": "string",
+            "description": "Alias of available_from."
+          },
+          "compliance": {
+            "$ref": "#/components/schemas/OpenComplianceAlias"
           }
         },
-        "description": "At least one title is required: title_en or title_ar."
+        "description": "\nCanonical request is snake_case fields.\n\nCompatibility aliases accepted:\n- `uaeEmirate` -> `emirate`\n- `type` -> `property_type`\n- `furnishingType` -> `furnishing_type`\n- `projectStatus` -> `project_status`\n- `parkingSlots` -> `parking_slots`\n- `floorNumber` -> `floor_number`\n- `unitNumber` -> `unit_number`\n- `ownerName` -> `owner_name`\n- `availableFrom` -> `available_from`\n- `assignedTo.id` -> `assigned_agent`\n- `location.id` -> `location_id`\n- `price.type + price.amounts` -> `offering_type/rent_frequency/price`\n- `title.en|ar` -> `title_en|title_ar`\n- `description.en|ar` -> `description_en|description_ar`\n- `media.images/videos` -> `images/video_tour/video_360`\n- `compliance.listingAdvertisementNumber` -> `permit_number`\n"
       },
       "OpenListingCreateResponse": {
         "type": "object",
@@ -237,6 +569,112 @@
           "request_id": {
             "type": "string",
             "example": "oa_1d2c3b4a5e6f7g8h"
+          }
+        }
+      },
+      "OpenLocationAlias": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "example": 123
+          },
+          "name": {
+            "type": "string",
+            "example": "Marina Gate 1"
+          }
+        }
+      },
+      "OpenLocalizedText": {
+        "type": "object",
+        "properties": {
+          "en": {
+            "type": "string"
+          },
+          "ar": {
+            "type": "string"
+          }
+        }
+      },
+      "OpenPriceAlias": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "example": "yearly"
+          },
+          "amounts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            },
+            "example": {
+              "yearly": 92000
+            }
+          },
+          "downpayment": {
+            "type": "number",
+            "example": 0
+          }
+        }
+      },
+      "OpenMediaImageObject": {
+        "type": "object",
+        "properties": {
+          "original": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "format": "uri"
+              }
+            }
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "OpenMediaAlias": {
+        "type": "object",
+        "properties": {
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpenMediaImageObject"
+            }
+          },
+          "videos": {
+            "type": "object",
+            "properties": {
+              "default": {
+                "type": "string",
+                "format": "uri"
+              },
+              "view360": {
+                "type": "string",
+                "format": "uri"
+              }
+            }
+          }
+        }
+      },
+      "OpenAssignedToAlias": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "123456"
+          }
+        }
+      },
+      "OpenComplianceAlias": {
+        "type": "object",
+        "properties": {
+          "listingAdvertisementNumber": {
+            "type": "string",
+            "example": "71123456789"
           }
         }
       },

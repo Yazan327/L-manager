@@ -1,10 +1,14 @@
-# L-Manager Open API v1 - Listings Create
+# L-Manager Open API v1.1 - Listings Create
 
-This guide documents the external Open API for creating local listings with workspace credentials.
+## Changelog (v1.1)
+
+- Expanded create payload docs to include all supported listing fields.
+- Added compatibility alias map (PF/camelCase input support).
+- Clarified that listing create is always `draft` (status is forced).
 
 ## Scope
 
-- Version: `v1`
+- Version: `v1.1`
 - Endpoint scope: **Create listing only**
 - Result: listing is created in local database as `draft`
 - PropertyFinder publishing is **not** part of this endpoint
@@ -21,7 +25,7 @@ This guide documents the external Open API for creating local listings with work
 
 ## Authentication headers
 
-Every Open API request must include:
+Required:
 
 - `X-API-Key: <key_id>`
 - `X-API-Secret: <secret>`
@@ -36,32 +40,82 @@ Optional:
 
 Creates a local listing in the workspace bound to the credential.
 
-### Required payload fields
+## Required payload fields
 
 - `reference`
 - `offering_type`
 - `property_type`
 - `category`
 - `price`
-- one of:
-  - `title_en`
-  - `title_ar`
+- at least one title:
+  - `title_en`, or
+  - `title_ar`, or
+  - `title.en` / `title.ar` alias format
 
-### Optional fields (common)
+## Supported canonical fields
 
+### Core
+- `reference`, `emirate`, `city`, `location`, `location_id`
+- `category`, `offering_type`, `property_type`
+
+### Specifications
+- `bedrooms`, `bathrooms`, `size`
+- `furnishing_type`, `project_status`
+- `parking_slots`, `floor_number`, `unit_number`
+
+### Pricing
+- `price`, `downpayment`, `rent_frequency`
+
+### Content
+- `title_en`, `title_ar`
 - `description_en`, `description_ar`
-- `assigned_agent` (email)
-- `assigned_to_id` (must belong to same workspace)
-- any other local listing fields supported by internal model
+
+### Media
+- `images`, `original_images`
+- `video_tour`, `video_360`
+- `amenities`
+
+### Assignment / Ownership
+- `assigned_agent` (email or PF profile id string)
+- `assigned_to_id` (workspace user id)
+- `owner_id`, `owner_name`, `developer`, `permit_number`, `available_from`
+
+### Compatibility input
+- `status` is accepted but ignored; server stores `draft`.
+
+## Enum guidance
+
+- `offering_type`: `sale`, `rent`
+- `category`: `residential`, `commercial`
+- `rent_frequency`: `yearly`, `monthly`, `weekly`, `daily`
+
+## Alias compatibility map (accepted)
+
+- `uaeEmirate` -> `emirate`
+- `type` -> `property_type`
+- `furnishingType` -> `furnishing_type`
+- `projectStatus` -> `project_status`
+- `parkingSlots` -> `parking_slots`
+- `floorNumber` -> `floor_number`
+- `unitNumber` -> `unit_number`
+- `ownerName` -> `owner_name`
+- `availableFrom` -> `available_from`
+- `assignedTo.id` -> `assigned_agent`
+- `location.id` -> `location_id`
+- `price.type + price.amounts` -> `offering_type/rent_frequency/price`
+- `title.en|ar` -> `title_en|title_ar`
+- `description.en|ar` -> `description_en|description_ar`
+- `media.images/videos` -> `images/video_tour/video_360`
+- `compliance.listingAdvertisementNumber` -> `permit_number`
 
 ## Behavior details
 
-- Listing status is forced to `draft`.
+- Listing status is always forced to `draft`.
 - `reference` must be unique within the credential workspace.
-- `assigned_to_id` is validated against workspace membership.
-- If `assigned_agent` is omitted, system applies workspace default agent email.
+- `assigned_to_id` is validated against workspace members.
+- If `assigned_agent` is omitted, workspace default agent email is applied.
 
-## Example request (cURL)
+## Example request (canonical)
 
 ```bash
 curl -X POST "https://l-manager.up.railway.app/api/open/v1/listings" \
@@ -70,14 +124,22 @@ curl -X POST "https://l-manager.up.railway.app/api/open/v1/listings" \
   -H "X-API-Secret: wss_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
   -H "X-Request-Id: partner-crm-0001" \
   -d '{
-    "reference": "CRM-20260228-0001",
+    "reference": "CRM-20260301-0001",
+    "emirate": "dubai",
+    "city": "Dubai Marina",
+    "location": "Marina Gate 1",
+    "location_id": 123,
+    "category": "residential",
     "offering_type": "sale",
     "property_type": "apartment",
-    "category": "residential",
-    "price": 1750000,
-    "title_en": "Two Bedroom in Marina",
-    "description_en": "Generated from partner CRM",
-    "assigned_agent": "agent@example.com"
+    "bedrooms": "2",
+    "bathrooms": "2",
+    "size": 1320,
+    "furnishing_type": "furnished",
+    "project_status": "completed",
+    "price": 1950000,
+    "title_en": "2BR Marina Gate High Floor",
+    "description_en": "Ready to move apartment with full marina view"
   }'
 ```
 
@@ -88,7 +150,7 @@ curl -X POST "https://l-manager.up.railway.app/api/open/v1/listings" \
   "success": true,
   "data": {
     "id": 123,
-    "reference": "CRM-20260228-0001",
+    "reference": "CRM-20260301-0001",
     "status": "draft"
   },
   "meta": {
@@ -99,8 +161,6 @@ curl -X POST "https://l-manager.up.railway.app/api/open/v1/listings" \
 ```
 
 ## Error response format
-
-All errors return:
 
 ```json
 {
@@ -118,44 +178,27 @@ All errors return:
   - Missing `X-API-Key`/`X-API-Secret`
   - Invalid key/secret
 - `403 credential_inactive`
-  - Credential inactive
 - `403 credential_revoked`
-  - Credential revoked
 - `403 credential_expired`
-  - Credential expired
 - `403 insufficient_scope`
-  - Scope does not include `listings:create`
 - `409 duplicate_reference`
-  - Same `reference` already exists in workspace
 - `422 validation_error`
-  - Missing/invalid fields in payload
 - `429 rate_limited`
-  - Per credential rate limit exceeded
 - `500 internal_error`
-  - Unexpected server error
 
 ## Rate limiting
 
 - Default: `60 requests/minute` per credential.
 - On `429`, retry after `Retry-After` header seconds.
 
-## Security practices
-
-- Store secret in a vault, never in client-side code.
-- Rotate credential secret if leaked.
-- Revoke unused credentials.
-- Use separate credentials per integration partner/environment.
-
 ## Credential management APIs (session-authenticated)
-
-Workspace admin/system admin can call:
 
 - `GET /api/workspaces/<workspace_id>/open-api/credentials`
 - `POST /api/workspaces/<workspace_id>/open-api/credentials`
 - `POST /api/workspaces/<workspace_id>/open-api/credentials/<credential_id>/revoke`
 - `POST /api/workspaces/<workspace_id>/open-api/credentials/<credential_id>/regenerate-secret`
 
-## OpenAPI spec
+## Spec endpoints
 
 - Machine-readable spec: `GET /api/open/v1/spec`
 - In-app docs page: `GET /open-api/docs`

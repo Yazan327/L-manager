@@ -1062,7 +1062,7 @@ class ModulePermission(db.Model):
     SCOPE_WORKSPACE = 'workspace'
     
     # Available modules (matches User.SECTIONS)
-    MODULES = ['dashboard', 'listings', 'leads', 'insights', 'tasks', 'contacts', 'users', 'settings']
+    MODULES = ['dashboard', 'listings', 'leads', 'insights', 'tasks', 'contacts', 'users', 'settings', 'loops']
     
     # Relationship
     workspace_role = db.relationship('WorkspaceRole', backref=db.backref('module_permissions', lazy='dynamic'))
@@ -1091,6 +1091,102 @@ class ModulePermission(db.Model):
             'merge_strategy': self.merge_strategy,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
+
+
+class WorkspaceUserPermissionOverride(db.Model):
+    """Per-user workspace permission overrides with allow/deny semantics."""
+    __tablename__ = 'workspace_user_permission_overrides'
+    __table_args__ = (
+        db.UniqueConstraint('workspace_id', 'user_id', 'module', 'action', name='uq_ws_user_module_action_override'),
+        db.Index('idx_ws_user_perm_override_workspace', 'workspace_id'),
+        db.Index('idx_ws_user_perm_override_user', 'user_id'),
+        db.Index('idx_ws_user_perm_override_module', 'module'),
+        db.Index('idx_ws_user_perm_override_action', 'action'),
+        db.Index('idx_ws_user_perm_override_effect', 'effect'),
+    )
+
+    EFFECT_ALLOW = 'allow'
+    EFFECT_DENY = 'deny'
+    ALLOWED_EFFECTS = [EFFECT_ALLOW, EFFECT_DENY]
+
+    id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    module = db.Column(db.String(50), nullable=False)
+    action = db.Column(db.String(50), nullable=False)
+    effect = db.Column(db.String(10), nullable=False, default=EFFECT_ALLOW)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    updated_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    workspace = db.relationship('Workspace', foreign_keys=[workspace_id])
+    user = db.relationship('User', foreign_keys=[user_id], backref=db.backref('workspace_permission_overrides', lazy='dynamic'))
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+    updated_by = db.relationship('User', foreign_keys=[updated_by_id])
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'workspace_id': self.workspace_id,
+            'user_id': self.user_id,
+            'module': self.module,
+            'action': self.action,
+            'effect': self.effect,
+            'created_by_id': self.created_by_id,
+            'updated_by_id': self.updated_by_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    @classmethod
+    def get_user_overrides(cls, workspace_id, user_id, module=None):
+        query = cls.query.filter_by(workspace_id=workspace_id, user_id=user_id)
+        if module:
+            query = query.filter_by(module=module)
+        return query.all()
+
+    @classmethod
+    def replace_user_overrides(cls, workspace_id, user_id, override_rows, actor_user_id=None):
+        """Replace all overrides for a user in a workspace atomically.
+
+        override_rows format:
+        [
+            {'module': 'listings', 'action': 'edit', 'effect': 'deny'},
+            ...
+        ]
+        """
+        from sqlalchemy import and_
+
+        cls.query.filter(and_(cls.workspace_id == workspace_id, cls.user_id == user_id)).delete()
+
+        normalized_rows = []
+        for row in override_rows or []:
+            if not isinstance(row, dict):
+                continue
+            module = str(row.get('module') or '').strip().lower()
+            action = str(row.get('action') or '').strip().lower()
+            effect = str(row.get('effect') or '').strip().lower()
+            if not module or not action or effect not in cls.ALLOWED_EFFECTS:
+                continue
+            normalized_rows.append({
+                'module': module,
+                'action': action,
+                'effect': effect
+            })
+
+        for row in normalized_rows:
+            db.session.add(cls(
+                workspace_id=workspace_id,
+                user_id=user_id,
+                module=row['module'],
+                action=row['action'],
+                effect=row['effect'],
+                created_by_id=actor_user_id,
+                updated_by_id=actor_user_id
+            ))
+
+        return normalized_rows
 
 
 class ObjectACL(db.Model):
@@ -2081,6 +2177,7 @@ class Lead(db.Model):
         db.Index('idx_leads_status_assigned', 'status', 'assigned_to_id'),
         db.Index('idx_leads_agent_status', 'pf_agent_id', 'status'),
         db.Index('idx_leads_workspace_status', 'workspace_id', 'status'),
+        db.Index('idx_leads_workspace_tags', 'workspace_id', 'tags'),
     )
     
     id = db.Column(db.Integer, primary_key=True)
@@ -2118,6 +2215,7 @@ class Lead(db.Model):
     last_contact = db.Column(db.DateTime)
     next_follow_up = db.Column(db.DateTime)
     notes = db.Column(db.Text)
+    tags = db.Column(db.Text)  # comma-separated workspace tag IDs
     
     # Conversion
     customer_id = db.Column(db.Integer, db.ForeignKey('crm_customers.id'), nullable=True)
@@ -2157,9 +2255,101 @@ class Lead(db.Model):
             'last_contact': self.last_contact.isoformat() if self.last_contact else None,
             'next_follow_up': self.next_follow_up.isoformat() if self.next_follow_up else None,
             'notes': self.notes,
+            'tags': self.get_tags(),
             'customer_id': self.customer_id,
             'converted_at': self.converted_at.isoformat() if self.converted_at else None,
             'received_at': self.received_at.isoformat() if self.received_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def get_tags(self):
+        """Return normalized list of tag ids."""
+        if not self.tags:
+            return []
+        values = []
+        for raw in str(self.tags).split(','):
+            tag = raw.strip().lower()
+            if tag and tag not in values:
+                values.append(tag)
+        return values
+
+    def set_tags(self, tag_ids):
+        """Store normalized tag ids in comma-separated form."""
+        if not tag_ids:
+            self.tags = None
+            return
+        normalized = []
+        for raw in tag_ids:
+            tag = str(raw or '').strip().lower()
+            if tag and tag not in normalized:
+                normalized.append(tag)
+        self.tags = ','.join(normalized) if normalized else None
+
+
+class LeadReminder(db.Model):
+    """Lead reminder records for events/meetings/actions."""
+    __tablename__ = 'lead_reminders'
+    __table_args__ = (
+        db.Index('idx_lead_reminders_workspace_due', 'workspace_id', 'due_at'),
+        db.Index('idx_lead_reminders_lead_due', 'lead_id', 'due_at'),
+        db.Index('idx_lead_reminders_assignee_status_due', 'assigned_to_id', 'status', 'due_at'),
+        db.Index('idx_lead_reminders_workspace_status', 'workspace_id', 'status'),
+    )
+
+    TYPE_EVENT = 'event'
+    TYPE_MEETING = 'meeting'
+    TYPE_ACTION = 'action'
+    TYPES = (TYPE_EVENT, TYPE_MEETING, TYPE_ACTION)
+
+    STATUS_PENDING = 'pending'
+    STATUS_COMPLETED = 'completed'
+    STATUS_CANCELLED = 'cancelled'
+    STATUSES = (STATUS_PENDING, STATUS_COMPLETED, STATUS_CANCELLED)
+
+    id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=False, index=True)
+    lead_id = db.Column(db.Integer, db.ForeignKey('crm_leads.id', ondelete='CASCADE'), nullable=False, index=True)
+    assigned_to_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)
+    type = db.Column(db.String(20), nullable=False, default=TYPE_ACTION)
+    title = db.Column(db.String(255), nullable=False)
+    notes = db.Column(db.Text)
+    due_at = db.Column(db.DateTime, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default=STATUS_PENDING)
+    completed_at = db.Column(db.DateTime)
+    cancelled_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    workspace = db.relationship('Workspace', foreign_keys=[workspace_id])
+    lead = db.relationship('Lead', backref=db.backref('reminders', lazy='dynamic', cascade='all, delete-orphan'))
+    assigned_to = db.relationship('User', foreign_keys=[assigned_to_id])
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+
+    def to_dict(self):
+        now = datetime.utcnow()
+        is_overdue = bool(
+            self.status == self.STATUS_PENDING and
+            self.due_at is not None and
+            self.due_at < now
+        )
+        return {
+            'id': self.id,
+            'workspace_id': self.workspace_id,
+            'lead_id': self.lead_id,
+            'assigned_to_id': self.assigned_to_id,
+            'assigned_to_name': self.assigned_to.name if self.assigned_to else None,
+            'created_by_id': self.created_by_id,
+            'created_by_name': self.created_by.name if self.created_by else None,
+            'type': self.type,
+            'title': self.title,
+            'notes': self.notes,
+            'due_at': self.due_at.isoformat() if self.due_at else None,
+            'status': self.status,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+            'cancelled_at': self.cancelled_at.isoformat() if self.cancelled_at else None,
+            'is_overdue': is_overdue,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -2389,6 +2579,7 @@ class AppSettings(db.Model):
         # Lead CRM settings - JSON arrays
         'lead_statuses': '[{"id":"new","label":"New","color":"blue"},{"id":"contacted","label":"Contacted","color":"yellow"},{"id":"qualified","label":"Qualified","color":"green"},{"id":"viewing","label":"Viewing","color":"purple"},{"id":"negotiation","label":"Negotiation","color":"orange"},{"id":"won","label":"Won","color":"emerald"},{"id":"lost","label":"Lost","color":"red"},{"id":"spam","label":"Spam","color":"gray"}]',
         'lead_sources': '[{"id":"propertyfinder","label":"PropertyFinder","color":"red"},{"id":"bayut","label":"Bayut","color":"blue"},{"id":"website","label":"Website","color":"purple"},{"id":"facebook","label":"Facebook","color":"indigo"},{"id":"instagram","label":"Instagram","color":"pink"},{"id":"whatsapp","label":"WhatsApp","color":"green"},{"id":"phone","label":"Phone","color":"gray"},{"id":"email","label":"Email","color":"cyan"},{"id":"referral","label":"Referral","color":"amber"},{"id":"zapier","label":"Zapier","color":"orange"},{"id":"other","label":"Other","color":"gray"}]',
+        'lead_tags': '[]',
         # Image processing settings
         'image_default_ratio': 'landscape_16_9',
         'image_default_size': 'full_hd',

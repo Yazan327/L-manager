@@ -6,6 +6,7 @@ import os
 import sys
 import json
 import math
+import re
 import hashlib
 import secrets
 import shutil
@@ -32,9 +33,10 @@ from utils import BulkListingManager
 from database import (
     db, LocalListing, PFSession, User, PFCache, AppSettings, ListingFolder, 
     LoopConfig, LoopListing, DuplicatedListing, LoopExecutionLog, 
-    Lead, LeadComment, Contact, Customer,
+    Lead, LeadReminder, LeadComment, Contact, Customer,
     TaskBoard, TaskLabel, Task, TaskComment, BoardMember, BOARD_PERMISSIONS, task_assignee_association,
     Workspace, WorkspaceMember, WorkspaceConnection, WorkspaceApiCredential, WorkspaceInvite, PasswordResetToken,
+    WorkspaceUserPermissionOverride,
     SystemRole, UserSystemRole, WorkspaceRole, ModulePermission, ObjectACL, FeatureFlag, AuditLog
 )
 from images import ImageProcessor
@@ -233,6 +235,51 @@ with app.app_context():
                     print("[MIGRATION] lead_type column added successfully")
         except Exception as e:
             print(f"[MIGRATION] lead_type column migration skipped or failed: {e}")
+
+        # Migration: Add tags column to crm_leads if it doesn't exist
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='crm_leads' AND column_name='tags'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Adding tags column to crm_leads table...")
+                    conn.execute(text("ALTER TABLE crm_leads ADD COLUMN tags TEXT"))
+                    conn.commit()
+                    print("[MIGRATION] tags column added to crm_leads")
+        except Exception as e:
+            print(f"[MIGRATION] crm_leads.tags migration skipped or failed: {e}")
+
+        # Migration: Create lead_reminders table if it doesn't exist
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='lead_reminders'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating lead_reminders table...")
+                    conn.execute(text("""
+                        CREATE TABLE lead_reminders (
+                            id SERIAL PRIMARY KEY,
+                            workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                            lead_id INTEGER NOT NULL REFERENCES crm_leads(id) ON DELETE CASCADE,
+                            assigned_to_id INTEGER REFERENCES users(id),
+                            created_by_id INTEGER REFERENCES users(id),
+                            type VARCHAR(20) NOT NULL DEFAULT 'action',
+                            title VARCHAR(255) NOT NULL,
+                            notes TEXT,
+                            due_at TIMESTAMP NOT NULL,
+                            status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                            completed_at TIMESTAMP NULL,
+                            cancelled_at TIMESTAMP NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX idx_lead_reminders_workspace_due ON lead_reminders(workspace_id, due_at)"))
+                    conn.execute(text("CREATE INDEX idx_lead_reminders_lead_due ON lead_reminders(lead_id, due_at)"))
+                    conn.execute(text("CREATE INDEX idx_lead_reminders_assignee_status_due ON lead_reminders(assigned_to_id, status, due_at)"))
+                    conn.execute(text("CREATE INDEX idx_lead_reminders_workspace_status ON lead_reminders(workspace_id, status)"))
+                    conn.commit()
+                    print("[MIGRATION] lead_reminders table created successfully")
+        except Exception as e:
+            print(f"[MIGRATION] lead_reminders table migration skipped or failed: {e}")
         
         # Migration: Add contacts table columns if missing
         try:
@@ -697,6 +744,37 @@ with app.app_context():
                         print(f"[MIGRATION] {column_name} column added to workspace_api_credentials")
             except Exception as e:
                 print(f"[MIGRATION] {column_name} migration for workspace_api_credentials skipped or failed: {e}")
+
+        # Migration: Create workspace_user_permission_overrides table
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='workspace_user_permission_overrides'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating workspace_user_permission_overrides table...")
+                    conn.execute(text("""
+                        CREATE TABLE workspace_user_permission_overrides (
+                            id SERIAL PRIMARY KEY,
+                            workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            module VARCHAR(50) NOT NULL,
+                            action VARCHAR(50) NOT NULL,
+                            effect VARCHAR(10) NOT NULL DEFAULT 'allow',
+                            created_by_id INTEGER REFERENCES users(id),
+                            updated_by_id INTEGER REFERENCES users(id),
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            CONSTRAINT uq_ws_user_module_action_override UNIQUE (workspace_id, user_id, module, action)
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX idx_ws_user_perm_override_workspace ON workspace_user_permission_overrides(workspace_id)"))
+                    conn.execute(text("CREATE INDEX idx_ws_user_perm_override_user ON workspace_user_permission_overrides(user_id)"))
+                    conn.execute(text("CREATE INDEX idx_ws_user_perm_override_module ON workspace_user_permission_overrides(module)"))
+                    conn.execute(text("CREATE INDEX idx_ws_user_perm_override_action ON workspace_user_permission_overrides(action)"))
+                    conn.execute(text("CREATE INDEX idx_ws_user_perm_override_effect ON workspace_user_permission_overrides(effect)"))
+                    conn.commit()
+                    print("[MIGRATION] workspace_user_permission_overrides table created successfully")
+        except Exception as e:
+            print(f"[MIGRATION] workspace_user_permission_overrides table creation skipped or failed: {e}")
         
         # ==================== BITRIX24-STYLE PERMISSION SYSTEM MIGRATION ====================
         
@@ -1066,7 +1144,7 @@ with app.app_context():
         
         # Initialize default settings (workspace-scoped)
         AppSettings.init_defaults(workspace_id=default_ws_id)
-        
+
         # Set defaults from .env if not already set in DB
         if default_ws_id:
             if not AppSettings.get('default_agent_email', workspace_id=default_ws_id):
@@ -1969,7 +2047,6 @@ def permission_required(permission):
                 ws = None
 
             if ws:
-                extra_permissions = set(get_workspace_user_extra_permissions(user.id, workspace_id=ws.id))
                 module_action_map = {
                     'view': ('listings', 'read'),
                     'create': ('listings', 'create'),
@@ -1978,19 +2055,19 @@ def permission_required(permission):
                     'publish': ('listings', 'publish'),
                     'bulk_upload': ('listings', 'bulk'),
                     'manage_leads': ('leads', 'read'),
-                    'manage_users': ('users', 'read'),
-                    'manage_loops': ('listings', 'read'),
+                    'manage_users': ('users', 'edit'),
+                    'manage_loops': ('loops', 'read'),
                     'settings': ('settings', 'edit'),
                 }
                 module_action = module_action_map.get(permission)
+                from src.services.permissions import get_permission_service
+                service = get_permission_service()
                 if module_action:
-                    from src.services.permissions import get_permission_service
-                    service = get_permission_service()
                     module, action = module_action
-                    if not service.check_module_access(user, ws.id, module, action) and permission not in extra_permissions:
+                    if not service.check_workspace_module_action(user, ws.id, module, action):
                         flash('You do not have permission to access this feature.', 'error')
                         return redirect(url_for('workspace_dashboard', workspace_slug=ws.slug))
-                elif permission not in extra_permissions:
+                else:
                     flash('You do not have permission to access this feature.', 'error')
                     return redirect(url_for('workspace_dashboard', workspace_slug=ws.slug))
             elif not user.has_permission(permission):
@@ -2038,6 +2115,8 @@ def inject_user():
     """Make user and workspace available in all templates"""
     sys_admin = False
     can_access_loops = False
+    can_create_listing = False
+    can_bulk_upload = False
     workspace = getattr(g, 'workspace', None)
     if not workspace:
         try:
@@ -2051,15 +2130,26 @@ def inject_user():
     try:
         if workspace and g.user:
             can_access_loops = workspace_user_can_manage_loops(user=g.user, workspace_id=workspace.id)
+            from src.services.permissions import get_permission_service
+            service = get_permission_service()
+            can_create_listing = service.check_workspace_module_action(g.user, workspace.id, 'listings', 'create')
+            can_bulk_upload = service.check_workspace_module_action(g.user, workspace.id, 'listings', 'bulk')
+        elif g.user:
+            can_create_listing = g.user.has_permission('create')
+            can_bulk_upload = g.user.has_permission('bulk_upload')
     except Exception:
         can_access_loops = False
+        can_create_listing = False
+        can_bulk_upload = False
     return dict(
         current_user=g.user,
         current_workspace=workspace,
         is_workspace_context=getattr(g, 'is_workspace_context', False),
         is_admin_context=getattr(g, 'is_admin_context', False),
         is_system_admin=sys_admin,
-        can_access_loops=can_access_loops
+        can_access_loops=can_access_loops,
+        can_create_listing=can_create_listing,
+        can_bulk_upload=can_bulk_upload
     )
 
 
@@ -2132,6 +2222,353 @@ def set_workspace_user_extra_permissions(user_id, permissions_list, workspace_id
         workspace_id=workspace_id
     )
     return normalized
+
+
+PERMISSION_MATRIX_ROLE_CODES = {
+    'owner': 'OWNER',
+    'admin': 'ADMIN',
+    'member': 'MEMBER',
+    'viewer': 'VIEWER',
+}
+
+PERMISSION_MATRIX_ROLE_LABELS = {
+    'owner': 'Owner',
+    'admin': 'Admin',
+    'member': 'Member',
+    'viewer': 'Viewer',
+}
+
+PERMISSION_MATRIX_MODULE_ACTIONS = {
+    'dashboard': ['read'],
+    'listings': ['read', 'create', 'edit', 'delete', 'publish', 'bulk'],
+    'leads': ['read', 'create', 'edit', 'delete', 'assign'],
+    'tasks': ['read', 'create', 'edit', 'delete'],
+    'contacts': ['read', 'create', 'edit', 'delete'],
+    'insights': ['read'],
+    'users': ['read', 'create', 'edit', 'delete'],
+    'settings': ['read', 'edit'],
+    'loops': ['read', 'create', 'edit', 'delete'],
+}
+
+PERMISSION_MATRIX_SCOPED_MODULES = {'listings', 'leads', 'tasks', 'contacts', 'loops'}
+PERMISSION_MATRIX_ALLOWED_SCOPES = {'own', 'workspace'}
+
+
+def _default_permission_buckets_for_role(role_key):
+    role = (role_key or '').strip().lower()
+    if role in ('owner', 'admin'):
+        return {
+            'manage_members': 'admin_only',
+            'manage_roles': 'admin_only',
+            'manage_connections': 'admin_only',
+            'manage_settings': 'admin_only',
+            'delete_workspace': 'admin_only',
+            'view_data': 'all_members',
+            'create_data': 'all_members',
+            'edit_data': 'all_members',
+            'delete_data': 'admin_moderator',
+        }
+    if role == 'member':
+        return {
+            'manage_members': 'deny',
+            'manage_roles': 'deny',
+            'manage_connections': 'deny',
+            'manage_settings': 'deny',
+            'delete_workspace': 'deny',
+            'view_data': 'all_members',
+            'create_data': 'all_members',
+            'edit_data': 'all_members',
+            'delete_data': 'deny',
+        }
+    return {
+        'manage_members': 'deny',
+        'manage_roles': 'deny',
+        'manage_connections': 'deny',
+        'manage_settings': 'deny',
+        'delete_workspace': 'deny',
+        'view_data': 'authorized',
+        'create_data': 'deny',
+        'edit_data': 'deny',
+        'delete_data': 'deny',
+    }
+
+
+def _default_module_caps_for_role(role_key, module):
+    role = (role_key or '').strip().lower()
+    actions = PERMISSION_MATRIX_MODULE_ACTIONS.get(module, [])
+    caps = {action: False for action in actions}
+
+    if module == 'dashboard':
+        caps['read'] = True
+    elif module in ('listings', 'leads', 'tasks', 'contacts'):
+        if role in ('owner', 'admin'):
+            for action in actions:
+                caps[action] = True
+        elif role == 'member':
+            for action in ('read', 'create', 'edit'):
+                if action in caps:
+                    caps[action] = True
+        else:  # viewer
+            if 'read' in caps:
+                caps['read'] = True
+    elif module == 'insights':
+        caps['read'] = True
+    elif module == 'users':
+        if role in ('owner', 'admin'):
+            for action in actions:
+                caps[action] = True
+    elif module == 'settings':
+        if role in ('owner', 'admin'):
+            caps['read'] = True
+            caps['edit'] = True
+    elif module == 'loops':
+        if role in ('owner', 'admin'):
+            for action in actions:
+                caps[action] = True
+
+    if module in PERMISSION_MATRIX_SCOPED_MODULES:
+        caps['scope'] = 'workspace' if role in ('owner', 'admin') else 'own'
+    return caps
+
+
+def _normalize_module_caps_for_storage(module, incoming_caps, role_key):
+    actions = PERMISSION_MATRIX_MODULE_ACTIONS.get(module, [])
+    incoming_caps = incoming_caps or {}
+    normalized = {}
+
+    defaults = _default_module_caps_for_role(role_key, module)
+    for action in actions:
+        if action in incoming_caps:
+            normalized[action] = bool(incoming_caps.get(action))
+        else:
+            normalized[action] = bool(defaults.get(action, False))
+
+    if module in PERMISSION_MATRIX_SCOPED_MODULES:
+        scope = str(incoming_caps.get('scope') if 'scope' in incoming_caps else defaults.get('scope', 'own')).strip().lower()
+        if scope not in PERMISSION_MATRIX_ALLOWED_SCOPES:
+            scope = defaults.get('scope', 'own')
+        normalized['scope'] = scope
+
+    return normalized
+
+
+def _ensure_workspace_permission_profiles(workspace_id):
+    """Ensure OWNER/ADMIN/MEMBER/VIEWER role profiles and module permissions exist per workspace."""
+    role_records = {}
+    for role_key, role_code in PERMISSION_MATRIX_ROLE_CODES.items():
+        role = WorkspaceRole.query.filter_by(workspace_id=workspace_id, code=role_code).first()
+        if not role:
+            role = WorkspaceRole(
+                workspace_id=workspace_id,
+                code=role_code,
+                name=PERMISSION_MATRIX_ROLE_LABELS.get(role_key, role_key.title()),
+                description=f'Workspace {PERMISSION_MATRIX_ROLE_LABELS.get(role_key, role_key.title())} role profile',
+                is_default=(role_key == 'member'),
+                is_system=False,
+                priority={'owner': 100, 'admin': 90, 'member': 50, 'viewer': 10}.get(role_key, 0)
+            )
+            role.set_permission_buckets(_default_permission_buckets_for_role(role_key))
+            db.session.add(role)
+            db.session.flush()
+        elif not role.get_permission_buckets():
+            role.set_permission_buckets(_default_permission_buckets_for_role(role_key))
+
+        role_records[role_key] = role
+
+        for module in PERMISSION_MATRIX_MODULE_ACTIONS.keys():
+            perm = ModulePermission.query.filter_by(workspace_role_id=role.id, module=module).first()
+            if not perm:
+                perm = ModulePermission(workspace_role_id=role.id, module=module)
+                perm.set_capabilities(_default_module_caps_for_role(role_key, module))
+                db.session.add(perm)
+
+    return role_records
+
+
+def _serialize_workspace_permission_matrix(workspace_id):
+    roles = _ensure_workspace_permission_profiles(workspace_id)
+    matrix = {}
+    for role_key, role_record in roles.items():
+        modules = {}
+        for module in PERMISSION_MATRIX_MODULE_ACTIONS.keys():
+            perm = ModulePermission.query.filter_by(workspace_role_id=role_record.id, module=module).first()
+            if perm:
+                modules[module] = perm.get_capabilities()
+            else:
+                modules[module] = _default_module_caps_for_role(role_key, module)
+
+        matrix[role_key] = {
+            'role_id': role_record.id,
+            'role_code': role_record.code,
+            'role_name': role_record.name,
+            'modules': modules,
+        }
+
+    return {
+        'roles': matrix,
+        'modules': list(PERMISSION_MATRIX_MODULE_ACTIONS.keys()),
+        'actions_by_module': PERMISSION_MATRIX_MODULE_ACTIONS,
+        'scoped_modules': list(PERMISSION_MATRIX_SCOPED_MODULES),
+    }
+
+
+LEGACY_WORKSPACE_EXTRA_PERMISSION_MAP = {
+    'view': [('dashboard', 'read'), ('listings', 'read')],
+    'create': [('listings', 'create')],
+    'edit': [('listings', 'edit')],
+    'delete': [('listings', 'delete')],
+    'publish': [('listings', 'publish')],
+    'bulk_upload': [('listings', 'bulk')],
+    'manage_leads': [('leads', 'read'), ('leads', 'create'), ('leads', 'edit'), ('leads', 'assign')],
+    'manage_users': [('users', 'read'), ('users', 'create'), ('users', 'edit'), ('users', 'delete')],
+    'settings': [('settings', 'read'), ('settings', 'edit')],
+    'manage_loops': [('loops', 'read'), ('loops', 'create'), ('loops', 'edit'), ('loops', 'delete')],
+}
+
+_PERMISSION_ACTION_ALIASES = {
+    'view': 'read',
+    'bulk_upload': 'bulk',
+}
+
+
+def _normalize_permission_action(action):
+    action_text = str(action or '').strip().lower()
+    return _PERMISSION_ACTION_ALIASES.get(action_text, action_text)
+
+
+def _normalize_override_rows_payload(payload):
+    """Normalize override payload into unique (module, action, effect) rows."""
+    normalized = {}
+
+    if payload is None:
+        payload = []
+
+    if isinstance(payload, dict):
+        rows = []
+        for module, actions in payload.items():
+            if not isinstance(actions, dict):
+                continue
+            for action, effect in actions.items():
+                rows.append({
+                    'module': module,
+                    'action': action,
+                    'effect': effect,
+                })
+    elif isinstance(payload, list):
+        rows = payload
+    else:
+        raise ValueError('Invalid overrides payload')
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        module = str(row.get('module') or '').strip().lower()
+        action = _normalize_permission_action(row.get('action'))
+        effect = str(row.get('effect') or '').strip().lower()
+
+        if module not in PERMISSION_MATRIX_MODULE_ACTIONS:
+            continue
+        if action not in PERMISSION_MATRIX_MODULE_ACTIONS[module]:
+            continue
+        if effect not in (WorkspaceUserPermissionOverride.EFFECT_ALLOW, WorkspaceUserPermissionOverride.EFFECT_DENY):
+            continue
+
+        normalized[(module, action)] = {
+            'module': module,
+            'action': action,
+            'effect': effect,
+        }
+
+    return list(normalized.values())
+
+
+def _serialize_override_rows(rows):
+    grouped = {}
+    for row in rows or []:
+        grouped.setdefault(row.module, {})[row.action] = row.effect
+    return grouped
+
+
+def _audit_permission_change(action, workspace_id, details):
+    try:
+        log = AuditLog(
+            user_id=getattr(g.user, 'id', None),
+            user_email=getattr(g.user, 'email', None),
+            action=action,
+            action_result='allowed',
+            resource_type='workspace',
+            resource_id=workspace_id,
+            workspace_id=workspace_id,
+            ip_address=request.remote_addr if request else None,
+            user_agent=request.user_agent.string if request and request.user_agent else None
+        )
+        log.set_details(details or {})
+        db.session.add(log)
+    except Exception:
+        pass
+
+
+def migrate_legacy_workspace_extra_permissions_to_overrides():
+    """Idempotent migration bridge from legacy extra permissions to allow overrides."""
+    from src.services.permissions import get_permission_service
+
+    migrated = 0
+    try:
+        all_settings = AppSettings.query.filter(
+            AppSettings.key.like(f'{WORKSPACE_USER_EXTRA_PERMISSIONS_KEY_PREFIX}:%'),
+            AppSettings.workspace_id.isnot(None)
+        ).all()
+    except Exception:
+        return 0
+
+    for setting in all_settings:
+        ws_id = setting.workspace_id
+        if not ws_id:
+            continue
+        try:
+            user_id = int(str(setting.key).split(':')[-1])
+        except (TypeError, ValueError):
+            continue
+
+        raw_perms = get_workspace_user_extra_permissions(user_id=user_id, workspace_id=ws_id)
+        if not raw_perms:
+            continue
+
+        existing_rows = WorkspaceUserPermissionOverride.query.filter_by(
+            workspace_id=ws_id,
+            user_id=user_id
+        ).all()
+        existing_keys = {(row.module, row.action) for row in existing_rows}
+
+        for legacy_perm in raw_perms:
+            for module, action in LEGACY_WORKSPACE_EXTRA_PERMISSION_MAP.get(legacy_perm, []):
+                key = (module, action)
+                if key in existing_keys:
+                    continue
+                db.session.add(WorkspaceUserPermissionOverride(
+                    workspace_id=ws_id,
+                    user_id=user_id,
+                    module=module,
+                    action=action,
+                    effect=WorkspaceUserPermissionOverride.EFFECT_ALLOW
+                ))
+                existing_keys.add(key)
+                migrated += 1
+
+    if migrated:
+        db.session.commit()
+        get_permission_service().clear_cache()
+        print(f"[BACKFILL] Migrated {migrated} legacy workspace extra permissions to overrides")
+
+    return migrated
+
+
+# Run a one-time migration bridge on startup/import after helper definitions exist.
+try:
+    with app.app_context():
+        migrate_legacy_workspace_extra_permissions_to_overrides()
+except Exception as e:
+    print(f"[BACKFILL] Legacy workspace extra-permissions migration failed: {e}")
 
 
 def _get_system_user_ids(user_ids):
@@ -2278,14 +2715,22 @@ def get_workspace_membership_for_user(user=None, workspace_id=None):
 
 
 def workspace_user_can_manage_all_listings(user=None, workspace_id=None):
-    """Workspace owners/admins and system admins can see/manage all workspace listings."""
+    """Can see/manage all workspace listings based on effective module scope."""
     user = user or getattr(g, 'user', None)
     if not user:
         return False
     if is_system_admin(user):
         return True
-    membership = get_workspace_membership_for_user(user=user, workspace_id=workspace_id)
-    return bool(membership and membership.role in ('owner', 'admin'))
+    ws_id = workspace_id or get_active_workspace_id()
+    if not ws_id:
+        return False
+    from src.services.permissions import get_permission_service
+    service = get_permission_service()
+    caps = service.get_effective_module_capabilities(user, ws_id, 'listings') or {}
+    if caps.get('read') is not True:
+        return False
+    scope = caps.get('scope', 'own')
+    return scope in (True, 'workspace')
 
 
 def visible_local_listing_query(workspace_id=None, user=None):
@@ -2338,8 +2783,22 @@ def require_workspace_listing_admin(f):
 
 
 def workspace_user_can_manage_all_leads(user=None, workspace_id=None):
-    """Lead visibility/admin actions follow the same role rules as listings."""
-    return workspace_user_can_manage_all_listings(user=user, workspace_id=workspace_id)
+    """Can see/manage all leads based on effective module scope."""
+    user = user or getattr(g, 'user', None)
+    if not user:
+        return False
+    if is_system_admin(user):
+        return True
+    ws_id = workspace_id or get_active_workspace_id()
+    if not ws_id:
+        return False
+    from src.services.permissions import get_permission_service
+    service = get_permission_service()
+    caps = service.get_effective_module_capabilities(user, ws_id, 'leads') or {}
+    if caps.get('read') is not True:
+        return False
+    scope = caps.get('scope', 'own')
+    return scope in (True, 'workspace')
 
 
 def visible_lead_query(workspace_id=None, user=None):
@@ -2373,10 +2832,16 @@ def resolve_leads_scope_request(workspace_id=None, user=None):
         if not assigned_to_id:
             raise ValueError('assigned_to_id must belong to a workspace member')
 
+    tag_ids = _parse_tag_ids_query_param()
+    if tag_ids:
+        # Validate against workspace catalog to avoid unknown/typo tags.
+        _validate_lead_tags(ws_id, tag_ids)
+
     return {
         'requested_scope': requested_scope,
         'effective_scope': effective_scope,
         'assigned_to_id': assigned_to_id,
+        'tag_ids': tag_ids,
         'can_manage_all': can_manage_all,
     }
 
@@ -2395,6 +2860,19 @@ def scoped_leads_query(workspace_id=None, user=None):
         query = query.filter(Lead.assigned_to_id.isnot(None))
         if scope_meta['assigned_to_id']:
             query = query.filter(Lead.assigned_to_id == scope_meta['assigned_to_id'])
+
+    if scope_meta['tag_ids']:
+        tag_clauses = []
+        for tag_id in scope_meta['tag_ids']:
+            tag_clauses.append(
+                db.or_(
+                    Lead.tags == tag_id,
+                    Lead.tags.like(f'{tag_id},%'),
+                    Lead.tags.like(f'%,{tag_id},%'),
+                    Lead.tags.like(f'%,{tag_id}')
+                )
+            )
+        query = query.filter(db.or_(*tag_clauses))
 
     return query, scope_meta
 
@@ -2426,20 +2904,35 @@ def require_workspace_leads_admin(f):
 
 
 def workspace_user_can_manage_loops(user=None, workspace_id=None):
-    """Loops are available to workspace admins and users with explicit manage_loops permission."""
+    """Loops access uses workspace matrix + per-user overrides (with legacy fallback for transition)."""
     user = user or getattr(g, 'user', None)
     if not user:
         return False
     ws_id = workspace_id or get_active_workspace_id()
-    if workspace_user_can_manage_all_listings(user=user, workspace_id=ws_id):
+    from src.services.permissions import get_permission_service
+    service = get_permission_service()
+    if service.check_workspace_module_action(user, ws_id, 'loops', 'read'):
         return True
+    # Backward-compatible fallback during migration window.
     extra_permissions = set(get_workspace_user_extra_permissions(user.id, workspace_id=ws_id))
     return 'manage_loops' in extra_permissions
 
 
 def workspace_user_can_manage_all_loops(user=None, workspace_id=None):
-    """Workspace admins/system admins can manage all loops."""
-    return workspace_user_can_manage_all_listings(user=user, workspace_id=workspace_id)
+    """Can manage all loops based on effective loops scope."""
+    user = user or getattr(g, 'user', None)
+    if not user:
+        return False
+    if is_system_admin(user):
+        return True
+    ws_id = workspace_id or get_active_workspace_id()
+    from src.services.permissions import get_permission_service
+    service = get_permission_service()
+    caps = service.get_effective_module_capabilities(user, ws_id, 'loops') or {}
+    if caps.get('read') is not True:
+        return False
+    scope = caps.get('scope', 'own')
+    return scope in (True, 'workspace')
 
 
 def visible_loop_query(workspace_id=None, user=None):
@@ -2675,12 +3168,14 @@ def _is_workspace_admin(user_id, workspace_id):
 
 
 def can_manage_workspace_members(user, workspace_id):
-    """Allow workspace owners/admins and system admins to manage workspace members."""
+    """Manage members via workspace permission matrix + per-user overrides."""
     if not user:
         return False
     if is_system_admin(user):
         return True
-    return bool(_is_workspace_admin(user.id, workspace_id))
+    from src.services.permissions import get_permission_service
+    service = get_permission_service()
+    return service.check_workspace_module_action(user, workspace_id, 'users', 'edit')
 
 
 def _validate_assignee(workspace_id, assignee_id):
@@ -3997,9 +4492,6 @@ def users_page():
             data['workspace_member_id'] = member.id
             data['workspace_role'] = member.role
             data['workspace_role_name'] = WorkspaceMember.ROLES.get(member.role, {}).get('name', member.role.title())
-            extra_perms = get_workspace_user_extra_permissions(u.id, workspace_id=ws_id)
-            data['workspace_custom_permissions'] = extra_perms
-            data['has_workspace_custom_permissions'] = bool(extra_perms)
         user_payloads.append(data)
     pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
     workspace = Workspace.query.get(ws_id)
@@ -4343,28 +4835,255 @@ def reset_password(token):
 
 
 @app.route('/permissions')
-@permission_required('manage_users')
+@login_required
 def permissions_page():
-    """Permission Center - manage user permissions"""
+    """System Permission Center: workspace role matrix + per-user overrides."""
     if not is_system_admin(g.user):
         ws = get_active_workspace()
         if ws:
             return redirect(url_for('workspace_dashboard', workspace_slug=ws.slug))
         flash('Access denied. System administrators only.', 'error')
         return redirect(url_for('index'))
-    users = User.query.filter(User.role != 'admin').order_by(User.name).all()
-    pf_users = PFCache.get_cache('users', workspace_id=get_active_workspace_id()) or []
+
+    workspaces = Workspace.query.filter_by(is_active=True).order_by(Workspace.name.asc()).all()
+    selected_workspace_id = request.args.get('workspace_id', type=int)
+    if selected_workspace_id and not any(ws.id == selected_workspace_id for ws in workspaces):
+        selected_workspace_id = None
+    if selected_workspace_id is None and workspaces:
+        selected_workspace_id = workspaces[0].id
+
     return render_template('permissions.html',
-                           users=[u.to_dict() for u in users],
-                           sections=User.SECTIONS,
-                           action_labels=User.ACTION_LABELS,
-                           pf_users=pf_users)
+                           workspaces=[workspace_to_org_dict(ws) for ws in workspaces],
+                           selected_workspace_id=selected_workspace_id,
+                           role_labels=PERMISSION_MATRIX_ROLE_LABELS,
+                           actions_by_module=PERMISSION_MATRIX_MODULE_ACTIONS,
+                           scoped_modules=list(PERMISSION_MATRIX_SCOPED_MODULES))
+
+
+def _ensure_system_admin_for_permissions_api():
+    if not is_system_admin(getattr(g, 'user', None)):
+        return jsonify({'success': False, 'error': 'Access denied. System administrators only.'}), 403
+    return None
+
+
+@app.route('/api/workspaces/<int:workspace_id>/permission-matrix', methods=['GET'])
+@login_required
+def api_get_workspace_permission_matrix(workspace_id):
+    guard = _ensure_system_admin_for_permissions_api()
+    if guard:
+        return guard
+    workspace = Workspace.query.get_or_404(workspace_id)
+    matrix = _serialize_workspace_permission_matrix(workspace.id)
+    return jsonify({
+        'success': True,
+        'workspace': workspace_to_org_dict(workspace),
+        'matrix': matrix
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>/permission-matrix', methods=['PUT'])
+@login_required
+def api_update_workspace_permission_matrix(workspace_id):
+    guard = _ensure_system_admin_for_permissions_api()
+    if guard:
+        return guard
+    workspace = Workspace.query.get_or_404(workspace_id)
+    data = request.get_json() or {}
+    incoming_roles = data.get('roles')
+    if not isinstance(incoming_roles, dict):
+        return jsonify({'success': False, 'error': 'roles object is required'}), 400
+
+    from src.services.permissions import get_permission_service
+    service = get_permission_service()
+    role_records = _ensure_workspace_permission_profiles(workspace.id)
+
+    updated_count = 0
+    for role_key, role_record in role_records.items():
+        role_payload = incoming_roles.get(role_key) if isinstance(incoming_roles.get(role_key), dict) else {}
+        modules_payload = role_payload.get('modules') if isinstance(role_payload.get('modules'), dict) else {}
+
+        if isinstance(role_payload.get('permission_buckets'), dict):
+            role_record.set_permission_buckets(role_payload.get('permission_buckets'))
+
+        for module in PERMISSION_MATRIX_MODULE_ACTIONS.keys():
+            incoming_caps = modules_payload.get(module) if isinstance(modules_payload.get(module), dict) else {}
+            normalized_caps = _normalize_module_caps_for_storage(module, incoming_caps, role_key)
+            perm = ModulePermission.query.filter_by(
+                workspace_role_id=role_record.id,
+                module=module
+            ).first()
+            if not perm:
+                perm = ModulePermission(workspace_role_id=role_record.id, module=module)
+                db.session.add(perm)
+            perm.set_capabilities(normalized_caps)
+            updated_count += 1
+
+    _audit_permission_change(
+        action='workspace_permission_matrix_updated',
+        workspace_id=workspace.id,
+        details={
+            'updated_roles': list(role_records.keys()),
+            'updated_entries': updated_count
+        }
+    )
+    db.session.commit()
+    service.clear_cache(workspace_id=workspace.id)
+
+    return jsonify({
+        'success': True,
+        'matrix': _serialize_workspace_permission_matrix(workspace.id),
+        'message': 'Workspace permission matrix updated'
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>/permission-overrides', methods=['GET'])
+@login_required
+def api_get_workspace_permission_overrides(workspace_id):
+    guard = _ensure_system_admin_for_permissions_api()
+    if guard:
+        return guard
+
+    workspace = Workspace.query.get_or_404(workspace_id)
+
+    filter_user_id = request.args.get('user_id', type=int)
+    filter_member_id = request.args.get('member_id', type=int)
+    if filter_member_id:
+        member = WorkspaceMember.query.get_or_404(filter_member_id)
+        if member.workspace_id != workspace.id:
+            return jsonify({'success': False, 'error': 'Member not in workspace'}), 400
+        filter_user_id = member.user_id
+
+    query = WorkspaceUserPermissionOverride.query.filter_by(workspace_id=workspace.id)
+    if filter_user_id:
+        query = query.filter_by(user_id=filter_user_id)
+    rows = query.order_by(
+        WorkspaceUserPermissionOverride.user_id.asc(),
+        WorkspaceUserPermissionOverride.module.asc(),
+        WorkspaceUserPermissionOverride.action.asc()
+    ).all()
+
+    grouped_by_user = {}
+    for row in rows:
+        grouped_by_user.setdefault(str(row.user_id), {}).setdefault(row.module, {})[row.action] = row.effect
+
+    return jsonify({
+        'success': True,
+        'workspace_id': workspace.id,
+        'overrides': [row.to_dict() for row in rows],
+        'grouped': grouped_by_user
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>/members/<int:member_id>/permission-overrides', methods=['PUT'])
+@login_required
+def api_replace_workspace_member_permission_overrides(workspace_id, member_id):
+    guard = _ensure_system_admin_for_permissions_api()
+    if guard:
+        return guard
+
+    workspace = Workspace.query.get_or_404(workspace_id)
+    member = WorkspaceMember.query.get_or_404(member_id)
+    if member.workspace_id != workspace.id:
+        return jsonify({'success': False, 'error': 'Member not in workspace'}), 400
+
+    data = request.get_json() or {}
+    raw_payload = data.get('overrides', data)
+    try:
+        normalized_rows = _normalize_override_rows_payload(raw_payload)
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+
+    WorkspaceUserPermissionOverride.replace_user_overrides(
+        workspace_id=workspace.id,
+        user_id=member.user_id,
+        override_rows=normalized_rows,
+        actor_user_id=g.user.id
+    )
+
+    _audit_permission_change(
+        action='workspace_permission_override_replaced',
+        workspace_id=workspace.id,
+        details={
+            'target_user_id': member.user_id,
+            'target_member_id': member.id,
+            'override_count': len(normalized_rows)
+        }
+    )
+
+    db.session.commit()
+
+    from src.services.permissions import get_permission_service
+    service = get_permission_service()
+    service.clear_cache(user_id=member.user_id, workspace_id=workspace.id)
+
+    rows = WorkspaceUserPermissionOverride.get_user_overrides(workspace.id, member.user_id)
+    return jsonify({
+        'success': True,
+        'workspace_id': workspace.id,
+        'user_id': member.user_id,
+        'member_id': member.id,
+        'overrides': [row.to_dict() for row in rows],
+        'grouped': _serialize_override_rows(rows),
+        'message': 'Permission overrides updated'
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>/members/effective-permissions', methods=['GET'])
+@login_required
+def api_get_workspace_members_effective_permissions(workspace_id):
+    guard = _ensure_system_admin_for_permissions_api()
+    if guard:
+        return guard
+
+    workspace = Workspace.query.get_or_404(workspace_id)
+    user_filter_id = request.args.get('user_id', type=int)
+
+    members_all = WorkspaceMember.query.filter_by(workspace_id=workspace.id).all()
+    members, _ = _filter_workspace_memberships_for_org(members_all)
+    if user_filter_id:
+        members = [m for m in members if m.user_id == user_filter_id]
+
+    from src.services.permissions import get_permission_service
+    service = get_permission_service()
+
+    payload = []
+    for member in members:
+        if not member.user:
+            continue
+        module_caps = {}
+        baseline_caps = {}
+        user_overrides = {}
+        for module in PERMISSION_MATRIX_MODULE_ACTIONS.keys():
+            module_caps[module] = service.get_effective_module_capabilities(member.user, workspace.id, module)
+            baseline_caps[module] = service.get_role_module_capabilities(workspace.id, member.role, module)
+            user_overrides[module] = service.get_user_overrides(workspace.id, member.user_id, module=module)
+
+        payload.append({
+            'member_id': member.id,
+            'user_id': member.user_id,
+            'user_name': member.user.name if member.user else None,
+            'user_email': member.user.email if member.user else None,
+            'role': member.role,
+            'role_name': WorkspaceMember.ROLES.get(member.role, {}).get('name', member.role.title()),
+            'effective_capabilities': module_caps,
+            'baseline_capabilities': baseline_caps,
+            'overrides': user_overrides,
+        })
+
+    return jsonify({
+        'success': True,
+        'workspace_id': workspace.id,
+        'members': payload
+    })
 
 
 @app.route('/api/users/<int:user_id>/permissions', methods=['GET'])
-@permission_required('manage_users')
+@login_required
 def api_get_user_permissions(user_id):
-    """Get a user's permissions"""
+    """Legacy global section permissions endpoint (kept for compatibility)."""
+    guard = _ensure_system_admin_for_permissions_api()
+    if guard:
+        return guard
     user = User.query.get_or_404(user_id)
     return jsonify({
         'success': True,
@@ -4374,25 +5093,27 @@ def api_get_user_permissions(user_id):
 
 
 @app.route('/api/users/<int:user_id>/permissions', methods=['PUT'])
-@permission_required('manage_users')
+@login_required
 def api_update_user_permissions(user_id):
-    """Update a user's permissions"""
+    """Legacy global section permissions endpoint (kept for compatibility)."""
+    guard = _ensure_system_admin_for_permissions_api()
+    if guard:
+        return guard
     user = User.query.get_or_404(user_id)
-    data = request.get_json()
-    
+    data = request.get_json() or {}
+
     if user.role == 'admin':
         return jsonify({'success': False, 'error': 'Cannot modify admin permissions'}), 400
-    
+
     section_permissions = data.get('section_permissions', {})
     user.set_section_permissions(section_permissions)
-    
-    # Update PF agent restriction if provided
+
     if 'pf_agent_id' in data:
         user.pf_agent_id = data.get('pf_agent_id') or None
         user.pf_agent_name = data.get('pf_agent_name') or None
-    
+
     db.session.commit()
-    
+
     return jsonify({
         'success': True,
         'user': user.to_dict(),
@@ -4450,6 +5171,23 @@ def require_workspace_access(f):
     return decorated_function
 
 
+def _render_insights_page(workspace_id):
+    """Render insights page with a safe, complete context."""
+    local_listings = visible_local_listing_query(workspace_id).all() if workspace_id else []
+    local_data = [listing.to_dict() for listing in local_listings]
+    return render_template(
+        'insights.html',
+        pf_listings=[],
+        local_listings=local_data,
+        users=[],
+        leads=[],
+        credits=None,
+        error_message=None,
+        cache_age=None,
+        data_loaded=False
+    )
+
+
 @app.route('/<workspace_slug>')
 @app.route('/<workspace_slug>/')
 @login_required
@@ -4486,7 +5224,8 @@ def workspace_listings(workspace_slug):
 @require_workspace_access
 def workspace_leads(workspace_slug):
     """Workspace-scoped leads page"""
-    return render_template('leads.html')
+    ws_id = g.workspace.id if g.workspace else get_active_workspace_id()
+    return render_template('leads.html', can_manage_leads=workspace_user_can_manage_all_leads(workspace_id=ws_id))
 
 
 @app.route('/<workspace_slug>/tasks')
@@ -4502,7 +5241,7 @@ def workspace_tasks(workspace_slug):
 @require_workspace_access
 def workspace_insights(workspace_slug):
     """Workspace-scoped insights page"""
-    return render_template('insights.html')
+    return _render_insights_page(g.workspace.id)
 
 
 @app.route('/<workspace_slug>/image-editor')
@@ -4551,7 +5290,7 @@ def workspace_auth(workspace_slug):
 @require_workspace_access
 def workspace_users(workspace_slug):
     """Workspace-scoped users page - only for workspace admins"""
-    if not g.workspace.is_admin(g.user.id) and not is_system_admin(g.user):
+    if not can_manage_workspace_members(g.user, g.workspace.id):
         flash('Access denied. Workspace admin only.', 'error')
         return redirect(url_for('workspace_dashboard', workspace_slug=workspace_slug))
 
@@ -4569,9 +5308,6 @@ def workspace_users(workspace_slug):
             data['workspace_member_id'] = member.id
             data['workspace_role'] = member.role
             data['workspace_role_name'] = WorkspaceMember.ROLES.get(member.role, {}).get('name', member.role.title())
-            extra_perms = get_workspace_user_extra_permissions(u.id, workspace_id=ws_id)
-            data['workspace_custom_permissions'] = extra_perms
-            data['has_workspace_custom_permissions'] = bool(extra_perms)
         user_payloads.append(data)
     pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
     workspace = Workspace.query.get(ws_id)
@@ -4594,9 +5330,12 @@ def workspace_users(workspace_slug):
 @require_workspace_access
 def workspace_settings(workspace_slug):
     """Workspace-scoped settings page"""
-    if not g.workspace.is_admin(g.user.id) and not is_system_admin(g.user):
-        flash('Access denied. Workspace admin only.', 'error')
-        return redirect(url_for('workspace_dashboard', workspace_slug=workspace_slug))
+    from src.services.permissions import get_permission_service
+    if not is_system_admin(g.user):
+        service = get_permission_service()
+        if not service.check_workspace_module_action(g.user, g.workspace.id, 'settings', 'edit'):
+            flash('Access denied. Workspace admin only.', 'error')
+            return redirect(url_for('workspace_dashboard', workspace_slug=workspace_slug))
 
     ws_id = g.workspace.id
     pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
@@ -4737,8 +5476,11 @@ def api_update_workspace(workspace_id):
     # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     
-    if not workspace.is_admin(g.user.id) and not is_system_admin(g.user):
-        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+    if not is_system_admin(g.user):
+        from src.services.permissions import get_permission_service
+        service = get_permission_service()
+        if not service.check_workspace_module_action(g.user, workspace_id, 'settings', 'edit'):
+            return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     data = request.get_json() or {}
     
@@ -4803,6 +5545,9 @@ def api_get_workspace_members(workspace_id):
     member_payloads = []
     for m in members:
         data = m.to_dict()
+        override_rows = WorkspaceUserPermissionOverride.get_user_overrides(workspace_id, m.user_id)
+        data['permission_overrides'] = _serialize_override_rows(override_rows)
+        # Legacy key kept for backward compatibility only.
         data['extra_permissions'] = get_workspace_user_extra_permissions(m.user_id, workspace_id=workspace_id)
         member_payloads.append(data)
     return jsonify({
@@ -4818,7 +5563,7 @@ def api_add_workspace_member(workspace_id):
     # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
     
-    if not workspace.is_admin(g.user.id) and not is_system_admin(g.user):
+    if not can_manage_workspace_members(g.user, workspace_id):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     data = request.get_json()
@@ -4874,7 +5619,7 @@ def api_update_workspace_member(workspace_id, member_id):
     if member.workspace_id != workspace_id:
         return jsonify({'success': False, 'error': 'Member not in this workspace'}), 400
 
-    if not workspace.is_admin(g.user.id) and not is_system_admin(g.user):
+    if not can_manage_workspace_members(g.user, workspace_id):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
 
     if member.user and has_any_system_role(member.user):
@@ -4891,22 +5636,12 @@ def api_update_workspace_member(workspace_id, member_id):
             if owner_count <= 1 and data['role'] != 'owner':
                 return jsonify({'success': False, 'error': 'Cannot demote the last owner'}), 400
         member.role = data['role']
-
-    updated_extra_permissions = None
-    if 'extra_permissions' in data:
-        if not isinstance(data.get('extra_permissions'), list):
-            return jsonify({'success': False, 'error': 'extra_permissions must be a list'}), 400
-        updated_extra_permissions = set_workspace_user_extra_permissions(
-            member.user_id,
-            data.get('extra_permissions') or [],
-            workspace_id=workspace_id
-        )
     
     db.session.commit()
     member_data = member.to_dict()
-    if updated_extra_permissions is None:
-        updated_extra_permissions = get_workspace_user_extra_permissions(member.user_id, workspace_id=workspace_id)
-    member_data['extra_permissions'] = updated_extra_permissions
+    override_rows = WorkspaceUserPermissionOverride.get_user_overrides(workspace_id, member.user_id)
+    member_data['permission_overrides'] = _serialize_override_rows(override_rows)
+    member_data['extra_permissions'] = get_workspace_user_extra_permissions(member.user_id, workspace_id=workspace_id)
     return jsonify({
         'success': True,
         'member': member_data
@@ -4924,7 +5659,7 @@ def api_remove_workspace_member(workspace_id, member_id):
     if member.workspace_id != workspace_id:
         return jsonify({'success': False, 'error': 'Member not in this workspace'}), 400
     
-    if not workspace.is_admin(g.user.id) and not is_system_admin(g.user):
+    if not can_manage_workspace_members(g.user, workspace_id):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     # Prevent removing the last owner
@@ -5540,10 +6275,13 @@ def workspace_admin_page(workspace_id):
     workspace = Workspace.query.get_or_404(workspace_id)
     service = get_permission_service()
     
-    # Check if user can access workspace admin
-    if not service.is_workspace_admin(g.user, workspace_id) and not is_system_admin(g.user):
-        flash('Access denied. Workspace administrators only.', 'error')
-        return redirect(url_for('index'))
+    # Check if user can access workspace admin console
+    if not is_system_admin(g.user):
+        can_manage_users = service.check_workspace_module_action(g.user, workspace_id, 'users', 'edit')
+        can_manage_settings = service.check_workspace_module_action(g.user, workspace_id, 'settings', 'edit')
+        if not (can_manage_users or can_manage_settings):
+            flash('Access denied. Workspace administrators only.', 'error')
+            return redirect(url_for('index'))
     
     return render_template('workspace_admin.html', workspace=workspace_to_org_dict(workspace, include_members=True))
 
@@ -5786,7 +6524,7 @@ def api_create_workspace_role(workspace_id):
     from src.services.permissions import get_permission_service
     
     service = get_permission_service()
-    if not service.is_workspace_admin(g.user, workspace_id):
+    if not service.is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Access denied'}), 403
     
     data = request.get_json()
@@ -5831,7 +6569,7 @@ def api_update_workspace_role(workspace_id, role_id):
     from src.services.permissions import get_permission_service
     
     service = get_permission_service()
-    if not service.is_workspace_admin(g.user, workspace_id):
+    if not service.is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Access denied'}), 403
     
     role = WorkspaceRole.query.get_or_404(role_id)
@@ -5890,7 +6628,7 @@ def api_set_module_permissions(workspace_id, role_id, module):
     from src.services.permissions import get_permission_service
     
     service = get_permission_service()
-    if not service.is_workspace_admin(g.user, workspace_id):
+    if not service.is_system_admin(g.user):
         return jsonify({'success': False, 'error': 'Access denied'}), 403
     
     # Verify role belongs to workspace
@@ -5970,7 +6708,7 @@ def api_update_feature_flag(flag_id):
 
 # --- User Effective Permissions API ---
 
-@app.route('/api/users/<int:user_id>/permissions', methods=['GET'])
+@app.route('/api/users/<int:user_id>/effective-permissions', methods=['GET'])
 @login_required
 def api_get_user_effective_permissions(user_id):
     """Get effective permissions for a user"""
@@ -6439,21 +7177,7 @@ def insights():
     ws = get_active_workspace()
     if ws:
         return redirect(url_for('workspace_insights', workspace_slug=ws.slug))
-    ws_id = get_active_workspace_id()
-    # Get local listings only (no API call)
-    local_listings = visible_local_listing_query(ws_id).all()
-    local_data = [listing.to_dict() for listing in local_listings]
-    
-    # Return empty PF data - user will load on demand
-    return render_template('insights.html', 
-                         pf_listings=[],
-                         local_listings=local_data,
-                         users=[],
-                         leads=[],
-                         credits=None,
-                         error_message=None,
-                         cache_age=None,
-                         data_loaded=False)
+    return _render_insights_page(get_active_workspace_id())
 
 
 @app.route('/api/pf/refresh', methods=['POST'])
@@ -8612,7 +9336,208 @@ def leads_page():
     ws = get_active_workspace()
     if ws:
         return redirect(url_for('workspace_leads', workspace_slug=ws.slug))
-    return render_template('leads.html')
+    ws_id = get_active_workspace_id()
+    return render_template('leads.html', can_manage_leads=workspace_user_can_manage_all_leads(workspace_id=ws_id))
+
+
+LEAD_CONFIG_ALLOWED_COLORS = {
+    'blue', 'yellow', 'green', 'purple', 'orange', 'red',
+    'emerald', 'gray', 'pink', 'indigo', 'cyan', 'amber', 'teal'
+}
+
+
+def _slugify_lead_config_id(value):
+    text = str(value or '').strip().lower()
+    text = re.sub(r'[^a-z0-9]+', '_', text)
+    return text.strip('_')
+
+
+def _normalize_lead_config_items(
+    items,
+    fallback_items,
+    *,
+    strict=False,
+    item_kind='item',
+    require_non_empty=True
+):
+    """Normalize statuses/sources/tags style config arrays."""
+    normalized = []
+    seen_ids = set()
+
+    if not isinstance(items, list):
+        if strict:
+            raise ValueError(f'{item_kind}s must be a list')
+        items = []
+
+    for index, raw in enumerate(items):
+        if not isinstance(raw, dict):
+            if strict:
+                raise ValueError(f'{item_kind} at position {index + 1} must be an object')
+            continue
+
+        label = str(raw.get('label') or '').strip()
+        raw_id = str(raw.get('id') or '').strip()
+        item_id = _slugify_lead_config_id(raw_id or label)
+        color = str(raw.get('color') or 'gray').strip().lower()
+
+        if not label:
+            if strict:
+                raise ValueError(f'{item_kind} at position {index + 1} must include a label')
+            continue
+        if not item_id:
+            if strict:
+                raise ValueError(f'{item_kind} "{label}" has an invalid id')
+            continue
+        if item_id in seen_ids:
+            if strict:
+                raise ValueError(f'Duplicate {item_kind} id: {item_id}')
+            continue
+        seen_ids.add(item_id)
+
+        if color not in LEAD_CONFIG_ALLOWED_COLORS:
+            color = 'gray'
+        normalized.append({'id': item_id, 'label': label, 'color': color})
+
+    if normalized:
+        return normalized
+    if strict and require_non_empty:
+        raise ValueError(f'At least one {item_kind} is required')
+    return json.loads(json.dumps(fallback_items))
+
+
+def _normalize_lead_statuses(items, *, strict=False):
+    defaults = json.loads(AppSettings.DEFAULTS.get('lead_statuses', '[]'))
+    return _normalize_lead_config_items(items, defaults, strict=strict, item_kind='status')
+
+
+def _normalize_lead_sources(items, *, strict=False):
+    defaults = json.loads(AppSettings.DEFAULTS.get('lead_sources', '[]'))
+    return _normalize_lead_config_items(items, defaults, strict=strict, item_kind='source')
+
+
+def _normalize_lead_tags(items, *, strict=False, require_non_empty=False):
+    return _normalize_lead_config_items(
+        items,
+        [],
+        strict=strict,
+        item_kind='tag',
+        require_non_empty=require_non_empty
+    )
+
+
+def _load_workspace_lead_tags(workspace_id):
+    raw = AppSettings.get('lead_tags', workspace_id=workspace_id)
+    try:
+        parsed = json.loads(raw) if raw else []
+    except Exception:
+        parsed = []
+    normalized = _normalize_lead_tags(parsed)
+    if normalized != parsed:
+        AppSettings.set('lead_tags', json.dumps(normalized), workspace_id=workspace_id)
+    return normalized
+
+
+def _validate_lead_tags(workspace_id, tag_ids):
+    if not tag_ids:
+        return []
+
+    catalog = _load_workspace_lead_tags(workspace_id)
+    allowed = {item['id'] for item in catalog}
+    normalized = []
+    for raw in tag_ids:
+        tag = _slugify_lead_config_id(raw)
+        if not tag:
+            continue
+        if tag not in allowed:
+            raise ValueError(f'Unknown lead tag: {tag}')
+        if tag not in normalized:
+            normalized.append(tag)
+    return normalized
+
+
+def _parse_tag_ids_query_param():
+    raw = (request.args.get('tag_ids') or '').strip()
+    if not raw:
+        return []
+    values = []
+    for part in raw.split(','):
+        tag = _slugify_lead_config_id(part)
+        if tag and tag not in values:
+            values.append(tag)
+    return values
+
+
+def _lead_follow_up_payload(lead):
+    return {
+        'id': lead.id,
+        'next_follow_up': lead.next_follow_up.isoformat() if lead.next_follow_up else None
+    }
+
+
+def _parse_reminder_due_at(value, workspace_id):
+    """Parse due_at string and return UTC-naive datetime."""
+    raw = str(value or '').strip()
+    if not raw:
+        raise ValueError('due_at is required')
+
+    parsed = None
+    candidate = raw.replace('Z', '+00:00')
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        pass
+
+    if parsed is None:
+        try:
+            parsed = datetime.strptime(raw, '%Y-%m-%dT%H:%M')
+        except ValueError as exc:
+            raise ValueError('due_at must be a valid ISO datetime') from exc
+
+    if parsed.tzinfo is None:
+        tz = get_workspace_zoneinfo(workspace_id)
+        parsed = parsed.replace(tzinfo=tz)
+
+    return parsed.astimezone(timezone.utc).replace(tzinfo=None, microsecond=0)
+
+
+def _resolve_reminder_assignee_id(workspace_id, data, can_manage_all):
+    raw_assignee = data.get('assigned_to_id') if isinstance(data, dict) else None
+    if can_manage_all:
+        if raw_assignee in ('', None, 'null'):
+            return None
+        assigned_to_id = _validate_assignee(workspace_id, raw_assignee)
+        if not assigned_to_id:
+            raise ValueError('assigned_to_id must belong to a workspace member')
+        return assigned_to_id
+
+    if raw_assignee in ('', None, 'null'):
+        return g.user.id
+
+    try:
+        requested = int(raw_assignee)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('assigned_to_id must belong to a workspace member') from exc
+    if requested != g.user.id:
+        raise PermissionError('You cannot assign reminders to other users')
+    return g.user.id
+
+
+def _sync_lead_next_follow_up_from_reminders(lead, workspace_id):
+    """Sync lead.next_follow_up to the nearest pending reminder due date."""
+    next_due = LeadReminder.query.filter_by(
+        workspace_id=workspace_id,
+        lead_id=lead.id,
+        status=LeadReminder.STATUS_PENDING
+    ).order_by(LeadReminder.due_at.asc()).with_entities(LeadReminder.due_at).first()
+    lead.next_follow_up = next_due[0] if next_due else None
+
+
+def _get_lead_reminder_or_404(lead_id, reminder_id, workspace_id):
+    return LeadReminder.query.filter_by(
+        id=reminder_id,
+        workspace_id=workspace_id,
+        lead_id=lead_id
+    ).first_or_404()
 
 
 @app.route('/api/leads/config', methods=['GET'])
@@ -8620,36 +9545,53 @@ def leads_page():
 @require_active_workspace
 def api_get_leads_config():
     """Get lead configuration (statuses, sources, team members)"""
-    import json
-    
-    # Get custom statuses and sources from settings
     ws_id = get_active_workspace_id()
-    statuses_json = AppSettings.get('lead_statuses', workspace_id=ws_id)
-    sources_json = AppSettings.get('lead_sources', workspace_id=ws_id)
-    
+
+    statuses_raw = AppSettings.get('lead_statuses', workspace_id=ws_id)
+    sources_raw = AppSettings.get('lead_sources', workspace_id=ws_id)
+
     try:
-        statuses = json.loads(statuses_json) if statuses_json else []
-    except:
-        statuses = []
-    
+        statuses_parsed = json.loads(statuses_raw) if statuses_raw else []
+    except Exception:
+        statuses_parsed = []
     try:
-        sources = json.loads(sources_json) if sources_json else []
-    except:
-        sources = []
-    
-    # Get all users for assignment
-    users = User.query.join(
-        WorkspaceMember, WorkspaceMember.user_id == User.id
+        sources_parsed = json.loads(sources_raw) if sources_raw else []
+    except Exception:
+        sources_parsed = []
+
+    statuses = _normalize_lead_statuses(statuses_parsed)
+    sources = _normalize_lead_sources(sources_parsed)
+    tags = _load_workspace_lead_tags(ws_id)
+
+    if statuses != statuses_parsed:
+        AppSettings.set('lead_statuses', json.dumps(statuses), workspace_id=ws_id)
+    if sources != sources_parsed:
+        AppSettings.set('lead_sources', json.dumps(sources), workspace_id=ws_id)
+
+    members = WorkspaceMember.query.join(
+        User, WorkspaceMember.user_id == User.id
     ).filter(
         WorkspaceMember.workspace_id == ws_id,
         User.is_active == True
     ).all()
-    team_members = [{'id': u.id, 'name': u.name, 'email': u.email, 'role': u.role} for u in users]
-    
+    team_members = []
+    for member in members:
+        team_members.append({
+            'id': member.user_id,
+            'name': member.user.name if member.user else None,
+            'email': member.user.email if member.user else None,
+            'workspace_role': member.role,
+            'workspace_role_name': WorkspaceMember.ROLES.get(member.role, {}).get('name', member.role.title()),
+        })
+
+    can_manage_settings = workspace_user_can_manage_all_leads(workspace_id=ws_id)
     return jsonify({
+        'success': True,
         'statuses': statuses,
         'sources': sources,
-        'team_members': team_members
+        'tags': tags,
+        'team_members': team_members,
+        'can_manage_settings': can_manage_settings
     })
 
 
@@ -8659,16 +9601,29 @@ def api_get_leads_config():
 @require_workspace_leads_admin
 def api_update_leads_config():
     """Update lead configuration (statuses, sources)"""
-    import json
     ws_id = get_active_workspace_id()
     data = request.get_json() or {}
-    
-    if 'statuses' in data:
-        AppSettings.set('lead_statuses', json.dumps(data['statuses']), workspace_id=ws_id)
-    
-    if 'sources' in data:
-        AppSettings.set('lead_sources', json.dumps(data['sources']), workspace_id=ws_id)
-    
+    try:
+        if 'statuses' in data:
+            if not isinstance(data.get('statuses'), list):
+                return jsonify({'success': False, 'error': 'statuses must be a list'}), 400
+            statuses = _normalize_lead_statuses(data.get('statuses'), strict=True)
+            AppSettings.set('lead_statuses', json.dumps(statuses), workspace_id=ws_id)
+
+        if 'sources' in data:
+            if not isinstance(data.get('sources'), list):
+                return jsonify({'success': False, 'error': 'sources must be a list'}), 400
+            sources = _normalize_lead_sources(data.get('sources'), strict=True)
+            AppSettings.set('lead_sources', json.dumps(sources), workspace_id=ws_id)
+
+        if 'tags' in data:
+            if not isinstance(data.get('tags'), list):
+                return jsonify({'success': False, 'error': 'tags must be a list'}), 400
+            tags = _normalize_lead_tags(data.get('tags'), strict=True, require_non_empty=False)
+            AppSettings.set('lead_tags', json.dumps(tags), workspace_id=ws_id)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
     return jsonify({'success': True})
 
 
@@ -8799,11 +9754,13 @@ def api_get_leads():
     query = query.options(joinedload(Lead.assigned_to)).order_by(Lead.created_at.desc())
     leads = query.all()
     return jsonify({
+        'success': True,
         'leads': [l.to_dict() for l in leads],
         'meta': {
             'requested_scope': scope_meta['requested_scope'],
             'effective_scope': scope_meta['effective_scope'],
             'assigned_to_id': scope_meta['assigned_to_id'],
+            'tag_ids': scope_meta['tag_ids'],
             'can_manage_all': scope_meta['can_manage_all'],
         }
     })
@@ -8838,6 +9795,15 @@ def api_create_lead():
         status=data.get('status', 'new'),
         assigned_to_id=assigned_to_id
     )
+
+    if 'tags' in data:
+        if not isinstance(data.get('tags'), list):
+            return jsonify({'success': False, 'error': 'tags must be a list'}), 400
+        try:
+            validated_tags = _validate_lead_tags(ws_id, data.get('tags') or [])
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
+        lead.set_tags(validated_tags)
     
     # Set lead_type if the column exists
     if hasattr(Lead, 'lead_type'):
@@ -8889,6 +9855,15 @@ def api_update_lead(lead_id):
                   'listing_reference', 'status', 'priority', 'lead_type', 'notes']:
         if field in data:
             setattr(lead, field, data[field])
+
+    if 'tags' in data:
+        if not isinstance(data.get('tags'), list):
+            return jsonify({'success': False, 'error': 'tags must be a list'}), 400
+        try:
+            validated_tags = _validate_lead_tags(ws_id, data.get('tags') or [])
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
+        lead.set_tags(validated_tags)
     
     if 'status' in data and data['status'] == 'contacted':
         lead.last_contact = datetime.utcnow()
@@ -8907,6 +9882,189 @@ def api_delete_lead(lead_id):
     db.session.delete(lead)
     db.session.commit()
     return jsonify({'success': True})
+
+
+@app.route('/api/leads/<int:lead_id>/reminders', methods=['GET'])
+@login_required
+@require_active_workspace
+def api_get_lead_reminders(lead_id):
+    ws_id = get_active_workspace_id()
+    get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    reminders = LeadReminder.query.filter_by(
+        workspace_id=ws_id,
+        lead_id=lead_id
+    ).order_by(
+        LeadReminder.due_at.asc(),
+        LeadReminder.created_at.desc()
+    ).all()
+    reminders.sort(key=lambda item: 0 if item.status == LeadReminder.STATUS_PENDING else 1)
+    return jsonify({
+        'success': True,
+        'reminders': [r.to_dict() for r in reminders]
+    })
+
+
+@app.route('/api/leads/<int:lead_id>/reminders', methods=['POST'])
+@login_required
+@require_active_workspace
+def api_create_lead_reminder(lead_id):
+    ws_id = get_active_workspace_id()
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    data = request.get_json() or {}
+
+    reminder_type = str(data.get('type') or '').strip().lower()
+    title = str(data.get('title') or '').strip()
+    notes = str(data.get('notes') or '').strip() or None
+
+    if reminder_type not in LeadReminder.TYPES:
+        return jsonify({'success': False, 'error': 'type must be one of: event, meeting, action'}), 400
+    if not title:
+        return jsonify({'success': False, 'error': 'title is required'}), 400
+
+    try:
+        due_at = _parse_reminder_due_at(data.get('due_at'), ws_id)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
+    can_manage_all = workspace_user_can_manage_all_leads(workspace_id=ws_id)
+    try:
+        assigned_to_id = _resolve_reminder_assignee_id(ws_id, data, can_manage_all)
+    except PermissionError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 403
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
+    reminder = LeadReminder(
+        workspace_id=ws_id,
+        lead_id=lead.id,
+        assigned_to_id=assigned_to_id,
+        created_by_id=g.user.id,
+        type=reminder_type,
+        title=title,
+        notes=notes,
+        due_at=due_at,
+        status=LeadReminder.STATUS_PENDING
+    )
+    db.session.add(reminder)
+    _sync_lead_next_follow_up_from_reminders(lead, ws_id)
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'reminder': reminder.to_dict(),
+        'lead': _lead_follow_up_payload(lead)
+    })
+
+
+@app.route('/api/leads/<int:lead_id>/reminders/<int:reminder_id>', methods=['PATCH'])
+@login_required
+@require_active_workspace
+def api_update_lead_reminder(lead_id, reminder_id):
+    ws_id = get_active_workspace_id()
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    reminder = _get_lead_reminder_or_404(lead.id, reminder_id, ws_id)
+    data = request.get_json() or {}
+
+    if reminder.status != LeadReminder.STATUS_PENDING:
+        return jsonify({'success': False, 'error': 'Only pending reminders can be edited'}), 400
+    if 'status' in data:
+        return jsonify({'success': False, 'error': 'status is managed by complete/cancel actions'}), 400
+
+    if 'type' in data:
+        reminder_type = str(data.get('type') or '').strip().lower()
+        if reminder_type not in LeadReminder.TYPES:
+            return jsonify({'success': False, 'error': 'type must be one of: event, meeting, action'}), 400
+        reminder.type = reminder_type
+
+    if 'title' in data:
+        title = str(data.get('title') or '').strip()
+        if not title:
+            return jsonify({'success': False, 'error': 'title is required'}), 400
+        reminder.title = title
+
+    if 'notes' in data:
+        reminder.notes = str(data.get('notes') or '').strip() or None
+
+    if 'due_at' in data:
+        try:
+            reminder.due_at = _parse_reminder_due_at(data.get('due_at'), ws_id)
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
+
+    if 'assigned_to_id' in data:
+        can_manage_all = workspace_user_can_manage_all_leads(workspace_id=ws_id)
+        try:
+            reminder.assigned_to_id = _resolve_reminder_assignee_id(ws_id, data, can_manage_all)
+        except PermissionError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 403
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
+
+    _sync_lead_next_follow_up_from_reminders(lead, ws_id)
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'reminder': reminder.to_dict(),
+        'lead': _lead_follow_up_payload(lead)
+    })
+
+
+@app.route('/api/leads/<int:lead_id>/reminders/<int:reminder_id>/complete', methods=['POST'])
+@login_required
+@require_active_workspace
+def api_complete_lead_reminder(lead_id, reminder_id):
+    ws_id = get_active_workspace_id()
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    reminder = _get_lead_reminder_or_404(lead.id, reminder_id, ws_id)
+
+    reminder.status = LeadReminder.STATUS_COMPLETED
+    reminder.completed_at = datetime.utcnow()
+    reminder.cancelled_at = None
+
+    _sync_lead_next_follow_up_from_reminders(lead, ws_id)
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'reminder': reminder.to_dict(),
+        'lead': _lead_follow_up_payload(lead)
+    })
+
+
+@app.route('/api/leads/<int:lead_id>/reminders/<int:reminder_id>/cancel', methods=['POST'])
+@login_required
+@require_active_workspace
+def api_cancel_lead_reminder(lead_id, reminder_id):
+    ws_id = get_active_workspace_id()
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    reminder = _get_lead_reminder_or_404(lead.id, reminder_id, ws_id)
+
+    reminder.status = LeadReminder.STATUS_CANCELLED
+    reminder.cancelled_at = datetime.utcnow()
+    reminder.completed_at = None
+
+    _sync_lead_next_follow_up_from_reminders(lead, ws_id)
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'reminder': reminder.to_dict(),
+        'lead': _lead_follow_up_payload(lead)
+    })
+
+
+@app.route('/api/leads/<int:lead_id>/reminders/<int:reminder_id>', methods=['DELETE'])
+@login_required
+@require_active_workspace
+def api_delete_lead_reminder(lead_id, reminder_id):
+    ws_id = get_active_workspace_id()
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    reminder = _get_lead_reminder_or_404(lead.id, reminder_id, ws_id)
+    db.session.delete(reminder)
+    _sync_lead_next_follow_up_from_reminders(lead, ws_id)
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'lead': _lead_follow_up_payload(lead)
+    })
 
 
 @app.route('/api/leads/bulk-delete', methods=['POST'])
@@ -8962,8 +10120,20 @@ def api_bulk_update_leads():
             if not assigned_to_id:
                 return jsonify({'success': False, 'error': 'Assigned user must be in this workspace'}), 400
             updates['assigned_to_id'] = assigned_to_id
-    
-    if not updates:
+
+    tags_mode = str(data.get('tags_mode') or 'replace').strip().lower()
+    tag_update_list = None
+    if 'tags' in data:
+        if not isinstance(data.get('tags'), list):
+            return jsonify({'success': False, 'error': 'tags must be a list'}), 400
+        if tags_mode not in ('replace', 'add', 'remove'):
+            return jsonify({'success': False, 'error': 'tags_mode must be one of replace, add, remove'}), 400
+        try:
+            tag_update_list = _validate_lead_tags(ws_id, data.get('tags') or [])
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
+
+    if not updates and tag_update_list is None:
         return jsonify({'success': False, 'error': 'No updates provided'}), 400
     
     updated = 0
@@ -8971,6 +10141,18 @@ def api_bulk_update_leads():
     for lead in visible_leads:
         for field, value in updates.items():
             setattr(lead, field, value)
+        if tag_update_list is not None:
+            current_tags = lead.get_tags()
+            if tags_mode == 'replace':
+                lead.set_tags(tag_update_list)
+            elif tags_mode == 'add':
+                merged = current_tags[:]
+                for tag_id in tag_update_list:
+                    if tag_id not in merged:
+                        merged.append(tag_id)
+                lead.set_tags(merged)
+            elif tags_mode == 'remove':
+                lead.set_tags([tag_id for tag_id in current_tags if tag_id not in tag_update_list])
         updated += 1
     
     db.session.commit()
