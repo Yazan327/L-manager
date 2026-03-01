@@ -1079,8 +1079,24 @@ function locationSearch() {
             if (typeof value === 'string') return value;
             if (typeof value === 'object') {
                 if (value[lang]) return value[lang];
-                if (value.en) return value.en;
-                if (value.ar) return value.ar;
+
+                const keys = Object.keys(value);
+                const preferredPrefix = lang === 'ar' ? 'ar' : 'en';
+                const prefixedKey = keys.find(k => k.toLowerCase() === preferredPrefix)
+                    || keys.find(k => k.toLowerCase().startsWith(preferredPrefix + '_'))
+                    || keys.find(k => k.toLowerCase().startsWith(preferredPrefix + '-'));
+                if (prefixedKey && typeof value[prefixedKey] === 'string' && value[prefixedKey].trim()) {
+                    return value[prefixedKey];
+                }
+
+                const fallbackPrefix = lang === 'ar' ? 'en' : 'ar';
+                const fallbackKey = keys.find(k => k.toLowerCase() === fallbackPrefix)
+                    || keys.find(k => k.toLowerCase().startsWith(fallbackPrefix + '_'))
+                    || keys.find(k => k.toLowerCase().startsWith(fallbackPrefix + '-'));
+                if (fallbackKey && typeof value[fallbackKey] === 'string' && value[fallbackKey].trim()) {
+                    return value[fallbackKey];
+                }
+
                 const first = Object.values(value).find(v => typeof v === 'string' && v.trim());
                 return first || '';
             }
