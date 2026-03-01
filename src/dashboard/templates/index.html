@@ -229,14 +229,20 @@ function dashboard() {
                     const creditResp = await fetch('/api/credits');
                     const creditData = await creditResp.json();
                     if (creditResp.ok) {
-                        const balance = this.extractCreditBalance(creditData);
+                        let balance = null;
+                        if (creditData && creditData.remaining !== null && creditData.remaining !== undefined) {
+                            balance = Number(creditData.remaining);
+                        }
+                        if (!Number.isFinite(balance)) {
+                            balance = this.extractCreditBalance(creditData);
+                        }
                         this.stats.credits = balance !== null ? this.formatCredit(balance) : '-';
                     } else {
-                        this.stats.credits = '-';
+                        this.stats.credits = 'Unavailable';
                     }
                 } catch (error) {
                     console.error('Failed to load PF credits:', error);
-                    this.stats.credits = '-';
+                    this.stats.credits = 'Unavailable';
                 }
             }
         },

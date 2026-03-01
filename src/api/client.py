@@ -661,7 +661,14 @@ class PropertyFinderClient:
         Returns:
             Credit balance and usage info
         """
-        return self._make_request('GET', '/credits')
+        # Primary endpoint (current PF spec)
+        try:
+            return self._make_request('GET', '/credits/balance')
+        except PropertyFinderAPIError as e:
+            # Backward compatibility for older PF environments
+            if e.status_code in (404, 405):
+                return self._make_request('GET', '/credits')
+            raise
     
     # ==================== STATISTICS ====================
     

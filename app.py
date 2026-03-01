@@ -7908,6 +7908,197 @@ def api_delete_listing(listing_id):
     return jsonify({'success': True, 'message': 'Listing deleted'})
 
 
+def _request_prefers_json_response():
+    """Best-effort check for JSON response preference."""
+    accept = (request.headers.get('Accept') or '').lower()
+    return request.is_json or 'application/json' in accept
+
+
+def _format_pf_api_error_message(exc: PropertyFinderAPIError):
+    """Build a user-facing PF error message with request diagnostics when available."""
+    request_id = None
+    cloudfront = None
+    details = None
+    message = exc.message
+    if isinstance(exc.response, dict):
+        request_id = exc.response.get('_request_id')
+        cloudfront = exc.response.get('_cloudfront')
+        details = exc.response.get('errors') or exc.response.get('error') or exc.response.get('raw')
+    if cloudfront and isinstance(cloudfront, dict):
+        cf_id = cloudfront.get('cf_id')
+        if cf_id:
+            message = (
+                "PropertyFinder CDN blocked this request. "
+                f"Try again later or contact PF support with CloudFront ID: {cf_id}"
+            )
+    elif request_id:
+        message = f"{message} (Request ID: {request_id})"
+    return message, request_id, cloudfront, details
+
+
+def _publish_local_listing_to_pf(local_listing, client):
+    """
+    Create (if needed) and publish a local listing on PropertyFinder.
+    Returns a dict: {success, ...} without raising for expected PF validation/API errors.
+    """
+    media_warnings = []
+
+    if local_listing.pf_listing_id:
+        # Ensure stored PF ID still exists.
+        try:
+            pf_listing = _normalize_pf_listing(client.get_listing(local_listing.pf_listing_id))
+            if not pf_listing or not pf_listing.get('id'):
+                local_listing.pf_listing_id = None
+                db.session.commit()
+        except Exception:
+            local_listing.pf_listing_id = None
+            db.session.commit()
+
+    if not local_listing.pf_listing_id:
+        ok, error = resolve_assigned_agent_id(local_listing, client)
+        if not ok:
+            return {
+                'success': False,
+                'status_code': 400,
+                'error': error,
+                'redirect_to': 'edit'
+            }
+
+        ok, error = validate_location_id(local_listing, client)
+        if not ok:
+            return {
+                'success': False,
+                'status_code': 400,
+                'error': error,
+                'redirect_to': 'edit'
+            }
+
+        listing_data = local_listing.to_pf_format()
+
+        missing = []
+        if not listing_data.get('title'):
+            missing.append('Title')
+        if not listing_data.get('description'):
+            missing.append('Description')
+        if not listing_data.get('price'):
+            missing.append('Price')
+        if not listing_data.get('location'):
+            missing.append('Location')
+        if not listing_data.get('assignedTo'):
+            missing.append('Assigned Agent')
+        if not listing_data.get('bedrooms'):
+            missing.append('Bedrooms')
+        if not listing_data.get('bathrooms'):
+            missing.append('Bathrooms')
+        if missing:
+            return {
+                'success': False,
+                'status_code': 400,
+                'error': f"Cannot publish. Missing required fields: {', '.join(missing)}",
+                'redirect_to': 'edit'
+            }
+
+        ok, error, failed_urls, warnings = validate_media_urls(listing_data)
+        if warnings:
+            media_warnings = warnings
+        if not ok:
+            return {
+                'success': False,
+                'status_code': 400,
+                'error': error,
+                'details': failed_urls,
+                'redirect_to': 'edit',
+                'warnings': media_warnings
+            }
+
+        try:
+            create_result = client.create_listing(listing_data)
+            pf_id = create_result.get('id') if isinstance(create_result, dict) else None
+            if not pf_id:
+                request_id = create_result.get('_request_id') if isinstance(create_result, dict) else None
+                msg = f"Failed to create listing on PropertyFinder: {create_result}"
+                if request_id:
+                    msg = f"{msg} (Request ID: {request_id})"
+                return {
+                    'success': False,
+                    'status_code': 400,
+                    'error': msg,
+                    'redirect_to': 'view',
+                    'warnings': media_warnings
+                }
+            local_listing.pf_listing_id = str(pf_id)
+            db.session.commit()
+        except PropertyFinderAPIError as e:
+            msg, request_id, cloudfront, details = _format_pf_api_error_message(e)
+            return {
+                'success': False,
+                'status_code': e.status_code or 400,
+                'error': f"Failed to create listing on PropertyFinder: {msg}",
+                'request_id': request_id,
+                'cloudfront': cloudfront,
+                'details': details,
+                'redirect_to': 'view',
+                'warnings': media_warnings
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'status_code': 400,
+                'error': f"Failed to create listing on PropertyFinder: {str(e)}",
+                'redirect_to': 'view',
+                'warnings': media_warnings
+            }
+
+    try:
+        publish_result = client.publish_listing(local_listing.pf_listing_id)
+    except PropertyFinderAPIError as e:
+        msg, request_id, cloudfront, details = _format_pf_api_error_message(e)
+        return {
+            'success': False,
+            'status_code': e.status_code or 400,
+            'error': f"PropertyFinder rejected publish request: {msg}",
+            'request_id': request_id,
+            'cloudfront': cloudfront,
+            'details': details,
+            'redirect_to': 'view',
+            'warnings': media_warnings
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'status_code': 400,
+            'error': f"Failed to publish listing: {str(e)}",
+            'redirect_to': 'view',
+            'warnings': media_warnings
+        }
+
+    local_listing.status = 'pending'
+    local_listing.updated_at = datetime.utcnow()
+    db.session.commit()
+
+    pf_state = None
+    try:
+        pf_listing = _normalize_pf_listing(client.get_listing(local_listing.pf_listing_id))
+        pf_state = extract_pf_state_from_listing(pf_listing)
+        new_status = map_pf_state_to_local_status(pf_state) if pf_state else None
+        if new_status and new_status != local_listing.status:
+            local_listing.status = new_status
+            local_listing.updated_at = datetime.utcnow()
+            db.session.commit()
+    except Exception:
+        pass
+
+    return {
+        'success': True,
+        'status_code': 200,
+        'data': publish_result,
+        'pf_listing_id': local_listing.pf_listing_id,
+        'pf_state': pf_state,
+        'local_status': local_listing.status,
+        'warnings': media_warnings
+    }
+
+
 @app.route('/api/listings/<listing_id>/publish', methods=['POST'])
 @api_error_handler
 @login_required
@@ -7916,144 +8107,48 @@ def api_publish_listing(listing_id):
     """API: Publish a listing"""
     ws_id = get_active_workspace_id()
     client = get_client(workspace_id=ws_id)
+    prefers_json = _request_prefers_json_response()
     
     # Check if this is a local listing ID (integer)
     try:
         local_id = int(listing_id)
         local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
         if local_listing:
-            media_warnings = []
-            if local_listing.pf_listing_id:
-                # Check if PF listing still exists
-                try:
-                    pf_listing = client.get_listing(local_listing.pf_listing_id)
-                    if not pf_listing or not pf_listing.get('id'):
-                        # PF listing doesn't exist anymore, need to create new one
-                        local_listing.pf_listing_id = None
-                        db.session.commit()
-                except:
-                    # PF listing not found, clear the ID
-                    local_listing.pf_listing_id = None
-                    db.session.commit()
-            
-            if not local_listing.pf_listing_id:
-                # Need to create on PF first
-                ok, error = resolve_assigned_agent_id(local_listing, client)
-                if not ok:
-                    if request.is_json or request.headers.get('Accept') == 'application/json':
-                        return jsonify({'success': False, 'error': error}), 400
-                    flash(error, 'error')
-                    return redirect(url_for('edit_listing', listing_id=listing_id))
+            publish_outcome = _publish_local_listing_to_pf(local_listing, client)
+            if not publish_outcome.get('success'):
+                if prefers_json:
+                    payload = {'success': False, 'error': publish_outcome.get('error', 'Failed to publish listing')}
+                    if publish_outcome.get('details') is not None:
+                        payload['details'] = publish_outcome.get('details')
+                    if publish_outcome.get('request_id'):
+                        payload['request_id'] = publish_outcome.get('request_id')
+                    if publish_outcome.get('cloudfront'):
+                        payload['cloudfront'] = publish_outcome.get('cloudfront')
+                    if publish_outcome.get('warnings'):
+                        payload['warnings'] = publish_outcome.get('warnings')
+                    return jsonify(payload), publish_outcome.get('status_code', 400)
+                if publish_outcome.get('warnings'):
+                    for warning in publish_outcome.get('warnings'):
+                        flash(warning, 'warning')
+                flash(publish_outcome.get('error', 'Failed to publish listing'), 'error')
+                target = 'edit_listing' if publish_outcome.get('redirect_to') == 'edit' else 'view_listing'
+                return redirect(url_for(target, listing_id=listing_id))
 
-                ok, error = validate_location_id(local_listing, client)
-                if not ok:
-                    if request.is_json or request.headers.get('Accept') == 'application/json':
-                        return jsonify({'success': False, 'error': error}), 400
-                    flash(error, 'error')
-                    return redirect(url_for('edit_listing', listing_id=listing_id))
+            if prefers_json:
+                return jsonify({
+                    'success': True,
+                    'data': publish_outcome.get('data'),
+                    'pf_listing_id': publish_outcome.get('pf_listing_id'),
+                    'status': publish_outcome.get('local_status'),
+                    'pf_state': publish_outcome.get('pf_state'),
+                    'warnings': publish_outcome.get('warnings', [])
+                })
 
-                listing_data = local_listing.to_pf_format()
-                
-                # Validate required fields
-                missing = []
-                if not listing_data.get('title'):
-                    missing.append('Title')
-                if not listing_data.get('description'):
-                    missing.append('Description')
-                if not listing_data.get('price'):
-                    missing.append('Price')
-                if not listing_data.get('location'):
-                    missing.append('Location')
-                if not listing_data.get('assignedTo'):
-                    missing.append('Assigned Agent')
-                if not listing_data.get('bedrooms'):
-                    missing.append('Bedrooms')
-                if not listing_data.get('bathrooms'):
-                    missing.append('Bathrooms')
-                
-                if missing:
-                    error_msg = f"Cannot publish. Missing required fields: {', '.join(missing)}"
-                    if request.is_json or request.headers.get('Accept') == 'application/json':
-                        return jsonify({'success': False, 'error': error_msg}), 400
-                    flash(error_msg, 'error')
-                    return redirect(url_for('edit_listing', listing_id=listing_id))
-
-                # Validate media URLs (public access required by PF)
-                ok, error, failed_urls, warnings = validate_media_urls(listing_data)
-                if warnings:
-                    media_warnings = warnings
-                    if not (request.is_json or request.headers.get('Accept') == 'application/json'):
-                        for warning in warnings:
-                            flash(warning, 'warning')
-                if not ok:
-                    if request.is_json or request.headers.get('Accept') == 'application/json':
-                        return jsonify({'success': False, 'error': error, 'details': failed_urls}), 400
-                    flash(error, 'error')
-                    return redirect(url_for('edit_listing', listing_id=listing_id))
-                
-                # Create on PF
-                try:
-                    result = client.create_listing(listing_data)
-                    pf_id = result.get('id')
-                    if pf_id:
-                        local_listing.pf_listing_id = pf_id
-                        db.session.commit()
-                    else:
-                        error_msg = f"Failed to create listing on PropertyFinder: {result}"
-                        request_id = result.get('_request_id') if isinstance(result, dict) else None
-                        if request_id:
-                            error_msg = f"{error_msg} (Request ID: {request_id})"
-                        if request.is_json or request.headers.get('Accept') == 'application/json':
-                            return jsonify({'success': False, 'error': error_msg}), 400
-                        flash(error_msg, 'error')
-                        return redirect(url_for('view_listing', listing_id=listing_id))
-                except Exception as e:
-                    request_id = None
-                    cloudfront = None
-                    msg = str(e)
-                    if isinstance(e, PropertyFinderAPIError):
-                        msg = e.message
-                        if isinstance(e.response, dict):
-                            request_id = e.response.get('_request_id')
-                            cloudfront = e.response.get('_cloudfront')
-                            if cloudfront and isinstance(cloudfront, dict):
-                                cf_id = cloudfront.get('cf_id')
-                                if cf_id:
-                                    msg = (
-                                        "PropertyFinder CDN blocked this request. "
-                                        f"Try again later or contact PF support with CloudFront ID: {cf_id}"
-                                    )
-                    if request_id and not (cloudfront and isinstance(cloudfront, dict)):
-                        msg = f"{msg} (Request ID: {request_id})"
-                    error_msg = f"Failed to create listing on PropertyFinder: {msg}"
-                    if request.is_json or request.headers.get('Accept') == 'application/json':
-                        return jsonify({'success': False, 'error': error_msg, 'cloudfront': cloudfront}), 400
-                    flash(error_msg, 'error')
-                    return redirect(url_for('view_listing', listing_id=listing_id))
-            
-            # Now publish
-            try:
-                result = client.publish_listing(local_listing.pf_listing_id)
-                local_listing.status = 'pending'
-                db.session.commit()
-                
-                if request.is_json or request.headers.get('Accept') == 'application/json':
-                    response_payload = {
-                        'success': True,
-                        'data': result,
-                        'pf_listing_id': local_listing.pf_listing_id
-                    }
-                    if media_warnings:
-                        response_payload['warnings'] = media_warnings
-                    return jsonify(response_payload)
-                flash(f'Publish request submitted for listing {local_listing.pf_listing_id}', 'success')
-                return redirect(url_for('view_listing', listing_id=listing_id))
-            except PropertyFinderAPIError as e:
-                error_msg = f"PropertyFinder rejected publish request: {e.message}"
-                if request.is_json or request.headers.get('Accept') == 'application/json':
-                    return jsonify({'success': False, 'error': error_msg}), e.status_code or 400
-                flash(error_msg, 'error')
-                return redirect(url_for('view_listing', listing_id=listing_id))
+            if publish_outcome.get('warnings'):
+                for warning in publish_outcome.get('warnings'):
+                    flash(warning, 'warning')
+            flash(f'Publish request submitted for listing {publish_outcome.get("pf_listing_id")}', 'success')
+            return redirect(url_for('view_listing', listing_id=listing_id))
     except (ValueError, TypeError):
         pass
     
@@ -8336,6 +8431,75 @@ def api_get_locations():
     return jsonify(result)
 
 
+def _coerce_int_or_none(value):
+    """Convert scalar value to int when possible."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            return int(value)
+        text = str(value).strip()
+        if text == '':
+            return None
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_pf_credits_response(payload):
+    """Normalize PF credit payload to stable remaining/total/used/cycle keys."""
+    normalized = {
+        'remaining': None,
+        'total': None,
+        'used': None,
+        'cycle': None,
+    }
+    if not isinstance(payload, dict):
+        return normalized
+
+    candidates = [payload]
+    for key in ('data', 'results', 'credits', 'balance'):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+
+    for node in candidates:
+        if not isinstance(node, dict):
+            continue
+        remaining = node.get('remaining')
+        if remaining is None:
+            remaining = node.get('available') or node.get('available_credits') or node.get('availableCredits')
+        total = node.get('total')
+        if total is None:
+            total = node.get('assigned') or node.get('quota')
+        used = node.get('used')
+        if used is None:
+            used = node.get('consumed')
+        cycle = node.get('cycle')
+        if cycle is None:
+            start = node.get('startDate') or node.get('startsAt')
+            end = node.get('endDate') or node.get('endsAt')
+            if start or end:
+                cycle = {'start': start, 'end': end}
+
+        normalized_remaining = _coerce_int_or_none(remaining)
+        normalized_total = _coerce_int_or_none(total)
+        normalized_used = _coerce_int_or_none(used)
+        if normalized_remaining is not None:
+            normalized['remaining'] = normalized_remaining
+        if normalized_total is not None:
+            normalized['total'] = normalized_total
+        if normalized_used is not None:
+            normalized['used'] = normalized_used
+        if cycle and normalized['cycle'] is None:
+            normalized['cycle'] = cycle
+
+        if normalized['remaining'] is not None:
+            break
+
+    return normalized
+
+
 @app.route('/api/credits', methods=['GET'])
 @api_error_handler
 @login_required
@@ -8343,8 +8507,15 @@ def api_get_locations():
 def api_get_credits():
     """API: Get credits info"""
     client = get_client(workspace_id=get_active_workspace_id())
-    result = client.get_credits()
-    return jsonify(result)
+    raw = client.get_credits() or {}
+    normalized = _normalize_pf_credits_response(raw)
+    return jsonify({
+        'remaining': normalized['remaining'],
+        'total': normalized['total'],
+        'used': normalized['used'],
+        'cycle': normalized['cycle'],
+        'raw': raw
+    })
 
 
 # ==================== FORM HANDLERS ====================
@@ -8355,6 +8526,9 @@ def api_get_credits():
 def create_listing_form():
     """Handle listing creation form submission - saves locally first"""
     form = request.form
+    action = (form.get('action') or 'draft').strip().lower()
+    if action not in ('draft', 'publish'):
+        action = 'draft'
     ws_id = get_active_workspace_id()
     default_assigned_agent_email = get_default_assigned_agent_email(workspace_id=ws_id, user=g.user)
     
@@ -8429,7 +8603,24 @@ def create_listing_form():
     
     db.session.add(local_listing)
     db.session.commit()
-    
+
+    if action == 'publish':
+        client = get_client(workspace_id=ws_id)
+        publish_outcome = _publish_local_listing_to_pf(local_listing, client)
+        if publish_outcome.get('success'):
+            if publish_outcome.get('warnings'):
+                for warning in publish_outcome.get('warnings'):
+                    flash(warning, 'warning')
+            flash(f'Publish request submitted for listing {publish_outcome.get("pf_listing_id")}', 'success')
+            return redirect(url_for('view_listing', listing_id=local_listing.id))
+
+        if publish_outcome.get('warnings'):
+            for warning in publish_outcome.get('warnings'):
+                flash(warning, 'warning')
+        flash(publish_outcome.get('error', 'Failed to publish listing'), 'error')
+        target = 'edit_listing' if publish_outcome.get('redirect_to') == 'edit' else 'view_listing'
+        return redirect(url_for(target, listing_id=local_listing.id))
+
     flash('Listing saved as draft!', 'success')
     return redirect(url_for('view_listing', listing_id=local_listing.id))
 
@@ -8448,6 +8639,9 @@ def update_listing_form(listing_id):
         if local_listing:
             # Update local listing
             form = request.form
+            action = (form.get('action') or 'draft').strip().lower()
+            if action not in ('draft', 'publish'):
+                action = 'draft'
             can_manage_all = workspace_user_can_manage_all_listings(workspace_id=ws_id)
             
             local_listing.emirate = form.get('emirate')
@@ -8515,7 +8709,24 @@ def update_listing_form(listing_id):
             local_listing.developer = form.get('developer')
             
             db.session.commit()
-            
+
+            if action == 'publish':
+                client = get_client(workspace_id=ws_id)
+                publish_outcome = _publish_local_listing_to_pf(local_listing, client)
+                if publish_outcome.get('success'):
+                    if publish_outcome.get('warnings'):
+                        for warning in publish_outcome.get('warnings'):
+                            flash(warning, 'warning')
+                    flash(f'Publish request submitted for listing {publish_outcome.get("pf_listing_id")}', 'success')
+                    return redirect(url_for('view_listing', listing_id=listing_id))
+
+                if publish_outcome.get('warnings'):
+                    for warning in publish_outcome.get('warnings'):
+                        flash(warning, 'warning')
+                flash(publish_outcome.get('error', 'Failed to publish listing'), 'error')
+                target = 'edit_listing' if publish_outcome.get('redirect_to') == 'edit' else 'view_listing'
+                return redirect(url_for(target, listing_id=listing_id))
+
             flash('Listing updated successfully!', 'success')
             return redirect(url_for('view_listing', listing_id=listing_id))
     except (ValueError, TypeError):
@@ -8755,87 +8966,20 @@ def publish_listing_form(listing_id):
         local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
         if local_listing:
             client = get_client(workspace_id=ws_id)
-            
-            # Check if already synced to PropertyFinder
-            if local_listing.pf_listing_id:
-                # Verify PF listing still exists
-                try:
-                    pf_listing = client.get_listing(local_listing.pf_listing_id)
-                    if not pf_listing or not pf_listing.get('id'):
-                        # PF listing doesn't exist anymore
-                        local_listing.pf_listing_id = None
-                        db.session.commit()
-                        flash('PropertyFinder listing no longer exists. Creating new one...', 'warning')
-                except:
-                    # PF listing not found
-                    local_listing.pf_listing_id = None
-                    db.session.commit()
-                    flash('PropertyFinder listing not found. Creating new one...', 'warning')
-            
-            # If no PF listing ID, need to create first
-            if not local_listing.pf_listing_id:
-                # Build listing data from local listing
-                listing_data = local_listing.to_pf_format()
-                
-                # Check for required fields
-                missing_fields = []
-                if not listing_data.get('title'):
-                    missing_fields.append('Title (English or Arabic)')
-                if not listing_data.get('description'):
-                    missing_fields.append('Description (English or Arabic)')
-                if not listing_data.get('price'):
-                    missing_fields.append('Price')
-                if not listing_data.get('location'):
-                    missing_fields.append('Location ID (use location search)')
-                if not listing_data.get('assignedTo'):
-                    missing_fields.append('Assigned Agent')
-                if not listing_data.get('uaeEmirate'):
-                    missing_fields.append('Emirate')
-                if not listing_data.get('bedrooms'):
-                    missing_fields.append('Bedrooms')
-                if not listing_data.get('bathrooms'):
-                    missing_fields.append('Bathrooms')
-                
-                if missing_fields:
-                    flash(f'Cannot publish. Missing required fields: {", ".join(missing_fields)}', 'error')
-                    return redirect(url_for('edit_listing', listing_id=listing_id))
-                
-                # Create on PropertyFinder
-                try:
-                    result = client.create_listing(listing_data)
-                    pf_listing_id = result.get('id')
-                    
-                    if not pf_listing_id:
-                        error_msg = result.get('error') or result.get('message') or str(result)
-                        flash(f'PropertyFinder rejected the listing: {error_msg}', 'error')
-                        return redirect(url_for('view_listing', listing_id=listing_id))
-                    
-                    local_listing.pf_listing_id = str(pf_listing_id)
-                    local_listing.status = 'draft'
-                    db.session.commit()
-                    flash(f'Listing created on PropertyFinder (ID: {pf_listing_id})', 'success')
-                    
-                except PropertyFinderAPIError as e:
-                    flash(f'Failed to create on PropertyFinder: {e.message}', 'error')
-                    return redirect(url_for('view_listing', listing_id=listing_id))
-                except Exception as e:
-                    flash(f'Failed to create on PropertyFinder: {str(e)}', 'error')
-                    return redirect(url_for('view_listing', listing_id=listing_id))
-            
-            # Now publish on PropertyFinder
-            try:
-                publish_result = client.publish_listing(local_listing.pf_listing_id)
-                local_listing.status = 'live'  # PF publishes instantly
-                db.session.commit()
-                flash(f'Listing published successfully! PF ID: {local_listing.pf_listing_id}', 'success')
-                return redirect(url_for('view_listing', listing_id=listing_id))
-                
-            except PropertyFinderAPIError as e:
-                flash(f'PropertyFinder rejected publish: {e.message}', 'error')
-                return redirect(url_for('view_listing', listing_id=listing_id))
-            except Exception as e:
-                flash(f'Failed to publish: {str(e)}', 'error')
-                return redirect(url_for('view_listing', listing_id=listing_id))
+            publish_outcome = _publish_local_listing_to_pf(local_listing, client)
+            if not publish_outcome.get('success'):
+                if publish_outcome.get('warnings'):
+                    for warning in publish_outcome.get('warnings'):
+                        flash(warning, 'warning')
+                flash(publish_outcome.get('error', 'Failed to publish listing'), 'error')
+                target = 'edit_listing' if publish_outcome.get('redirect_to') == 'edit' else 'view_listing'
+                return redirect(url_for(target, listing_id=listing_id))
+
+            if publish_outcome.get('warnings'):
+                for warning in publish_outcome.get('warnings'):
+                    flash(warning, 'warning')
+            flash(f'Publish request submitted for listing {publish_outcome.get("pf_listing_id")}', 'success')
+            return redirect(url_for('view_listing', listing_id=listing_id))
     except (ValueError, TypeError):
         pass  # Not an integer ID, continue with PF listing
     
