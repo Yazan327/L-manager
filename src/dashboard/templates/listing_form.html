@@ -182,9 +182,10 @@
                     <label class="block text-sm font-medium text-gray-700 mb-1">Assigned To (Workspace)</label>
                     <select name="assigned_to_id"
                             class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
-                        <option value="">Unassigned</option>
+                        {% set selected_assigned_to_id = listing.assigned_to_id if listing else default_assigned_to_id %}
+                        <option value="" {% if not selected_assigned_to_id %}selected{% endif %}>Unassigned</option>
                         {% for member in workspace_members %}
-                        <option value="{{ member.id }}" {% if listing and listing.assigned_to_id == member.id %}selected{% endif %}>
+                        <option value="{{ member.id }}" {% if selected_assigned_to_id == member.id %}selected{% endif %}>
                             {{ member.name }} ({{ member.email }})
                         </option>
                         {% endfor %}

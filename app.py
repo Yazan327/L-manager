@@ -3258,14 +3258,21 @@ def _create_local_listing_record(data, workspace_id, actor_user=None, can_manage
     if not (listing.assigned_agent or '').strip():
         listing.assigned_agent = get_default_assigned_agent_email(workspace_id=workspace_id, user=actor_user)
 
+    default_assigned_to_id = _validate_assignee(workspace_id, actor_user.id) if actor_user else None
     if can_manage_all:
         if 'assigned_to_id' in (data or {}):
-            assigned_to_id = _validate_assignee(workspace_id, data.get('assigned_to_id'))
-            if data.get('assigned_to_id') and not assigned_to_id:
-                return None, ('validation_error', 'Assigned user must be in this workspace.', 422, {'assigned_to_id': 'Invalid workspace member.'})
-            listing.assigned_to_id = assigned_to_id
+            raw_assignee = data.get('assigned_to_id')
+            if raw_assignee in (None, '', 'null'):
+                listing.assigned_to_id = None
+            else:
+                assigned_to_id = _validate_assignee(workspace_id, raw_assignee)
+                if not assigned_to_id:
+                    return None, ('validation_error', 'Assigned user must be in this workspace.', 422, {'assigned_to_id': 'Invalid workspace member.'})
+                listing.assigned_to_id = assigned_to_id
+        else:
+            listing.assigned_to_id = default_assigned_to_id
     elif actor_user:
-        listing.assigned_to_id = actor_user.id
+        listing.assigned_to_id = default_assigned_to_id or actor_user.id
 
     db.session.add(listing)
     try:
@@ -7080,12 +7087,18 @@ def new_listing():
     ws_id = get_active_workspace_id()
     members = WorkspaceMember.query.filter_by(workspace_id=ws_id).all() if ws_id else []
     default_assigned_agent_email = get_default_assigned_agent_email(workspace_id=ws_id, user=g.user)
+    default_assigned_to_id = None
+    if ws_id and g.user:
+        is_workspace_member = WorkspaceMember.query.filter_by(workspace_id=ws_id, user_id=g.user.id).first() is not None
+        if is_workspace_member:
+            default_assigned_to_id = g.user.id
     return render_template('listing_form.html', 
                          listing=None, 
                          property_types=property_types,
                          edit_mode=False,
                          workspace_members=[m.user.to_dict() for m in members],
-                         default_assigned_agent_email=default_assigned_agent_email)
+                         default_assigned_agent_email=default_assigned_agent_email,
+                         default_assigned_to_id=default_assigned_to_id)
 
 
 @app.route('/listings/<listing_id>')
@@ -7153,7 +7166,8 @@ def edit_listing(listing_id):
                                  property_types=property_types,
                                  edit_mode=True,
                                  workspace_members=[m.user.to_dict() for m in members],
-                                 default_assigned_agent_email=default_assigned_agent_email)
+                                 default_assigned_agent_email=default_assigned_agent_email,
+                                 default_assigned_to_id=None)
     except (ValueError, TypeError):
         pass  # Not an integer ID, try API
     
@@ -7168,7 +7182,8 @@ def edit_listing(listing_id):
                          property_types=property_types,
                          edit_mode=True,
                          workspace_members=[m.user.to_dict() for m in members],
-                         default_assigned_agent_email=default_assigned_agent_email)
+                         default_assigned_agent_email=default_assigned_agent_email,
+                         default_assigned_to_id=None)
 
 
 @app.route('/bulk')
@@ -8344,14 +8359,20 @@ def create_listing_form():
     default_assigned_agent_email = get_default_assigned_agent_email(workspace_id=ws_id, user=g.user)
     
     can_manage_all = workspace_user_can_manage_all_listings(workspace_id=ws_id)
-    assigned_to_id = None
-    if form.get('assigned_to_id'):
-        assigned_to_id = _validate_assignee(ws_id, form.get('assigned_to_id'))
-        if not assigned_to_id:
-            flash('Assigned user must be a member of this workspace.', 'error')
-            return redirect(url_for('new_listing'))
-    if not can_manage_all:
-        assigned_to_id = g.user.id
+    default_assigned_to_id = _validate_assignee(ws_id, g.user.id) if g.user else None
+    assigned_to_id = default_assigned_to_id
+    raw_assignee = (form.get('assigned_to_id') or '').strip()
+    if can_manage_all:
+        if raw_assignee:
+            assigned_to_id = _validate_assignee(ws_id, raw_assignee)
+            if not assigned_to_id:
+                flash('Assigned user must be a member of this workspace.', 'error')
+                return redirect(url_for('new_listing'))
+        elif 'assigned_to_id' in form:
+            # Explicit "Unassigned" selection in form.
+            assigned_to_id = None
+    else:
+        assigned_to_id = default_assigned_to_id or g.user.id
     
     # Auto-generate reference if not provided
     reference = form.get('reference')
