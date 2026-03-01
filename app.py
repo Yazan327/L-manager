@@ -6897,8 +6897,15 @@ def _render_listings_page(workspace_id):
     search = request.args.get('search', '').strip()
     folder_id = request.args.get('folder_id', type=int)  # Folder filter
     show_duplicates = request.args.get('show_duplicates', '0') == '1'  # Hide duplicates by default
-    assigned_to_filter = request.args.get('assigned_to_id')
-    
+    raw_assigned_to_filter = request.args.get('assigned_to_id')
+    can_manage_all = workspace_user_can_manage_all_listings(workspace_id=workspace_id)
+    current_user_id = g.user.id if g.user else None
+    if raw_assigned_to_filter is None and can_manage_all and current_user_id:
+        # Admin default view is "My Listings" unless an explicit assignee filter is provided.
+        assigned_to_filter = str(current_user_id)
+    else:
+        assigned_to_filter = (raw_assigned_to_filter or '').strip()
+
     query = visible_local_listing_query(workspace_id)
     
     # Get the Duplicated folder ID
@@ -6931,7 +6938,9 @@ def _render_listings_page(workspace_id):
 
     # Filter by assignee
     if assigned_to_filter:
-        if assigned_to_filter == 'unassigned':
+        if assigned_to_filter == 'all':
+            pass
+        elif assigned_to_filter == 'unassigned':
             query = query.filter(LocalListing.assigned_to_id.is_(None))
         else:
             try:
@@ -7022,7 +7031,6 @@ def _render_listings_page(workspace_id):
             )
     
     listing_rows = []
-    current_user_id = g.user.id if g.user else None
     for listing in pagination.items:
         row = listing.to_dict()
         folder = row.get('folder')

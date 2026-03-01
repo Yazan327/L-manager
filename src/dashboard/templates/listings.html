@@ -780,7 +780,8 @@ function listingsPage() {
             params.set('sort_by', this.sortBy);
             params.set('sort_order', this.sortOrder);
             if (this.filterStatus) params.set('status', this.filterStatus);
-            if (this.filterAssignee) params.set('assigned_to_id', this.filterAssignee);
+            // Always send assignee filter so admins can intentionally choose "All Assignees" (empty value).
+            params.set('assigned_to_id', this.filterAssignee || '');
             if (this.searchQuery) params.set('search', this.searchQuery);
             if (this.showDuplicates) params.set('show_duplicates', '1');
             // Preserve folder_id if set
