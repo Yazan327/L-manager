@@ -6,7 +6,7 @@
 {% block content %}
 <div x-data="dashboard()" x-init="loadStats()">
     <!-- Stats Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-{{ 5 if can_view_pf_credits else 4 }} gap-6 mb-8">
         <div class="bg-white rounded-lg shadow p-6">
             <div class="flex items-center">
                 <div class="p-3 rounded-full bg-indigo-100 text-indigo-600">
@@ -54,6 +54,20 @@
                 </div>
             </div>
         </div>
+
+        {% if can_view_pf_credits %}
+        <div class="bg-white rounded-lg shadow p-6">
+            <div class="flex items-center">
+                <div class="p-3 rounded-full bg-purple-100 text-purple-600">
+                    <i class="fas fa-coins text-2xl"></i>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm text-gray-500">PF Credit Balance</p>
+                    <p class="text-2xl font-semibold" x-text="stats.credits"></p>
+                </div>
+            </div>
+        </div>
+        {% endif %}
     </div>
     
     <!-- Quick Actions -->
@@ -180,15 +194,18 @@ function dashboard() {
     // Server-side data
     const serverStats = {{ stats | tojson | safe if stats else '{}' }};
     const serverListings = {{ recent_listings | tojson | safe if recent_listings else '[]' }};
+    const canViewPfCredits = {{ 'true' if can_view_pf_credits else 'false' }};
     
     return {
         stats: {
             total: serverStats.total || 0,
             published: serverStats.published || 0,
             drafts: serverStats.draft || 0,
-            views: '-'
+            views: '-',
+            credits: '-'
         },
         recentListings: serverListings,
+        canViewPfCredits: canViewPfCredits,
         apiStatus: {
             connected: true,
             hasToken: true,
@@ -206,6 +223,74 @@ function dashboard() {
             } catch (error) {
                 console.error('Failed to load stats:', error);
             }
+
+            if (this.canViewPfCredits) {
+                try {
+                    const creditResp = await fetch('/api/credits');
+                    const creditData = await creditResp.json();
+                    if (creditResp.ok) {
+                        const balance = this.extractCreditBalance(creditData);
+                        this.stats.credits = balance !== null ? this.formatCredit(balance) : '-';
+                    } else {
+                        this.stats.credits = '-';
+                    }
+                } catch (error) {
+                    console.error('Failed to load PF credits:', error);
+                    this.stats.credits = '-';
+                }
+            }
+        },
+
+        extractCreditBalance(payload) {
+            const preferredKeys = [
+                'balance', 'remaining', 'available', 'available_credits',
+                'availableCredits', 'credit_balance', 'credits_remaining',
+                'remaining_credits', 'total_remaining'
+            ];
+            return this.findCreditValue(payload, preferredKeys);
+        },
+
+        findCreditValue(value, preferredKeys) {
+            if (value === null || value === undefined) return null;
+            if (typeof value === 'number' && Number.isFinite(value)) return value;
+            if (typeof value === 'string') {
+                const asNumber = Number(value);
+                return Number.isFinite(asNumber) ? asNumber : null;
+            }
+            if (Array.isArray(value)) {
+                for (const item of value) {
+                    const found = this.findCreditValue(item, preferredKeys);
+                    if (found !== null) return found;
+                }
+                return null;
+            }
+            if (typeof value === 'object') {
+                for (const key of preferredKeys) {
+                    if (Object.prototype.hasOwnProperty.call(value, key)) {
+                        const found = this.findCreditValue(value[key], preferredKeys);
+                        if (found !== null) return found;
+                    }
+                }
+                for (const nestedKey of ['data', 'results', 'meta', 'credits', 'quota']) {
+                    if (Object.prototype.hasOwnProperty.call(value, nestedKey)) {
+                        const found = this.findCreditValue(value[nestedKey], preferredKeys);
+                        if (found !== null) return found;
+                    }
+                }
+                for (const nested of Object.values(value)) {
+                    const found = this.findCreditValue(nested, preferredKeys);
+                    if (found !== null) return found;
+                }
+            }
+            return null;
+        },
+
+        formatCredit(amount) {
+            const numeric = Number(amount);
+            if (!Number.isFinite(numeric)) return '-';
+            return new Intl.NumberFormat('en-AE', {
+                maximumFractionDigits: 0
+            }).format(numeric);
         },
         
         formatPrice(price) {

@@ -5197,13 +5197,19 @@ def workspace_dashboard(workspace_slug):
     try:
         ws_id = g.workspace.id
         base_query = visible_local_listing_query(ws_id)
+        can_view_pf_credits = workspace_user_can_manage_all_listings(workspace_id=ws_id)
         stats = {
             'total': base_query.count(),
             'published': base_query.filter_by(status='published').count(),
             'draft': base_query.filter_by(status='draft').count(),
         }
         recent = base_query.order_by(LocalListing.updated_at.desc()).limit(5).all()
-        return render_template('index.html', stats=stats, recent_listings=[l.to_dict() for l in recent])
+        return render_template(
+            'index.html',
+            stats=stats,
+            recent_listings=[l.to_dict() for l in recent],
+            can_view_pf_credits=can_view_pf_credits
+        )
     except Exception as e:
         print(f"[ERROR] Workspace dashboard error: {e}")
         import traceback
