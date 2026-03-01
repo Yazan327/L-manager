@@ -116,6 +116,7 @@ class PermissionService:
         mapping = {
             'owner': 'OWNER',
             'admin': 'ADMIN',
+            'team_leader': 'TEAM_LEADER',
             'moderator': 'MODERATOR',
             'member': 'MEMBER',
             'viewer': 'VIEWER',
@@ -131,6 +132,7 @@ class PermissionService:
         fallback_map = {
             'OWNER': ['OWNER', 'WORKSPACE_ADMIN'],
             'ADMIN': ['ADMIN', 'WORKSPACE_ADMIN'],
+            'TEAM_LEADER': ['TEAM_LEADER'],
             'MODERATOR': ['MODERATOR'],
             'MEMBER': ['MEMBER'],
             'VIEWER': ['VIEWER', 'EXTERNAL'],
@@ -206,6 +208,7 @@ class PermissionService:
         role_map = {
             'owner': WorkspaceRole.BUCKET_ADMIN_ONLY,
             'admin': WorkspaceRole.BUCKET_ADMIN_ONLY,
+            'team_leader': WorkspaceRole.BUCKET_ALL_MEMBERS,
             'moderator': WorkspaceRole.BUCKET_ADMIN_MODERATOR,
             'member': WorkspaceRole.BUCKET_ALL_MEMBERS,
             'viewer': WorkspaceRole.BUCKET_AUTHORIZED,
@@ -440,6 +443,24 @@ class PermissionService:
             return {
                 'read': True, 'create': True, 'edit': True, 
                 'delete': False, 'publish': False, 'assign': False, 
+                'bulk': False, 'scope': 'own'
+            }
+        elif role_lower == 'team_leader':
+            if module in ('listings', 'leads'):
+                return {
+                    'read': True, 'create': True, 'edit': True,
+                    'delete': False, 'publish': False, 'assign': False,
+                    'bulk': False, 'scope': 'team'
+                }
+            if module == 'insights':
+                return {
+                    'read': True, 'create': False, 'edit': False,
+                    'delete': False, 'publish': False, 'assign': False,
+                    'bulk': False, 'scope': 'team'
+                }
+            return {
+                'read': True, 'create': True, 'edit': True,
+                'delete': False, 'publish': False, 'assign': False,
                 'bulk': False, 'scope': 'own'
             }
         elif role_lower in ('viewer', 'external'):

@@ -42,6 +42,13 @@ npm run watch:css
 Production note:
 - Commit `src/dashboard/static/css/app.css` so Railway can serve it without Node.
 
+### Localization (EN/AR)
+
+```bash
+# Validate Arabic/English translation keys
+python scripts/check_i18n.py
+```
+
 ### Production (Railway)
 
 ```bash

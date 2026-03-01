@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Leads - L-Manager{% endblock %}
+{% block title %}{{ t('common.leads', default='Leads') }} - L-Manager{% endblock %}
 
 {% block content %}
 {% set can_manage_leads = can_manage_leads|default(false) %}
@@ -122,13 +122,11 @@
         <!-- Filters -->
         <div class="bg-white rounded-lg p-4 shadow-sm border mt-6">
             <div class="flex flex-wrap gap-4">
-                {% if can_manage_leads %}
-                <select x-model="leadScope" @change="onLeadScopeChanged()"
+                <select x-show="canManageLeads || canViewTeamLeads" x-cloak x-model="leadScope" @change="onLeadScopeChanged()"
                         class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
                     <option value="my">My Leads</option>
                     <option value="team">Team Leads</option>
                 </select>
-                {% endif %}
                 <div class="flex-1 min-w-[200px]">
                     <input type="text" x-model="filters.search" @input="filterLeads()"
                            placeholder="Search by name, email, phone..."
@@ -155,15 +153,13 @@
                         <option :value="tag.id" x-text="tag.label"></option>
                     </template>
                 </select>
-                {% if can_manage_leads %}
-                <select x-show="leadScope === 'team'" x-cloak x-model="selectedTeamMemberId" @change="loadLeads()"
+                <select x-show="(canManageLeads || canViewTeamLeads) && leadScope === 'team'" x-cloak x-model="selectedTeamMemberId" @change="loadLeads()"
                         class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
                     <option value="">All Team Members</option>
                     <template x-for="member in teamMembers" :key="member.id">
                         <option :value="member.id" x-text="member.name"></option>
                     </template>
                 </select>
-                {% endif %}
                 <select x-model="filters.priority" @change="filterLeads()"
                         class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
                     <option value="">All Priority</option>
@@ -1422,6 +1418,7 @@ function leadsManager() {
         selectedLeads: [],
         loading: true,
         canManageLeads: {{ 'true' if can_manage_leads else 'false' }},
+        canViewTeamLeads: false,
         canManageSettings: false,
         leadScope: 'my',
         selectedTeamMemberId: '',
@@ -1571,7 +1568,11 @@ function leadsManager() {
                 this.customSources = data.sources || [];
                 this.customTags = data.tags || [];
                 this.teamMembers = data.team_members || [];
+                this.canViewTeamLeads = !!data.can_view_team_leads;
                 this.canManageSettings = !!data.can_manage_settings;
+                if (!(this.canManageLeads || this.canViewTeamLeads)) {
+                    this.leadScope = 'my';
+                }
                 // Set default source for new lead if available
                 if (this.customSources.length > 0 && !this.newLead.source) {
                     this.newLead.source = this.customSources[0].id;
@@ -1587,7 +1588,7 @@ function leadsManager() {
             try {
                 const params = new URLSearchParams();
                 params.set('scope', this.leadScope || 'my');
-                if (this.canManageLeads && this.leadScope === 'team' && this.selectedTeamMemberId) {
+                if ((this.canManageLeads || this.canViewTeamLeads) && this.leadScope === 'team' && this.selectedTeamMemberId) {
                     params.set('assigned_to_id', this.selectedTeamMemberId);
                 }
                 if (Array.isArray(this.filters.tag_ids) && this.filters.tag_ids.length > 0) {
@@ -1763,7 +1764,8 @@ function leadsManager() {
             if (!dateStr) return '-';
             const d = new Date(dateStr);
             if (Number.isNaN(d.getTime())) return '-';
-            return d.toLocaleString('en-AE', {
+            const locale = (window.I18N && window.I18N.lang === 'ar') ? 'ar-AE-u-nu-latn' : 'en-AE';
+            return d.toLocaleString(locale, {
                 day: 'numeric',
                 month: 'short',
                 year: 'numeric',

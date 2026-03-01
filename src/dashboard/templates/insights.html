@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}Insights - L-Manager{% endblock %}
-{% block page_title %}Insights & Analytics{% endblock %}
+{% block title %}{{ t('common.insights', default='Insights') }} - L-Manager{% endblock %}
+{% block page_title %}{{ t('common.insights', default='Insights') }} & {{ t('dashboard.analytics', default='Analytics') }}{% endblock %}
 
 {% block content %}
 <div x-data="insightsData()" x-init="init()">
@@ -187,7 +187,7 @@
             <div class="flex items-center justify-between">
                 <div>
                     <p class="text-gray-500 text-xs uppercase">Credits</p>
-                    <p class="text-xl font-bold text-orange-600" x-text="stats.totalCredits.toLocaleString()"></p>
+                    <p class="text-xl font-bold text-orange-600" x-text="formatNumber(stats.totalCredits)"></p>
                 </div>
                 <div class="w-8 h-8 bg-orange-100 rounded-full flex items-center justify-center">
                     <i class="fas fa-coins text-orange-600 text-sm"></i>
@@ -236,7 +236,7 @@
             <div class="flex items-center justify-between">
                 <div>
                     <p class="text-orange-100 text-xs uppercase">Credits</p>
-                    <p class="text-lg font-bold" x-text="stats.totalCredits.toLocaleString()"></p>
+                    <p class="text-lg font-bold" x-text="formatNumber(stats.totalCredits)"></p>
                 </div>
                 <i class="fas fa-coins text-orange-200 text-lg"></i>
             </div>
@@ -665,7 +665,7 @@ function insightsData() {
         fromCache: false,
         
         pfListings: [],
-        localListings: {{ local_listings | tojson | safe }},
+        localListings: {{ (local_listings|default([], true)) | tojson | safe }},
         users: [],
         availableUsers: [],
         leads: [],
@@ -972,12 +972,13 @@ function insightsData() {
             const publishedAt = listing.portals?.propertyfinder?.publishedAt || listing.publishedAt || listing.published_at;
             if (!publishedAt) return '-';
             const date = new Date(publishedAt);
+            const locale = (window.I18N && window.I18N.lang === 'ar') ? 'ar-AE-u-nu-latn' : 'en-GB';
             if (full) {
-                return date.toLocaleString();
+                return date.toLocaleString(locale);
             }
             // Short format: DD/MM HH:MM
-            return date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' }) + 
-                   ' ' + date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            return date.toLocaleDateString(locale, { day: '2-digit', month: '2-digit' }) + 
+                   ' ' + date.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
         },
         
         // Get impressions from statistics
@@ -1006,7 +1007,8 @@ function insightsData() {
         
         formatNumber(val) {
             if (val === null || val === undefined) return '-';
-            return Number(val).toLocaleString();
+            const locale = (window.I18N && window.I18N.lang === 'ar') ? 'ar-AE-u-nu-latn' : 'en-AE';
+            return Number(val).toLocaleString(locale);
         },
         
         getCacheAge() {
@@ -1145,7 +1147,8 @@ function insightsData() {
             // Handle PF API size structure
             const sqft = size.sqft || size.value || size;
             if (typeof sqft !== 'number') return '-';
-            return sqft.toLocaleString() + ' sqft';
+            const locale = (window.I18N && window.I18N.lang === 'ar') ? 'ar-AE-u-nu-latn' : 'en-AE';
+            return sqft.toLocaleString(locale) + ' sqft';
         },
         
         getLocation(listing) {
@@ -1470,11 +1473,12 @@ function insightsData() {
                 
                 // Show relative for expiry dates in the future
                 if (diffDays >= 0 && diffDays <= 7) {
-                    return diffDays === 0 ? 'Today' : `${diffDays}d`;
+                    return diffDays === 0 ? i18nT('common.today', 'Today') : `${diffDays}d`;
                 }
                 
                 // Short format: Jan 15
-                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                const locale = (window.I18N && window.I18N.lang === 'ar') ? 'ar-AE-u-nu-latn' : 'en-US';
+                return date.toLocaleDateString(locale, { month: 'short', day: 'numeric' });
             } catch {
                 return '-';
             }
@@ -1529,7 +1533,8 @@ function insightsData() {
             if (amount >= 1000) {
                 return 'AED ' + (amount / 1000).toFixed(0) + 'K';
             }
-            return 'AED ' + amount.toLocaleString();
+            const locale = (window.I18N && window.I18N.lang === 'ar') ? 'ar-AE-u-nu-latn' : 'en-AE';
+            return 'AED ' + amount.toLocaleString(locale);
         },
         
         getColor(index) {

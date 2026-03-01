@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}Settings - L-Manager{% endblock %}
-{% block page_title %}Settings{% endblock %}
+{% block title %}{{ t('common.settings', default='Settings') }} - L-Manager{% endblock %}
+{% block page_title %}{{ t('common.settings', default='Settings') }}{% endblock %}
 
 {% block content %}
 <div class="max-w-2xl" x-data="settingsManager()" x-init="init()">
@@ -422,7 +422,8 @@ function settingsManager() {
         formatDate(dateStr) {
             if (!dateStr) return 'Never';
             const date = new Date(dateStr);
-            return date.toLocaleString('en-AE', { 
+            const locale = (window.I18N && window.I18N.lang === 'ar') ? 'ar-AE-u-nu-latn' : 'en-AE';
+            return date.toLocaleString(locale, { 
                 day: 'numeric', month: 'short', year: 'numeric',
                 hour: '2-digit', minute: '2-digit'
             });

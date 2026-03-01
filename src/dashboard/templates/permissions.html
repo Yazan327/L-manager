@@ -1,321 +1,454 @@
 {% extends "base.html" %}
 
-{% block title %}Permission Center - L-Manager{% endblock %}
-{% block page_title %}Permission Center{% endblock %}
+{% block title %}{{ t('permissions.center', default='Permission Center') }} - L-Manager{% endblock %}
+{% block page_title %}{{ t('permissions.center', default='Permission Center') }}{% endblock %}
 
 {% block content %}
-<div x-data="permissionsManager()" x-init="init()" class="max-w-7xl mx-auto">
-    
-    <!-- Header -->
-    <div class="bg-white rounded-lg shadow mb-6 p-6">
-        <div class="flex items-center justify-between">
+<div x-data="permissionCenter()" x-init="init()" class="max-w-7xl mx-auto space-y-6">
+    <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div>
                 <h2 class="text-xl font-bold text-gray-900 flex items-center gap-2">
                     <i class="fas fa-shield-alt text-indigo-500"></i>
-                    Permission Center
+                    Workspace Permission Center
                 </h2>
-                <p class="text-gray-500 mt-1">Manage section access and action permissions for each user</p>
+                <p class="text-gray-500 mt-1">Baseline permissions are role-based per workspace. Per-user overrides are allow/deny and deny wins.</p>
             </div>
-            <a href="{{ url_for('users_page') }}" class="text-indigo-600 hover:text-indigo-800">
-                <i class="fas fa-arrow-left mr-1"></i> Back to Users
-            </a>
+            <div class="w-full lg:w-96">
+                <label class="block text-xs text-gray-500 mb-1">Workspace</label>
+                <select x-model.number="selectedWorkspaceId" @change="onWorkspaceChange()"
+                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                    <template x-for="workspace in workspaces" :key="workspace.id">
+                        <option :value="workspace.id" x-text="workspace.name"></option>
+                    </template>
+                </select>
+            </div>
         </div>
     </div>
-    
-    <!-- User Selection -->
-    <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        <!-- Users List -->
-        <div class="lg:col-span-1">
-            <div class="bg-white rounded-lg shadow">
-                <div class="p-4 border-b">
-                    <h3 class="font-semibold text-gray-700">Users</h3>
-                    <input type="text" x-model="searchQuery" placeholder="Search users..."
-                           class="w-full mt-2 px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-indigo-500">
-                </div>
-                <div class="max-h-[600px] overflow-y-auto">
-                    <template x-for="user in filteredUsers" :key="user.id">
-                        <button @click="selectUser(user.id)" 
-                                :class="selectedUserId === user.id ? 'bg-indigo-50 border-l-4 border-indigo-500' : 'hover:bg-gray-50'"
-                                class="w-full p-4 text-left border-b flex items-center gap-3">
-                            <div class="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0">
-                                <span class="text-indigo-600 font-semibold" x-text="user.name.charAt(0).toUpperCase()"></span>
-                            </div>
-                            <div class="flex-1 min-w-0">
-                                <div class="font-medium text-gray-900 truncate" x-text="user.name"></div>
-                                <div class="text-xs text-gray-500 truncate" x-text="user.email"></div>
-                                <div class="flex items-center gap-1 mt-1">
-                                    <span class="text-xs px-1.5 py-0.5 rounded-full"
-                                          :class="user.accessible_sections.length > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'"
-                                          x-text="user.accessible_sections.length + ' sections'"></span>
-                                    <template x-if="user.pf_agent_id">
-                                        <span class="text-xs px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
-                                            <i class="fas fa-lock text-xs"></i>
-                                        </span>
+
+    <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex items-center justify-between mb-4">
+            <div>
+                <h3 class="text-lg font-semibold text-gray-900">Baseline Role Permissions</h3>
+                <p class="text-sm text-gray-500">System admins can edit owner/admin/team_leader/member/viewer role matrix per workspace.</p>
+            </div>
+            <button @click="saveMatrix()" :disabled="savingMatrix || !matrix"
+                    class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50">
+                <span x-show="!savingMatrix">Save Matrix</span>
+                <span x-show="savingMatrix"><i class="fas fa-spinner fa-spin mr-1"></i>Saving...</span>
+            </button>
+        </div>
+
+        <div class="flex flex-wrap gap-2 mb-4">
+            <template x-for="roleKey in roleOrder" :key="roleKey">
+                <button type="button"
+                        @click="selectedRole = roleKey"
+                        :class="selectedRole === roleKey ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                        class="px-3 py-1.5 rounded-lg text-sm font-medium">
+                    <span x-text="roleLabels[roleKey] || roleKey"></span>
+                </button>
+            </template>
+        </div>
+
+        <div x-show="matrix" class="overflow-x-auto">
+            <table class="w-full min-w-[900px] text-sm">
+                <thead>
+                    <tr class="border-b">
+                        <th class="text-left py-2 pr-3 text-gray-600">Module</th>
+                        <th class="text-left py-2 pr-3 text-gray-600">Actions</th>
+                        <th class="text-left py-2 text-gray-600">Scope</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="module in modules" :key="module">
+                        <tr class="border-b align-top">
+                            <td class="py-3 pr-3 font-medium text-gray-800" x-text="module"></td>
+                            <td class="py-3 pr-3">
+                                <div class="flex flex-wrap gap-3">
+                                    <template x-for="action in actionsForModule(module)" :key="`${module}:${action}`">
+                                        <label class="inline-flex items-center gap-2 text-gray-700">
+                                            <input type="checkbox"
+                                                   :checked="isBaselineAllowed(selectedRole, module, action)"
+                                                   @change="setBaselineAllowed(selectedRole, module, action, $event.target.checked)"
+                                                   class="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                                            <span x-text="action"></span>
+                                        </label>
                                     </template>
                                 </div>
-                            </div>
-                        </button>
+                            </td>
+                            <td class="py-3">
+                                <template x-if="isScopedModule(module)">
+                                    <select :value="getBaselineScope(selectedRole, module)"
+                                            @change="setBaselineScope(selectedRole, module, $event.target.value)"
+                                            class="border border-gray-300 rounded-lg px-2 py-1 text-sm">
+                                        <option value="own">own</option>
+                                        <option value="team">team</option>
+                                        <option value="workspace">workspace</option>
+                                    </select>
+                                </template>
+                                <template x-if="!isScopedModule(module)">
+                                    <span class="text-gray-400">n/a</span>
+                                </template>
+                            </td>
+                        </tr>
                     </template>
-                    <div x-show="filteredUsers.length === 0" class="p-4 text-center text-gray-500">
-                        No users found
-                    </div>
-                </div>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex items-center justify-between mb-4">
+            <div>
+                <h3 class="text-lg font-semibold text-gray-900">Per-User Overrides</h3>
+                <p class="text-sm text-gray-500">Overrides are workspace-local. Deny overrides always win over role baseline.</p>
+            </div>
+            <div class="w-full max-w-sm">
+                <label class="block text-xs text-gray-500 mb-1">Workspace Member</label>
+                <select x-model.number="selectedMemberUserId" @change="onMemberChange()"
+                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                    <option value="">Select member</option>
+                    <template x-for="member in members" :key="member.id">
+                        <option :value="member.user_id" x-text="`${member.user_name} (${member.role})`"></option>
+                    </template>
+                </select>
             </div>
         </div>
-        
-        <!-- Permissions Editor -->
-        <div class="lg:col-span-3">
-            <template x-if="selectedUser">
-                <div class="bg-white rounded-lg shadow">
-                    <!-- User Header -->
-                    <div class="p-6 border-b bg-gradient-to-r from-indigo-50 to-white">
-                        <div class="flex items-center justify-between">
-                            <div class="flex items-center gap-4">
-                                <div class="w-16 h-16 rounded-full bg-indigo-100 flex items-center justify-center">
-                                    <span class="text-2xl text-indigo-600 font-bold" x-text="selectedUser.name.charAt(0).toUpperCase()"></span>
-                                </div>
-                                <div>
-                                    <h3 class="text-xl font-bold text-gray-900" x-text="selectedUser.name"></h3>
-                                    <p class="text-gray-500" x-text="selectedUser.email"></p>
-                                </div>
-                            </div>
-                            <div class="flex items-center gap-2">
-                                <button @click="grantAllPermissions()" 
-                                        class="px-3 py-1.5 text-sm bg-green-100 text-green-700 rounded-lg hover:bg-green-200">
-                                    <i class="fas fa-check-double mr-1"></i> Grant All
-                                </button>
-                                <button @click="revokeAllPermissions()" 
-                                        class="px-3 py-1.5 text-sm bg-red-100 text-red-700 rounded-lg hover:bg-red-200">
-                                    <i class="fas fa-times mr-1"></i> Revoke All
-                                </button>
-                            </div>
-                        </div>
-                        
-                        <!-- PF Agent Restriction -->
-                        <div class="mt-4 p-3 bg-white rounded-lg border">
-                            <label class="block text-sm font-medium text-gray-700 mb-1">
-                                <i class="fas fa-lock text-amber-500 mr-1"></i> Restrict to PF Agent
-                            </label>
-                            <select x-model="selectedUser.pf_agent_id" @change="markDirty()"
-                                    class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500">
-                                <option value="">No restriction - can see all agents</option>
-                                {% for user in pf_users %}
-                                <option value="{{ user.id }}">{{ user.firstName }} {{ user.lastName }} ({{ user.email }})</option>
-                                {% endfor %}
-                            </select>
-                            <p class="text-xs text-gray-500 mt-1">When set, user will only see listings and leads for this agent</p>
-                        </div>
-                    </div>
-                    
-                    <!-- Sections Grid -->
-                    <div class="p-6">
-                        <h4 class="text-lg font-semibold text-gray-800 mb-4">Section Permissions</h4>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {% for section_key, section in sections.items() %}
-                            <div class="border rounded-lg p-4 hover:shadow-md transition-shadow"
-                                 :class="hasAnySectionPermission('{{ section_key }}') ? 'border-green-300 bg-green-50' : 'border-gray-200'">
-                                <div class="flex items-center justify-between mb-3">
-                                    <div class="flex items-center gap-2">
-                                        <div class="w-8 h-8 rounded-lg flex items-center justify-center"
-                                             :class="hasAnySectionPermission('{{ section_key }}') ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'">
-                                            <i class="fas {{ section.icon }}"></i>
+
+        <template x-if="selectedMember">
+            <div class="space-y-4">
+                <div class="overflow-x-auto">
+                    <table class="w-full min-w-[900px] text-sm">
+                        <thead>
+                            <tr class="border-b">
+                                <th class="text-left py-2 pr-3 text-gray-600">Module</th>
+                                <th class="text-left py-2 text-gray-600">Action Overrides</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="module in modules" :key="`ovr-${module}`">
+                                <tr class="border-b align-top">
+                                    <td class="py-3 pr-3 font-medium text-gray-800" x-text="module"></td>
+                                    <td class="py-3">
+                                        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                                            <template x-for="action in actionsForModule(module)" :key="`ovr-${module}-${action}`">
+                                                <label class="flex items-center justify-between border border-gray-200 rounded-lg px-3 py-2">
+                                                    <span class="text-gray-700" x-text="action"></span>
+                                                    <select :value="getOverrideValue(module, action)"
+                                                            @change="setOverrideValue(module, action, $event.target.value)"
+                                                            class="border border-gray-300 rounded px-2 py-1 text-sm">
+                                                        <option value="inherit">inherit</option>
+                                                        <option value="allow">allow</option>
+                                                        <option value="deny">deny</option>
+                                                    </select>
+                                                </label>
+                                            </template>
                                         </div>
-                                        <div>
-                                            <h5 class="font-semibold text-gray-800">{{ section.name }}</h5>
-                                            <p class="text-xs text-gray-500">{{ section.description }}</p>
-                                        </div>
-                                    </div>
-                                    <button @click="toggleAllSection('{{ section_key }}')" 
-                                            class="text-xs px-2 py-1 rounded"
-                                            :class="hasAnySectionPermission('{{ section_key }}') ? 'bg-green-200 text-green-700' : 'bg-gray-200 text-gray-600'">
-                                        <span x-text="hasAllSectionPermissions('{{ section_key }}') ? 'Revoke All' : 'Grant All'"></span>
-                                    </button>
-                                </div>
-                                <div class="flex flex-wrap gap-2">
-                                    {% for action in section.actions %}
-                                    <label class="flex items-center gap-1.5 cursor-pointer">
-                                        <input type="checkbox" 
-                                               :checked="getPermission('{{ section_key }}', '{{ action }}')"
-                                               @change="setPermission('{{ section_key }}', '{{ action }}', $event.target.checked)"
-                                               class="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500">
-                                        <span class="text-sm text-gray-700">{{ action_labels.get(action, action) }}</span>
-                                    </label>
-                                    {% endfor %}
-                                </div>
-                            </div>
-                            {% endfor %}
-                        </div>
-                    </div>
-                    
-                    <!-- Save Button -->
-                    <div class="p-6 border-t bg-gray-50 flex justify-end gap-3">
-                        <button @click="resetPermissions()" x-show="isDirty"
-                                class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-100">
-                            Reset Changes
-                        </button>
-                        <button @click="savePermissions()" 
-                                :disabled="saving"
-                                class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2">
-                            <i class="fas fa-save" x-show="!saving"></i>
-                            <i class="fas fa-spinner fa-spin" x-show="saving"></i>
-                            <span x-text="saving ? 'Saving...' : 'Save Permissions'"></span>
-                        </button>
-                    </div>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
                 </div>
-            </template>
-            
-            <!-- No User Selected -->
-            <template x-if="!selectedUser">
-                <div class="bg-white rounded-lg shadow p-12 text-center">
-                    <i class="fas fa-user-shield text-6xl text-gray-300 mb-4"></i>
-                    <h3 class="text-xl font-semibold text-gray-700 mb-2">Select a User</h3>
-                    <p class="text-gray-500">Choose a user from the list to manage their permissions</p>
+
+                <div class="flex items-center justify-end gap-2">
+                    <button @click="clearSelectedMemberOverrides()"
+                            class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">
+                        Clear Overrides
+                    </button>
+                    <button @click="saveMemberOverrides()" :disabled="savingOverrides"
+                            class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50">
+                        <span x-show="!savingOverrides">Save Overrides</span>
+                        <span x-show="savingOverrides"><i class="fas fa-spinner fa-spin mr-1"></i>Saving...</span>
+                    </button>
                 </div>
-            </template>
-        </div>
+            </div>
+        </template>
+
+        <template x-if="!selectedMember">
+            <div class="text-sm text-gray-500">Select a member to edit workspace-specific allow/deny overrides.</div>
+        </template>
+    </div>
+
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-semibold text-gray-900 mb-1">Effective Permissions Preview</h3>
+        <p class="text-sm text-gray-500 mb-4">Computed result after applying role baseline + per-user overrides.</p>
+
+        <template x-if="selectedMember && effectiveByUser[selectedMember.user_id]">
+            <div class="overflow-x-auto">
+                <table class="w-full min-w-[900px] text-sm">
+                    <thead>
+                        <tr class="border-b">
+                            <th class="text-left py-2 pr-3 text-gray-600">Module</th>
+                            <th class="text-left py-2 pr-3 text-gray-600">Allowed Actions</th>
+                            <th class="text-left py-2 text-gray-600">Scope</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="module in modules" :key="`eff-${module}`">
+                            <tr class="border-b">
+                                <td class="py-3 pr-3 font-medium text-gray-800" x-text="module"></td>
+                                <td class="py-3 pr-3">
+                                    <span class="text-gray-700" x-text="formatAllowedActions(module)"></span>
+                                </td>
+                                <td class="py-3 text-gray-700" x-text="getEffectiveScope(module)"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </template>
+        <template x-if="!selectedMember">
+            <div class="text-sm text-gray-500">Select a member to preview effective permissions.</div>
+        </template>
     </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-function permissionsManager() {
+function permissionCenter() {
     return {
-        users: {{ users|tojson|safe }},
-        sections: {{ sections|tojson|safe }},
-        selectedUserId: null,
-        selectedUser: null,
-        originalPermissions: {},
-        searchQuery: '',
-        saving: false,
-        isDirty: false,
-        
+        workspaces: {{ workspaces|tojson|safe }},
+        selectedWorkspaceId: {{ selected_workspace_id|tojson|safe }},
+        roleLabels: {{ role_labels|tojson|safe }},
+        actionsByModule: {{ actions_by_module|tojson|safe }},
+        scopedModules: {{ scoped_modules|tojson|safe }},
+        roleOrder: ['owner', 'admin', 'team_leader', 'member', 'viewer'],
+        selectedRole: 'owner',
+        matrix: null,
+        members: [],
+        selectedMemberUserId: '',
+        overridesByUser: {},
+        effectiveByUser: {},
+        savingMatrix: false,
+        savingOverrides: false,
+
         init() {
-            // Auto-select first user if exists
-            if (this.users.length > 0) {
-                this.selectUser(this.users[0].id);
+            if (!this.selectedWorkspaceId && this.workspaces.length > 0) {
+                this.selectedWorkspaceId = this.workspaces[0].id;
+            }
+            if (this.selectedWorkspaceId) {
+                this.onWorkspaceChange();
             }
         },
-        
-        get filteredUsers() {
-            if (!this.searchQuery) return this.users;
-            const q = this.searchQuery.toLowerCase();
-            return this.users.filter(u => 
-                u.name.toLowerCase().includes(q) || 
-                u.email.toLowerCase().includes(q)
-            );
+
+        get modules() {
+            return Object.keys(this.actionsByModule || {});
         },
-        
-        async selectUser(userId) {
-            this.selectedUserId = userId;
-            this.selectedUser = JSON.parse(JSON.stringify(this.users.find(u => u.id === userId)));
-            if (!this.selectedUser.section_permissions) {
-                this.selectedUser.section_permissions = {};
+
+        get selectedMember() {
+            const userId = Number(this.selectedMemberUserId);
+            if (!userId) return null;
+            return this.members.find(member => Number(member.user_id) === userId) || null;
+        },
+
+        async onWorkspaceChange() {
+            if (!this.selectedWorkspaceId) return;
+            this.selectedMemberUserId = '';
+            await Promise.all([
+                this.loadMatrix(),
+                this.loadMembers(),
+                this.loadOverrides(),
+                this.loadEffective()
+            ]);
+        },
+
+        async onMemberChange() {
+            if (!this.selectedWorkspaceId) return;
+            await this.loadEffective();
+        },
+
+        async loadMatrix() {
+            const response = await fetch(`/api/workspaces/${this.selectedWorkspaceId}/permission-matrix`);
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.success) {
+                alert(data.error || 'Failed to load permission matrix');
+                return;
             }
-            this.originalPermissions = JSON.parse(JSON.stringify(this.selectedUser.section_permissions));
-            this.isDirty = false;
+            this.matrix = data.matrix;
         },
-        
-        getPermission(section, action) {
-            if (!this.selectedUser || !this.selectedUser.section_permissions) return false;
-            const sectionPerms = this.selectedUser.section_permissions[section] || {};
-            return sectionPerms[action] === true;
-        },
-        
-        setPermission(section, action, value) {
-            if (!this.selectedUser.section_permissions[section]) {
-                this.selectedUser.section_permissions[section] = {};
+
+        async loadMembers() {
+            const response = await fetch(`/api/workspaces/${this.selectedWorkspaceId}/members`);
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.success) {
+                alert(data.error || 'Failed to load workspace members');
+                return;
             }
-            this.selectedUser.section_permissions[section][action] = value;
-            this.markDirty();
-        },
-        
-        hasAnySectionPermission(section) {
-            if (!this.selectedUser || !this.selectedUser.section_permissions) return false;
-            const sectionPerms = this.selectedUser.section_permissions[section] || {};
-            return Object.values(sectionPerms).some(v => v === true);
-        },
-        
-        hasAllSectionPermissions(section) {
-            if (!this.selectedUser || !this.sections[section]) return false;
-            const actions = this.sections[section].actions;
-            return actions.every(action => this.getPermission(section, action));
-        },
-        
-        toggleAllSection(section) {
-            const grantAll = !this.hasAllSectionPermissions(section);
-            const actions = this.sections[section].actions;
-            actions.forEach(action => this.setPermission(section, action, grantAll));
-        },
-        
-        grantAllPermissions() {
-            Object.keys(this.sections).forEach(section => {
-                this.sections[section].actions.forEach(action => {
-                    this.setPermission(section, action, true);
-                });
+            this.members = (data.members || []).sort((a, b) => {
+                const an = (a.user_name || '').toLowerCase();
+                const bn = (b.user_name || '').toLowerCase();
+                return an.localeCompare(bn);
             });
         },
-        
-        revokeAllPermissions() {
-            this.selectedUser.section_permissions = {};
-            this.markDirty();
+
+        async loadOverrides() {
+            const response = await fetch(`/api/workspaces/${this.selectedWorkspaceId}/permission-overrides`);
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.success) {
+                alert(data.error || 'Failed to load permission overrides');
+                return;
+            }
+            this.overridesByUser = data.grouped || {};
         },
-        
-        markDirty() {
-            this.isDirty = true;
+
+        async loadEffective() {
+            const response = await fetch(`/api/workspaces/${this.selectedWorkspaceId}/members/effective-permissions`);
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.success) {
+                alert(data.error || 'Failed to load effective permissions');
+                return;
+            }
+            const map = {};
+            (data.members || []).forEach(member => {
+                map[member.user_id] = member;
+            });
+            this.effectiveByUser = map;
         },
-        
-        resetPermissions() {
-            this.selectedUser.section_permissions = JSON.parse(JSON.stringify(this.originalPermissions));
-            this.isDirty = false;
+
+        actionsForModule(module) {
+            return this.actionsByModule[module] || [];
         },
-        
-        async savePermissions() {
-            if (!this.selectedUser) return;
-            this.saving = true;
-            
+
+        isScopedModule(module) {
+            return this.scopedModules.includes(module);
+        },
+
+        isBaselineAllowed(roleKey, module, action) {
+            return !!(this.matrix &&
+                this.matrix.roles &&
+                this.matrix.roles[roleKey] &&
+                this.matrix.roles[roleKey].modules &&
+                this.matrix.roles[roleKey].modules[module] &&
+                this.matrix.roles[roleKey].modules[module][action]);
+        },
+
+        setBaselineAllowed(roleKey, module, action, value) {
+            if (!this.matrix || !this.matrix.roles || !this.matrix.roles[roleKey]) return;
+            if (!this.matrix.roles[roleKey].modules[module]) {
+                this.matrix.roles[roleKey].modules[module] = {};
+            }
+            this.matrix.roles[roleKey].modules[module][action] = !!value;
+        },
+
+        getBaselineScope(roleKey, module) {
+            const scope = this.matrix?.roles?.[roleKey]?.modules?.[module]?.scope;
+            return scope || (this.isScopedModule(module) ? 'own' : 'n/a');
+        },
+
+        setBaselineScope(roleKey, module, value) {
+            if (!this.matrix || !this.matrix.roles || !this.matrix.roles[roleKey]) return;
+            if (!this.matrix.roles[roleKey].modules[module]) {
+                this.matrix.roles[roleKey].modules[module] = {};
+            }
+            this.matrix.roles[roleKey].modules[module].scope = value;
+        },
+
+        getOverrideValue(module, action) {
+            if (!this.selectedMember) return 'inherit';
+            const perUser = this.overridesByUser[String(this.selectedMember.user_id)] || {};
+            return perUser[module]?.[action] || 'inherit';
+        },
+
+        setOverrideValue(module, action, value) {
+            if (!this.selectedMember) return;
+            const userKey = String(this.selectedMember.user_id);
+            if (!this.overridesByUser[userKey]) this.overridesByUser[userKey] = {};
+            if (!this.overridesByUser[userKey][module]) this.overridesByUser[userKey][module] = {};
+
+            if (value === 'inherit') {
+                delete this.overridesByUser[userKey][module][action];
+                if (Object.keys(this.overridesByUser[userKey][module]).length === 0) {
+                    delete this.overridesByUser[userKey][module];
+                }
+                if (Object.keys(this.overridesByUser[userKey]).length === 0) {
+                    delete this.overridesByUser[userKey];
+                }
+                return;
+            }
+
+            this.overridesByUser[userKey][module][action] = value;
+        },
+
+        clearSelectedMemberOverrides() {
+            if (!this.selectedMember) return;
+            delete this.overridesByUser[String(this.selectedMember.user_id)];
+        },
+
+        buildSelectedMemberOverrideRows() {
+            if (!this.selectedMember) return [];
+            const userKey = String(this.selectedMember.user_id);
+            const perUser = this.overridesByUser[userKey] || {};
+            const rows = [];
+            Object.entries(perUser).forEach(([module, actions]) => {
+                Object.entries(actions || {}).forEach(([action, effect]) => {
+                    if (effect === 'allow' || effect === 'deny') {
+                        rows.push({ module, action, effect });
+                    }
+                });
+            });
+            return rows;
+        },
+
+        async saveMatrix() {
+            if (!this.matrix || !this.selectedWorkspaceId) return;
+            this.savingMatrix = true;
             try {
-                const res = await fetch(`/api/users/${this.selectedUser.id}/permissions`, {
+                const response = await fetch(`/api/workspaces/${this.selectedWorkspaceId}/permission-matrix`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        section_permissions: this.selectedUser.section_permissions,
-                        pf_agent_id: this.selectedUser.pf_agent_id || null,
-                        pf_agent_name: this.selectedUser.pf_agent_id ? 
-                            document.querySelector(`option[value="${this.selectedUser.pf_agent_id}"]`)?.textContent : null
-                    })
+                    body: JSON.stringify({ roles: this.matrix.roles })
                 });
-                const data = await res.json();
-                
-                if (data.success) {
-                    // Update local users array
-                    const idx = this.users.findIndex(u => u.id === this.selectedUser.id);
-                    if (idx >= 0) {
-                        this.users[idx] = data.user;
-                    }
-                    this.originalPermissions = JSON.parse(JSON.stringify(this.selectedUser.section_permissions));
-                    this.isDirty = false;
-                    
-                    // Show success toast
-                    this.showToast('Permissions saved successfully!', 'success');
-                } else {
-                    this.showToast(data.error || 'Failed to save permissions', 'error');
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.success) {
+                    alert(data.error || 'Failed to save permission matrix');
+                    return;
                 }
-            } catch (e) {
-                console.error('Failed to save permissions:', e);
-                this.showToast('Failed to save permissions', 'error');
+                this.matrix = data.matrix;
+                await this.loadEffective();
+            } finally {
+                this.savingMatrix = false;
             }
-            
-            this.saving = false;
         },
-        
-        showToast(message, type = 'info') {
-            // Simple alert for now - could be replaced with a toast library
-            if (type === 'error') {
-                alert('Error: ' + message);
-            } else {
-                alert(message);
+
+        async saveMemberOverrides() {
+            if (!this.selectedWorkspaceId || !this.selectedMember) return;
+            this.savingOverrides = true;
+            try {
+                const rows = this.buildSelectedMemberOverrideRows();
+                const response = await fetch(`/api/workspaces/${this.selectedWorkspaceId}/members/${this.selectedMember.id}/permission-overrides`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ overrides: rows })
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.success) {
+                    alert(data.error || 'Failed to save member overrides');
+                    return;
+                }
+                this.overridesByUser[String(this.selectedMember.user_id)] = data.grouped || {};
+                await this.loadEffective();
+            } finally {
+                this.savingOverrides = false;
             }
+        },
+
+        formatAllowedActions(module) {
+            if (!this.selectedMember) return '-';
+            const effective = this.effectiveByUser[this.selectedMember.user_id]?.effective_capabilities?.[module] || {};
+            const allowed = [];
+            for (const action of this.actionsForModule(module)) {
+                if (effective[action] === true) allowed.push(action);
+            }
+            return allowed.length ? allowed.join(', ') : 'none';
+        },
+
+        getEffectiveScope(module) {
+            if (!this.selectedMember) return '-';
+            const effective = this.effectiveByUser[this.selectedMember.user_id]?.effective_capabilities?.[module] || {};
+            if (!this.isScopedModule(module)) return 'n/a';
+            return effective.scope || 'own';
         }
     };
 }

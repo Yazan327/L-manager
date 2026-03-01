@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Tasks - L-Manager{% endblock %}
+{% block title %}{{ t('common.tasks', default='Tasks') }} - L-Manager{% endblock %}
 {% block content %}
 <div x-data="tasksManager()" x-init="init()" class="h-full flex flex-col">
     <!-- Header -->

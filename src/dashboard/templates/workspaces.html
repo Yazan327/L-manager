@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}Workspaces - L-Manager{% endblock %}
-{% block page_title %}Workspaces{% endblock %}
+{% block title %}{{ t('common.workspaces', default='Workspaces') }} - L-Manager{% endblock %}
+{% block page_title %}{{ t('common.workspaces', default='Workspaces') }}{% endblock %}
 
 {% block content %}
 <div x-data="workspacesManager()" x-init="init()" class="max-w-7xl mx-auto">

@@ -1,20 +1,23 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ ui_lang|default('en') }}" dir="{{ ui_dir|default('ltr') }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}PropertyFinder Dashboard{% endblock %}</title>
+    <title>{% block title %}{{ t('meta.app_name', default='L-Manager') }}{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+    {% if is_rtl %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/rtl.css') }}">
+    {% endif %}
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         [x-cloak] { display: none !important; }
     </style>
     {% block head_scripts %}{% endblock %}
 </head>
-<body class="bg-gray-100 min-h-screen overflow-x-hidden">
-    <div x-data="{ sidebarOpen: true, userMenuOpen: false }" class="flex overflow-x-hidden">
+<body class="bg-gray-100 min-h-screen overflow-x-hidden {% if is_rtl %}rtl{% endif %}">
+    <div x-data="{ sidebarOpen: true, userMenuOpen: false, isRTL: {{ 'true' if is_rtl else 'false' }} }" class="flex overflow-x-hidden">
         <!-- Sidebar -->
-        <aside :class="sidebarOpen ? 'w-64' : 'w-20'" class="bg-indigo-800 h-screen transition-all duration-300 fixed overflow-y-auto">
+        <aside :class="sidebarOpen ? 'w-64' : 'w-20'" :style="isRTL ? 'right:0;left:auto;' : 'left:0;right:auto;'" class="bg-indigo-800 h-screen transition-all duration-300 fixed overflow-y-auto">
             <div class="p-4">
                 <div class="flex items-center justify-between">
                     <h1 x-show="sidebarOpen" class="text-white text-xl font-bold">
@@ -32,59 +35,59 @@
                     {% set ws_slug = current_workspace.slug %}
                     <a href="{{ url_for('workspace_dashboard', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_dashboard' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-home w-8"></i>
-                        <span x-show="sidebarOpen">Dashboard</span>
+                        <span x-show="sidebarOpen">{{ t('common.dashboard', default='Dashboard') }}</span>
                     </a>
                     <a href="{{ url_for('workspace_listings', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint in ['workspace_listings'] %}bg-indigo-700{% endif %}">
                         <i class="fas fa-list w-8"></i>
-                        <span x-show="sidebarOpen">Listings</span>
+                        <span x-show="sidebarOpen">{{ t('common.listings', default='Listings') }}</span>
                     </a>
-                    {% if current_user and current_user.has_permission('create') %}
+                    {% if can_create_listing %}
                     <a href="{{ url_for('new_listing') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'new_listing' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-plus-circle w-8"></i>
-                        <span x-show="sidebarOpen">New Listing</span>
+                        <span x-show="sidebarOpen">{{ t('common.new_listing', default='New Listing') }}</span>
                     </a>
                     {% endif %}
-                    {% if current_user and current_user.has_permission('bulk_upload') %}
+                    {% if can_bulk_upload %}
                     <a href="{{ url_for('bulk_upload') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'bulk_upload' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-upload w-8"></i>
-                        <span x-show="sidebarOpen">Bulk Upload</span>
+                        <span x-show="sidebarOpen">{{ t('common.bulk_upload', default='Bulk Upload') }}</span>
                     </a>
                     {% endif %}
                     <a href="{{ url_for('workspace_image_editor', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_image_editor' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-image w-8"></i>
-                        <span x-show="sidebarOpen">Image Editor</span>
+                        <span x-show="sidebarOpen">{{ t('common.image_editor', default='Image Editor') }}</span>
                     </a>
                     {% if can_access_loops %}
                     <a href="{{ url_for('workspace_loops', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_loops' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-sync-alt w-8"></i>
-                        <span x-show="sidebarOpen">Loops</span>
+                        <span x-show="sidebarOpen">{{ t('common.loops', default='Loops') }}</span>
                     </a>
                     {% endif %}
                     <a href="{{ url_for('workspace_insights', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_insights' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-chart-line w-8"></i>
-                        <span x-show="sidebarOpen">Insights</span>
+                        <span x-show="sidebarOpen">{{ t('common.insights', default='Insights') }}</span>
                     </a>
                     <a href="{{ url_for('workspace_leads', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_leads' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-user-plus w-8"></i>
-                        <span x-show="sidebarOpen">Leads</span>
+                        <span x-show="sidebarOpen">{{ t('common.leads', default='Leads') }}</span>
                     </a>
                     <a href="{{ url_for('workspace_tasks', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_tasks' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-tasks w-8"></i>
-                        <span x-show="sidebarOpen">Tasks</span>
+                        <span x-show="sidebarOpen">{{ t('common.tasks', default='Tasks') }}</span>
                     </a>
                 {% elif is_system_admin %}
                     {# System admin portal (no workspace context) #}
                     <a href="{{ url_for('system_admin_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-red-700 {% if request.endpoint == 'system_admin_page' %}bg-red-700{% endif %}">
                         <i class="fas fa-user-shield w-8"></i>
-                        <span x-show="sidebarOpen">System Admin</span>
+                        <span x-show="sidebarOpen">{{ t('common.system_admin', default='System Admin') }}</span>
                     </a>
                     <a href="{{ url_for('workspaces_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspaces_page' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-layer-group w-8"></i>
-                        <span x-show="sidebarOpen">Workspaces</span>
+                        <span x-show="sidebarOpen">{{ t('common.workspaces', default='Workspaces') }}</span>
                     </a>
                     <a href="{{ url_for('permissions_page') }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'permissions_page' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-shield-alt w-8"></i>
-                        <span x-show="sidebarOpen">Permissions</span>
+                        <span x-show="sidebarOpen">{{ t('common.permissions', default='Permissions') }}</span>
                     </a>
                 {% endif %}
                 
@@ -95,15 +98,15 @@
                     {% set ws_slug = current_workspace.slug %}
                     <a href="{{ url_for('workspace_users', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_users' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-users w-8"></i>
-                        <span x-show="sidebarOpen">Users</span>
+                        <span x-show="sidebarOpen">{{ t('common.users', default='Users') }}</span>
                     </a>
                     <a href="{{ url_for('workspace_auth', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_auth' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-plug w-8"></i>
-                        <span x-show="sidebarOpen">PF Connect</span>
+                        <span x-show="sidebarOpen">{{ t('nav.pf_connect', default='PF Connect') }}</span>
                     </a>
                     <a href="{{ url_for('workspace_settings', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_settings' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-cog w-8"></i>
-                        <span x-show="sidebarOpen">Settings</span>
+                        <span x-show="sidebarOpen">{{ t('common.settings', default='Settings') }}</span>
                     </a>
                 {% elif is_system_admin %}
                     {# No additional links here for system admin; main system nav already rendered above #}
@@ -112,20 +115,29 @@
         </aside>
         
         <!-- Main Content -->
-        <main :class="sidebarOpen ? 'ml-64' : 'ml-20'" class="flex-1 transition-all duration-300 overflow-x-hidden max-w-full">
+        <main :style="isRTL ? `margin-right:${sidebarOpen ? '16rem' : '5rem'};margin-left:0;` : `margin-left:${sidebarOpen ? '16rem' : '5rem'};margin-right:0;`" class="flex-1 transition-all duration-300 overflow-x-hidden max-w-full">
             <!-- Top Bar -->
             <header class="bg-white shadow-sm px-6 py-4">
                 <div class="flex items-center justify-between">
-                    <h2 class="text-2xl font-semibold text-gray-800">{% block page_title %}Dashboard{% endblock %}</h2>
+                    <h2 class="text-2xl font-semibold text-gray-800">{% block page_title %}{{ t('common.dashboard', default='Dashboard') }}{% endblock %}</h2>
                     <div class="flex items-center space-x-4">
                         <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                            <i class="fas fa-circle text-green-500 mr-1 text-xs"></i> Connected
+                            <i class="fas fa-circle text-green-500 mr-1 text-xs"></i> {{ t('common.connected', default='Connected') }}
                         </span>
+
+                        <div class="inline-flex items-center border border-gray-200 rounded-lg overflow-hidden">
+                            <button type="button" data-lang-toggle="en" class="px-3 py-1.5 text-xs font-medium hover:bg-gray-50 {% if ui_lang == 'en' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600{% endif %}">
+                                {{ t('common.english', default='English') }}
+                            </button>
+                            <button type="button" data-lang-toggle="ar" class="px-3 py-1.5 text-xs font-medium hover:bg-gray-50 {% if ui_lang == 'ar' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600{% endif %}">
+                                {{ t('common.arabic', default='Arabic') }}
+                            </button>
+                        </div>
 
                         {% if is_system_admin and is_workspace_context %}
                         <form action="{{ url_for('exit_workspace') }}" method="POST">
                             <button type="submit" class="px-3 py-1.5 bg-red-50 text-red-700 rounded-lg text-xs font-medium hover:bg-red-100">
-                                <i class="fas fa-sign-out-alt mr-1"></i>Exit Workspace
+                                <i class="fas fa-sign-out-alt mr-1"></i>{{ t('nav.exit_workspace', default='Exit Workspace') }}
                             </button>
                         </form>
                         {% endif %}
@@ -155,10 +167,10 @@
                                     </span>
                                 </div>
                                 <a href="{{ url_for('profile') }}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
-                                    <i class="fas fa-user mr-2"></i>My Profile
+                                    <i class="fas fa-user mr-2"></i>{{ t('common.profile', default='My Profile') }}
                                 </a>
                                 <a href="{{ url_for('logout') }}" class="block px-4 py-2 text-sm text-red-600 hover:bg-red-50">
-                                    <i class="fas fa-sign-out-alt mr-2"></i>Sign Out
+                                    <i class="fas fa-sign-out-alt mr-2"></i>{{ t('common.sign_out', default='Sign Out') }}
                                 </a>
                             </div>
                         </div>
@@ -177,7 +189,7 @@
                                  x-show="show"
                                  x-init="setTimeout(() => show = false, 5000)">
                                 <div class="flex items-center justify-between">
-                                    <span>{{ message }}</span>
+                                    <span>{{ localize_message(message) }}</span>
                                     <button @click="show = false" class="hover:opacity-75">
                                         <i class="fas fa-times"></i>
                                     </button>
@@ -196,6 +208,56 @@
     </div>
     
     {% block scripts %}{% endblock %}
+    <script>
+        window.I18N = {
+            lang: {{ ui_lang|tojson|safe }},
+            dir: {{ ui_dir|tojson|safe }},
+            messages: {{ i18n.messages|tojson|safe if i18n is defined and i18n.messages is defined else '{}' }}
+        };
+        window.I18N.t = function (key, fallback = '') {
+            const path = String(key || '').split('.');
+            let node = window.I18N.messages || {};
+            for (const part of path) {
+                if (!node || typeof node !== 'object' || !(part in node)) {
+                    return fallback || key;
+                }
+                node = node[part];
+            }
+            return (typeof node === 'string') ? node : (fallback || key);
+        };
+        window.i18nT = function (key, fallback = '') {
+            return window.I18N.t(key, fallback);
+        };
+        window.formatLocalizedDate = function (value, options = {}) {
+            if (!value) return '-';
+            const parsed = new Date(value);
+            if (Number.isNaN(parsed.getTime())) return value;
+            const locale = window.I18N.lang === 'ar' ? 'ar-AE-u-nu-latn' : 'en-US';
+            return new Intl.DateTimeFormat(locale, options).format(parsed);
+        };
+        window.formatLocalizedNumber = function (value, options = {}) {
+            const num = Number(value);
+            if (!Number.isFinite(num)) return value;
+            const locale = window.I18N.lang === 'ar' ? 'ar-AE-u-nu-latn' : 'en-US';
+            return new Intl.NumberFormat(locale, options).format(num);
+        };
+
+        document.querySelectorAll('[data-lang-toggle]').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                const lang = btn.getAttribute('data-lang-toggle');
+                if (!lang) return;
+                try {
+                    const res = await fetch('/api/profile/language', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ language: lang })
+                    });
+                    if (!res.ok) return;
+                    window.location.reload();
+                } catch (_) {}
+            });
+        });
+    </script>
     <script src="https://unpkg.com/@alpinejs/collapse@3.x.x/dist/cdn.min.js" defer></script>
     <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
 </body>

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}{% if edit_mode %}Edit{% else %}New{% endif %} Listing - L-Manager{% endblock %}
-{% block page_title %}{% if edit_mode %}Edit Listing{% else %}Create New Listing{% endif %}{% endblock %}
+{% block title %}{% if edit_mode %}{{ t('listings.edit', default='Edit') }}{% else %}{{ t('listings.new', default='New') }}{% endif %} {{ t('common.listings', default='Listing') }} - L-Manager{% endblock %}
+{% block page_title %}{% if edit_mode %}{{ t('listings.edit_listing', default='Edit Listing') }}{% else %}{{ t('listings.create_new_listing', default='Create New Listing') }}{% endif %}{% endblock %}
 
 {% block content %}
 <div class="flex gap-6" x-data="listingForm()">
@@ -1043,7 +1043,8 @@ function listingForm() {
         
         formatPrice(num) {
             if (!num) return '0';
-            return parseInt(num).toLocaleString('en-AE');
+            const locale = (window.I18N && window.I18N.lang === 'ar') ? 'ar-AE-u-nu-latn' : 'en-AE';
+            return parseInt(num).toLocaleString(locale);
         },
         
         getPropertyTypeName(code) {

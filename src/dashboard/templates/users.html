@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}Users - L-Manager{% endblock %}
-{% block page_title %}User Management{% endblock %}
+{% block title %}{{ t('common.users', default='Users') }} - L-Manager{% endblock %}
+{% block page_title %}{{ t('users.management', default='User Management') }}{% endblock %}
 
 {% block content %}
 <div x-data="usersPage()" x-init="init()" class="max-w-6xl">
@@ -24,6 +24,7 @@
                     <label class="block text-sm font-medium text-gray-700 mb-1">Role</label>
                     <select x-model="inviteRole" class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
                         <option value="member">Member</option>
+                        <option value="team_leader">Team Leader</option>
                         <option value="admin">Admin</option>
                         <option value="owner">Owner</option>
                     </select>
@@ -200,6 +201,7 @@
                     <tr>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">User</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Workspace Role</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Team Leader</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Locked Agent</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Login</th>
@@ -218,9 +220,6 @@
                                     <div class="text-sm font-medium text-gray-900">{{ user.name }}</div>
                                     <div class="text-sm text-gray-500">{{ user.email }}</div>
                                     <span class="text-xs text-gray-400">App account: {{ user.role_name }}</span>
-                                    {% if user.has_workspace_custom_permissions %}
-                                    <span class="text-xs text-indigo-600 ml-2"><i class="fas fa-sliders-h mr-1"></i>Custom +{{ user.workspace_custom_permissions|length }}</span>
-                                    {% endif %}
                                 </div>
                             </div>
                         </td>
@@ -228,10 +227,20 @@
                             <span class="inline-flex px-2 py-1 text-xs font-medium rounded-full
                                 {% if user.workspace_role == 'owner' %}bg-red-100 text-red-800
                                 {% elif user.workspace_role == 'admin' %}bg-purple-100 text-purple-800
+                                {% elif user.workspace_role == 'team_leader' %}bg-indigo-100 text-indigo-800
                                 {% elif user.workspace_role == 'member' %}bg-blue-100 text-blue-800
                                 {% else %}bg-gray-100 text-gray-800{% endif %}">
                                 {{ user.workspace_role_name or 'Member' }}
                             </span>
+                        </td>
+                        <td class="px-6 py-4">
+                            {% if user.team_leader_name %}
+                            <span class="inline-flex px-2 py-1 text-xs font-medium rounded-full bg-indigo-50 text-indigo-700">
+                                {{ user.team_leader_name }}
+                            </span>
+                            {% else %}
+                            <span class="text-gray-400 text-sm">—</span>
+                            {% endif %}
                         </td>
                         <td class="px-6 py-4">
                             {% if user.pf_agent_id %}
@@ -279,7 +288,7 @@
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="6" class="px-6 py-12 text-center text-gray-500">
+                        <td colspan="7" class="px-6 py-12 text-center text-gray-500">
                             <i class="fas fa-users text-4xl mb-2"></i>
                             <p>No users found</p>
                         </td>
@@ -325,26 +334,15 @@
                 </div>
 
                 <div>
-                    <div class="flex items-center justify-between mb-2">
-                        <label class="block text-sm font-medium text-gray-700">Extra Permissions (Additive)</label>
-                        <button type="button"
-                                @click="editingUser.workspace_custom_permissions = []"
-                                class="text-xs text-gray-500 hover:text-gray-700">
-                            Clear
-                        </button>
-                    </div>
-                    <p class="text-xs text-gray-500 mb-2">Adds selected permissions on top of the workspace role. Does not override row-level assignment rules.</p>
-                    <div class="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-3 bg-gray-50">
-                        <template x-for="perm in allPermissions" :key="perm">
-                            <label class="flex items-center gap-2 text-sm text-gray-700">
-                                <input type="checkbox"
-                                       :checked="hasExtraPermission(perm)"
-                                       @change="toggleExtraPermission(perm, $event.target.checked)"
-                                       class="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500">
-                                <span x-text="perm"></span>
-                            </label>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Team Leader</label>
+                    <select x-model="editingUser.team_leader_user_id"
+                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500">
+                        <option value="">No team leader</option>
+                        <template x-for="leader in eligibleTeamLeaders(editingUser.id)" :key="`leader-${leader.id}`">
+                            <option :value="String(leader.id)" x-text="`${leader.name} (${leader.workspace_role_name || leader.workspace_role || 'member'})`"></option>
                         </template>
-                    </div>
+                    </select>
+                    <p class="text-xs text-gray-500 mt-1">Only owner/admin/team leader can be selected.</p>
                 </div>
 
                 <div class="flex justify-end space-x-3 pt-4">
@@ -368,12 +366,11 @@
 function usersPage() {
     return {
         showEditModal: false,
-        editingUser: { workspace_custom_permissions: [] },
+        editingUser: {},
         users: {{ users|tojson|safe }},
         workspaceId: {{ workspace.id if workspace else 'null' }},
         workspaceRoleOptions: {{ workspace_member_roles|tojson|safe if workspace_member_roles is defined else '{}' }},
         workspaceMemberships: {{ workspace_memberships_json|tojson|safe if workspace_memberships_json is defined else '{}' }},
-        allPermissions: {{ all_permissions|tojson|safe if all_permissions is defined else '[]' }},
         canManageMembers: {{ 'true' if can_manage_members else 'false' }},
         inviteEmail: '',
         inviteRole: 'member',
@@ -395,33 +392,17 @@ function usersPage() {
             }
             this.editingUser = {
                 ...user,
-                workspace_custom_permissions: Array.isArray(user.workspace_custom_permissions)
-                    ? [...user.workspace_custom_permissions]
-                    : []
+                team_leader_user_id: user.team_leader_user_id ? String(user.team_leader_user_id) : ''
             };
             this.showEditModal = true;
         },
 
-        hasExtraPermission(permission) {
-            if (!Array.isArray(this.editingUser.workspace_custom_permissions)) {
-                this.editingUser.workspace_custom_permissions = [];
-            }
-            return this.editingUser.workspace_custom_permissions.includes(permission);
-        },
-
-        toggleExtraPermission(permission, isChecked) {
-            if (!Array.isArray(this.editingUser.workspace_custom_permissions)) {
-                this.editingUser.workspace_custom_permissions = [];
-            }
-            if (isChecked) {
-                if (!this.editingUser.workspace_custom_permissions.includes(permission)) {
-                    this.editingUser.workspace_custom_permissions.push(permission);
-                }
-                return;
-            }
-            this.editingUser.workspace_custom_permissions = this.editingUser.workspace_custom_permissions.filter(
-                p => p !== permission
-            );
+        eligibleTeamLeaders(excludeUserId = null) {
+            const excluded = Number(excludeUserId || 0);
+            return this.users.filter(user => {
+                if (excluded && Number(user.id) === excluded) return false;
+                return ['owner', 'admin', 'team_leader'].includes(String(user.workspace_role || '').toLowerCase());
+            });
         },
 
         async loadInvites() {
@@ -515,9 +496,7 @@ function usersPage() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         role: this.editingUser.workspace_role,
-                        extra_permissions: Array.isArray(this.editingUser.workspace_custom_permissions)
-                            ? this.editingUser.workspace_custom_permissions
-                            : []
+                        team_leader_user_id: this.editingUser.team_leader_user_id || null
                     })
                 });
                 const data = await response.json().catch(() => ({}));
@@ -526,9 +505,8 @@ function usersPage() {
                     if (idx !== -1) {
                         this.users[idx].workspace_role = data.member.role;
                         this.users[idx].workspace_role_name = data.member.role_name;
-                        const extraPerms = Array.isArray(data.member.extra_permissions) ? data.member.extra_permissions : [];
-                        this.users[idx].workspace_custom_permissions = extraPerms;
-                        this.users[idx].has_workspace_custom_permissions = extraPerms.length > 0;
+                        this.users[idx].team_leader_user_id = data.member.team_leader_user_id;
+                        this.users[idx].team_leader_name = data.member.team_leader_name;
                     }
                     this.showEditModal = false;
                 } else {
@@ -566,7 +544,8 @@ function usersPage() {
         formatDate(value) {
             if (!value) return 'n/a';
             try {
-                return new Date(value).toLocaleString();
+                const locale = (window.I18N && window.I18N.lang === 'ar') ? 'ar-AE-u-nu-latn' : 'en-AE';
+                return new Date(value).toLocaleString(locale);
             } catch {
                 return value;
             }

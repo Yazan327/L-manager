@@ -1,0 +1,185 @@
+{
+  "meta": {
+    "app_name": "L-Manager"
+  },
+  "common": {
+    "dashboard": "Dashboard",
+    "listings": "Listings",
+    "new_listing": "New Listing",
+    "bulk_upload": "Bulk Upload",
+    "image_editor": "Image Editor",
+    "loops": "Loops",
+    "insights": "Insights",
+    "leads": "Leads",
+    "tasks": "Tasks",
+    "users": "Users",
+    "settings": "Settings",
+    "workspaces": "Workspaces",
+    "permissions": "Permissions",
+    "system_admin": "System Admin",
+    "connected": "Connected",
+    "profile": "My Profile",
+    "sign_out": "Sign Out",
+    "english": "English",
+    "arabic": "Arabic",
+    "view_all": "View All",
+    "actions": "Actions",
+    "reference": "Reference",
+    "title": "Title",
+    "type": "Type",
+    "beds": "Beds",
+    "size": "Size",
+    "location": "Location",
+    "price": "Price",
+    "status": "Status",
+    "never": "Never",
+    "today": "Today",
+    "not_available": "Unavailable",
+    "no_data": "No data",
+    "cancel": "Cancel",
+    "save": "Save",
+    "create": "Create",
+    "update": "Update",
+    "delete": "Delete",
+    "search": "Search",
+    "all": "All",
+    "language": "Language"
+  },
+  "listings": {
+    "new": "New",
+    "edit": "Edit",
+    "edit_listing": "Edit Listing",
+    "create_new_listing": "Create New Listing",
+    "details": "Listing Details"
+  },
+  "users": {
+    "management": "User Management"
+  },
+  "loops": {
+    "listing_loops": "Listing Loops"
+  },
+  "workspaces": {
+    "administration": "Workspace Administration"
+  },
+  "system": {
+    "administration": "System Administration"
+  },
+  "connections": {
+    "center": "Connection Center"
+  },
+  "permissions": {
+    "center": "Permission Center"
+  },
+  "auth_page": {
+    "api_configuration": "API Configuration",
+    "pf_api_configuration": "PropertyFinder API Configuration"
+  },
+  "storage": {
+    "title": "Storage",
+    "management": "Storage Management"
+  },
+  "nav": {
+    "pf_connect": "PF Connect",
+    "exit_workspace": "Exit Workspace"
+  },
+  "auth": {
+    "login_title": "Login - L-Manager",
+    "sign_in_manage_listings": "Sign in to manage your listings",
+    "email_address": "Email Address",
+    "password": "Password",
+    "remember_me": "Remember me",
+    "sign_in": "Sign In",
+    "secure_login": "Secure login powered by L-Manager",
+    "accept_invite_title": "Accept Invite - L-Manager",
+    "join_workspace": "Join your workspace",
+    "go_to_login": "Go to Login",
+    "invited_join": "You are invited to join",
+    "a_workspace": "a workspace",
+    "email": "Email",
+    "full_name": "Full Name",
+    "your_name": "Your name",
+    "create_password": "Create a password",
+    "join_workspace_button": "Join Workspace",
+    "invite_not_found": "Invite not found.",
+    "secure_access": "Secure access powered by L-Manager",
+    "reset_password_title": "Reset Password - L-Manager",
+    "reset_password_subtitle": "Reset your password",
+    "new_password": "New Password",
+    "enter_new_password": "Enter new password",
+    "update_password": "Update Password",
+    "secure_reset": "Secure reset powered by L-Manager"
+  },
+    "dashboard": {
+    "total_listings": "Total Listings",
+    "published": "Published",
+    "drafts": "Drafts",
+    "views_today": "Views Today",
+    "pf_credit_balance": "PF Credit Balance",
+    "quick_actions": "Quick Actions",
+    "analytics": "Analytics",
+    "api_status": "API Status",
+    "connection": "Connection",
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "api_token": "API Token",
+    "configured": "Configured",
+    "not_set": "Not Set",
+    "last_sync": "Last Sync",
+    "recent_listings": "Recent Listings",
+    "studio": "Studio",
+    "untitled": "Untitled",
+    "no_listings_found": "No listings found",
+    "create_first_listing": "Create your first listing"
+  },
+  "errors": {
+    "permission_denied": "Permission denied.",
+    "invalid_language": "Invalid language. Use en or ar.",
+    "internal_error": "Internal server error.",
+    "not_found": "Not found."
+  },
+  "flash": {
+    "session_expired": "Your session has expired. Please log in again.",
+    "please_login": "Please log in to access this page.",
+    "logged_out": "You have been logged out.",
+    "welcome_back": "Welcome back, {name}!",
+    "invalid_credentials": "Invalid email or password.",
+    "account_deactivated": "Your account has been deactivated. Contact an administrator.",
+    "profile_updated": "Profile updated.",
+    "password_updated": "Password updated successfully.",
+    "current_password_incorrect": "Current password is incorrect."
+  },
+  "legacy_messages": {
+    "Permission denied": { "code": "permission_denied", "text": "Permission denied" },
+    "Listing not found": { "code": "listing_not_found", "text": "Listing not found" },
+    "Lead not found": { "code": "lead_not_found", "text": "Lead not found" },
+    "No files specified": { "code": "files_missing", "text": "No files specified" },
+    "No data provided": { "code": "payload_missing", "text": "No data provided" },
+    "No file provided": { "code": "file_missing", "text": "No file provided" },
+    "No file selected": { "code": "file_missing", "text": "No file selected" },
+    "No images provided": { "code": "images_missing", "text": "No images provided" },
+    "Invalid role": { "code": "invalid_role", "text": "Invalid role" },
+    "Invalid token": { "code": "invalid_token", "text": "Invalid token" },
+    "User not found": { "code": "user_not_found", "text": "User not found" },
+    "Folder not found": { "code": "folder_not_found", "text": "Folder not found" },
+    "Name is required": { "code": "name_required", "text": "Name is required" },
+    "Email is required": { "code": "email_required", "text": "Email is required" },
+    "Password is required.": { "code": "password_required", "text": "Password is required." },
+    "Invalid email or password.": { "code": "invalid_credentials", "text": "Invalid email or password." },
+    "Please log in to access this page.": { "code": "auth_required", "text": "Please log in to access this page." },
+    "Your session has expired. Please log in again.": { "code": "session_expired", "text": "Your session has expired. Please log in again." },
+    "You have been logged out.": { "code": "logged_out", "text": "You have been logged out." },
+    "You do not have permission to access this feature.": { "code": "permission_denied", "text": "You do not have permission to access this feature." },
+    "No active workspace is available for your account. Please contact your administrator.": {
+      "code": "workspace_missing",
+      "text": "No active workspace is available for your account. Please contact your administrator."
+    },
+    "Invalid role selected.": { "code": "invalid_role", "text": "Invalid role selected." },
+    "User is already a member of this workspace": { "code": "member_exists", "text": "User is already a member of this workspace" },
+    "An account with this email already exists. Please log in to accept the invite.": {
+      "code": "invite_existing_account",
+      "text": "An account with this email already exists. Please log in to accept the invite."
+    },
+    "Page not found": { "code": "not_found", "text": "Page not found" },
+    "NotFound: 404 Not Found": { "code": "not_found", "text": "NotFound: 404 Not Found" }
+  }
+}

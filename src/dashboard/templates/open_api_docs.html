@@ -1,10 +1,13 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{ ui_lang|default('en') }}" dir="{{ ui_dir|default('ltr') }}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>L-Manager Open API v1 Docs</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+    {% if is_rtl %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/rtl.css') }}">
+    {% endif %}
 </head>
 <body class="bg-gray-50 text-gray-900">
     <main class="max-w-5xl mx-auto px-4 py-8">

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}Listings - L-Manager{% endblock %}
-{% block page_title %}Listings{% endblock %}
+{% block title %}{{ t('common.listings', default='Listings') }} - L-Manager{% endblock %}
+{% block page_title %}{{ t('common.listings', default='Listings') }}{% endblock %}
 
 {% block content %}
 {% set can_manage_listing_admin = ((current_workspace and current_user and current_workspace.is_admin(current_user.id)) or is_system_admin) %}

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}API Configuration - L-Manager{% endblock %}
-{% block page_title %}PropertyFinder API Configuration{% endblock %}
+{% block title %}{{ t('auth_page.api_configuration', default='API Configuration') }} - L-Manager{% endblock %}
+{% block page_title %}{{ t('auth_page.pf_api_configuration', default='PropertyFinder API Configuration') }}{% endblock %}
 
 {% block content %}
 <div x-data="authPage()" class="max-w-4xl">
@@ -213,7 +213,8 @@ function authPage() {
                 
                 this.connected = data.success;
                 this.userCount = data.users_count || 0;
-                this.lastChecked = new Date().toLocaleString();
+                const locale = (window.I18N && window.I18N.lang === 'ar') ? 'ar-AE-u-nu-latn' : 'en-AE';
+                this.lastChecked = new Date().toLocaleString(locale);
                 
                 if (!data.success) {
                     this.error = data.error || 'Connection failed';

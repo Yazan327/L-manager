@@ -40,6 +40,18 @@ from database import (
     SystemRole, UserSystemRole, WorkspaceRole, ModulePermission, ObjectACL, FeatureFlag, AuditLog
 )
 from images import ImageProcessor
+from src.services.i18n import (
+    SUPPORTED_LANGUAGES,
+    DEFAULT_LANGUAGE,
+    get_language as resolve_ui_language,
+    set_language as save_user_language,
+    translate as i18n_translate,
+    get_direction as i18n_direction,
+    get_dictionary as i18n_dictionary,
+    localize_legacy_message,
+    localize_error_payload,
+    get_error_code_for_legacy_message,
+)
 
 # APScheduler for background loop execution
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -382,6 +394,28 @@ with app.app_context():
                     conn.commit()
         except Exception as e:
             print(f"[MIGRATION] section_permissions column migration skipped or failed: {e}")
+
+        # Migration: Add preferred_language column to users table
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='users' AND column_name='preferred_language'"
+                ))
+                if not result.fetchone():
+                    print("[MIGRATION] Adding preferred_language column to users table...")
+                    conn.execute(text("ALTER TABLE users ADD COLUMN preferred_language VARCHAR(5) DEFAULT 'en'"))
+                    conn.execute(text("UPDATE users SET preferred_language='en' WHERE preferred_language IS NULL"))
+                    conn.commit()
+                    print("[MIGRATION] preferred_language column added successfully")
+                else:
+                    conn.execute(text(
+                        "UPDATE users SET preferred_language='en' "
+                        "WHERE preferred_language IS NULL OR preferred_language NOT IN ('en','ar')"
+                    ))
+                    conn.commit()
+        except Exception as e:
+            print(f"[MIGRATION] preferred_language column migration skipped or failed: {e}")
         
         # Migration: Create workspaces tables
         try:
@@ -421,11 +455,13 @@ with app.app_context():
                             role VARCHAR(20) DEFAULT 'member',
                             joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             invited_by_id INTEGER REFERENCES users(id),
+                            team_leader_user_id INTEGER REFERENCES users(id),
                             UNIQUE(workspace_id, user_id)
                         )
                     """))
                     conn.execute(text("CREATE INDEX idx_workspace_members_user ON workspace_members(user_id)"))
                     conn.execute(text("CREATE INDEX idx_workspace_members_workspace ON workspace_members(workspace_id)"))
+                    conn.execute(text("CREATE INDEX idx_workspace_members_team_leader ON workspace_members(team_leader_user_id)"))
                     conn.commit()
                     print("[MIGRATION] workspace_members table created successfully")
                 
@@ -456,6 +492,22 @@ with app.app_context():
                     print("[MIGRATION] workspace_connections table created successfully")
         except Exception as e:
             print(f"[MIGRATION] workspaces tables creation skipped or failed: {e}")
+
+        # Migration: Add team_leader_user_id to workspace_members for direct-team mapping
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='workspace_members' AND column_name='team_leader_user_id'"
+                ))
+                if not result.fetchone():
+                    print("[MIGRATION] Adding team_leader_user_id column to workspace_members...")
+                    conn.execute(text("ALTER TABLE workspace_members ADD COLUMN team_leader_user_id INTEGER REFERENCES users(id)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_workspace_members_team_leader ON workspace_members(team_leader_user_id)"))
+                    conn.commit()
+                    print("[MIGRATION] team_leader_user_id column added to workspace_members")
+        except Exception as e:
+            print(f"[MIGRATION] team_leader_user_id column migration skipped or failed: {e}")
         
         # Migration: Add workspace_id columns to existing tables
         workspace_tables = ['listing_folders', 'listings', 'crm_leads', 'contacts', 'loop_configs', 'task_boards', 'app_settings', 'pf_cache']
@@ -1975,8 +2027,8 @@ except Exception as e:
 def handle_not_found(e):
     """Return JSON for API 404s and plain text for UI routes."""
     if request.path.startswith('/api/'):
-        return jsonify({'success': False, 'error': 'NotFound: 404 Not Found'}), 404
-    return 'Page not found', 404
+        return jsonify({'success': False, 'code': 'not_found', 'error': 'NotFound: 404 Not Found'}), 404
+    return localize_legacy_message('Page not found', getattr(g, 'ui_lang', DEFAULT_LANGUAGE)), 404
 
 
 @app.errorhandler(Exception)
@@ -1988,8 +2040,8 @@ def handle_exception(e):
     traceback.print_exc()
     # Return JSON for API requests
     if request.path.startswith('/api/'):
-        return jsonify({'success': False, 'error': error_msg, 'type': type(e).__name__}), 500
-    return jsonify({'error': error_msg}), 500
+        return jsonify({'success': False, 'code': 'internal_error', 'error': error_msg, 'type': type(e).__name__}), 500
+    return jsonify({'error': localize_legacy_message(error_msg, getattr(g, 'ui_lang', DEFAULT_LANGUAGE))}), 500
 
 
 # ==================== AUTHENTICATION ====================
@@ -2006,13 +2058,15 @@ def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'user_id' not in session:
-            flash('Please log in to access this page.', 'warning')
+            lang = resolve_ui_language(user=None, session_obj=session, request_obj=request)
+            flash(i18n_translate('flash.please_login', lang=lang, default='Please log in to access this page.'), 'warning')
             return redirect(url_for('login', next=request.url))
         
         user = User.query.get(session['user_id'])
         if not user or not user.is_active:
             session.clear()
-            flash('Your session has expired. Please log in again.', 'warning')
+            lang = resolve_ui_language(user=None, session_obj=session, request_obj=request)
+            flash(i18n_translate('flash.session_expired', lang=lang, default='Your session has expired. Please log in again.'), 'warning')
             return redirect(url_for('login'))
         
         g.user = user
@@ -2088,9 +2142,27 @@ def load_user():
     g.workspace = None
     g.is_workspace_context = False
     g.is_admin_context = False
+    g.ui_lang = DEFAULT_LANGUAGE
+    g.ui_dir = 'ltr'
+    g.is_rtl = False
     
     if 'user_id' in session:
         g.user = User.query.get(session['user_id'])
+
+    try:
+        resolved_lang = resolve_ui_language(
+            user=g.user,
+            session_obj=session,
+            request_obj=request,
+        )
+    except Exception:
+        resolved_lang = DEFAULT_LANGUAGE
+    g.ui_lang = resolved_lang
+    g.ui_dir = i18n_direction(resolved_lang)
+    g.is_rtl = (g.ui_dir == 'rtl')
+    # Keep session language explicit after first resolution.
+    if session.get('ui_lang') != resolved_lang:
+        session['ui_lang'] = resolved_lang
     
     # Check if we're in a workspace context (URL starts with workspace slug)
     # Skip for static files and API routes
@@ -2143,6 +2215,25 @@ def inject_user():
         can_access_loops = False
         can_create_listing = False
         can_bulk_upload = False
+
+    ui_lang = getattr(g, 'ui_lang', DEFAULT_LANGUAGE)
+    ui_dir = getattr(g, 'ui_dir', 'ltr')
+    is_rtl = getattr(g, 'is_rtl', False)
+
+    def _t(key, default=None, **vars):
+        return i18n_translate(key=key, lang=ui_lang, default=default, **vars)
+
+    def _localize_message(message):
+        if not isinstance(message, str):
+            return message
+        return localize_legacy_message(message, ui_lang)
+
+    i18n_payload = {
+        'lang': ui_lang,
+        'dir': ui_dir,
+        'messages': i18n_dictionary(ui_lang),
+    }
+
     return dict(
         current_user=g.user,
         current_workspace=workspace,
@@ -2151,8 +2242,55 @@ def inject_user():
         is_system_admin=sys_admin,
         can_access_loops=can_access_loops,
         can_create_listing=can_create_listing,
-        can_bulk_upload=can_bulk_upload
+        can_bulk_upload=can_bulk_upload,
+        ui_lang=ui_lang,
+        ui_dir=ui_dir,
+        is_rtl=is_rtl,
+        t=_t,
+        localize_message=_localize_message,
+        i18n=i18n_payload
     )
+
+
+def flash_i18n(key, category='info', **vars):
+    """Flash a localized message by translation key."""
+    lang = getattr(g, 'ui_lang', DEFAULT_LANGUAGE)
+    message = i18n_translate(key=key, lang=lang, default=key, **vars)
+    flash(message, category)
+
+
+def api_error(code, status=400, **vars):
+    """Return consistent localized API error payload."""
+    lang = getattr(g, 'ui_lang', DEFAULT_LANGUAGE)
+    message = i18n_translate(key=f"errors.{code}", lang=lang, default=code, **vars)
+    return jsonify({'success': False, 'code': code, 'error': message}), status
+
+
+@app.after_request
+def localize_api_error_responses(response):
+    """Localize internal API error messages while preserving response shape."""
+    try:
+        if not request.path.startswith('/api/'):
+            return response
+        # Keep partner/external API payloads stable in English.
+        if request.path.startswith('/api/open/'):
+            return response
+        content_type = (response.headers.get('Content-Type') or '').lower()
+        if 'application/json' not in content_type:
+            return response
+        payload = response.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return response
+        if 'error' not in payload:
+            return response
+
+        lang = getattr(g, 'ui_lang', DEFAULT_LANGUAGE)
+        localized_payload = localize_error_payload(dict(payload), lang)
+        response.set_data(json.dumps(localized_payload, ensure_ascii=False))
+        response.mimetype = 'application/json'
+    except Exception:
+        return response
+    return response
 
 
 def is_system_admin(user):
@@ -2229,6 +2367,7 @@ def set_workspace_user_extra_permissions(user_id, permissions_list, workspace_id
 PERMISSION_MATRIX_ROLE_CODES = {
     'owner': 'OWNER',
     'admin': 'ADMIN',
+    'team_leader': 'TEAM_LEADER',
     'member': 'MEMBER',
     'viewer': 'VIEWER',
 }
@@ -2236,6 +2375,7 @@ PERMISSION_MATRIX_ROLE_CODES = {
 PERMISSION_MATRIX_ROLE_LABELS = {
     'owner': 'Owner',
     'admin': 'Admin',
+    'team_leader': 'Team Leader',
     'member': 'Member',
     'viewer': 'Viewer',
 }
@@ -2253,7 +2393,7 @@ PERMISSION_MATRIX_MODULE_ACTIONS = {
 }
 
 PERMISSION_MATRIX_SCOPED_MODULES = {'listings', 'leads', 'tasks', 'contacts', 'loops'}
-PERMISSION_MATRIX_ALLOWED_SCOPES = {'own', 'workspace'}
+PERMISSION_MATRIX_ALLOWED_SCOPES = {'own', 'team', 'workspace'}
 
 
 def _default_permission_buckets_for_role(role_key):
@@ -2269,6 +2409,18 @@ def _default_permission_buckets_for_role(role_key):
             'create_data': 'all_members',
             'edit_data': 'all_members',
             'delete_data': 'admin_moderator',
+        }
+    if role == 'team_leader':
+        return {
+            'manage_members': 'deny',
+            'manage_roles': 'deny',
+            'manage_connections': 'deny',
+            'manage_settings': 'deny',
+            'delete_workspace': 'deny',
+            'view_data': 'all_members',
+            'create_data': 'all_members',
+            'edit_data': 'all_members',
+            'delete_data': 'deny',
         }
     if role == 'member':
         return {
@@ -2306,6 +2458,10 @@ def _default_module_caps_for_role(role_key, module):
         if role in ('owner', 'admin'):
             for action in actions:
                 caps[action] = True
+        elif role == 'team_leader':
+            for action in ('read', 'create', 'edit'):
+                if action in caps:
+                    caps[action] = True
         elif role == 'member':
             for action in ('read', 'create', 'edit'):
                 if action in caps:
@@ -2329,7 +2485,12 @@ def _default_module_caps_for_role(role_key, module):
                 caps[action] = True
 
     if module in PERMISSION_MATRIX_SCOPED_MODULES:
-        caps['scope'] = 'workspace' if role in ('owner', 'admin') else 'own'
+        if role in ('owner', 'admin'):
+            caps['scope'] = 'workspace'
+        elif role == 'team_leader' and module in ('listings', 'leads'):
+            caps['scope'] = 'team'
+        else:
+            caps['scope'] = 'own'
     return caps
 
 
@@ -2367,7 +2528,7 @@ def _ensure_workspace_permission_profiles(workspace_id):
                 description=f'Workspace {PERMISSION_MATRIX_ROLE_LABELS.get(role_key, role_key.title())} role profile',
                 is_default=(role_key == 'member'),
                 is_system=False,
-                priority={'owner': 100, 'admin': 90, 'member': 50, 'viewer': 10}.get(role_key, 0)
+                priority={'owner': 100, 'admin': 90, 'team_leader': 70, 'member': 50, 'viewer': 10}.get(role_key, 0)
             )
             role.set_permission_buckets(_default_permission_buckets_for_role(role_key))
             db.session.add(role)
@@ -2716,36 +2877,126 @@ def get_workspace_membership_for_user(user=None, workspace_id=None):
     return WorkspaceMember.query.filter_by(workspace_id=ws_id, user_id=user.id).first()
 
 
+def _normalize_scope_value(scope_value):
+    scope = str(scope_value or '').strip().lower()
+    if scope in ('workspace', 'team', 'own'):
+        return scope
+    if scope in ('true', '1'):
+        return 'workspace'
+    return 'own'
+
+
+def _get_workspace_member_user_ids(workspace_id):
+    if not workspace_id:
+        return set()
+    rows = db.session.query(WorkspaceMember.user_id).filter_by(workspace_id=workspace_id).all()
+    return {row[0] for row in rows if row and row[0]}
+
+
+def get_direct_team_member_ids(workspace_id, leader_user_id):
+    """Return direct report user IDs for a team leader in the workspace."""
+    if not workspace_id or not leader_user_id:
+        return set()
+    rows = db.session.query(WorkspaceMember.user_id).filter(
+        WorkspaceMember.workspace_id == workspace_id,
+        WorkspaceMember.team_leader_user_id == leader_user_id
+    ).all()
+    return {row[0] for row in rows if row and row[0] and row[0] != leader_user_id}
+
+
+def get_module_scope(user=None, workspace_id=None, module=None, action='read'):
+    """Resolve effective scope for a module/action. Returns own/team/workspace or None."""
+    user = user or getattr(g, 'user', None)
+    if not user:
+        return None
+    if is_system_admin(user):
+        return 'workspace'
+    ws_id = workspace_id or get_active_workspace_id()
+    if not ws_id or not module:
+        return None
+    from src.services.permissions import get_permission_service
+    service = get_permission_service()
+    caps = service.get_effective_module_capabilities(user, ws_id, module) or {}
+    if action and caps.get(action) is not True:
+        return None
+    return _normalize_scope_value(caps.get('scope', 'own'))
+
+
+def can_view_team_scope(user=None, workspace_id=None, module='leads'):
+    scope = get_module_scope(user=user, workspace_id=workspace_id, module=module, action='read')
+    return scope in ('team', 'workspace')
+
+
+def get_readable_user_ids_for_module(user=None, workspace_id=None, module=None):
+    """User IDs readable for a module according to effective scope."""
+    user = user or getattr(g, 'user', None)
+    if not user:
+        return set()
+    ws_id = workspace_id or get_active_workspace_id()
+    scope = get_module_scope(user=user, workspace_id=ws_id, module=module, action='read')
+    if not scope:
+        return set()
+    if scope == 'workspace':
+        return _get_workspace_member_user_ids(ws_id)
+    if scope == 'team':
+        ids = {user.id}
+        ids.update(get_direct_team_member_ids(ws_id, user.id))
+        return ids
+    return {user.id}
+
+
+def get_writable_user_ids_for_module(user=None, workspace_id=None, module=None, action='edit'):
+    """User IDs writable for a module. Team scope is read-only for subordinates."""
+    user = user or getattr(g, 'user', None)
+    if not user:
+        return set()
+    ws_id = workspace_id or get_active_workspace_id()
+    scope = get_module_scope(user=user, workspace_id=ws_id, module=module, action=action)
+    if not scope:
+        return set()
+    if scope == 'workspace':
+        return _get_workspace_member_user_ids(ws_id)
+    # For own/team scopes, writes are restricted to own records.
+    return {user.id}
+
+
 def workspace_user_can_manage_all_listings(user=None, workspace_id=None):
     """Can see/manage all workspace listings based on effective module scope."""
     user = user or getattr(g, 'user', None)
     if not user:
         return False
-    if is_system_admin(user):
-        return True
     ws_id = workspace_id or get_active_workspace_id()
     if not ws_id:
         return False
-    from src.services.permissions import get_permission_service
-    service = get_permission_service()
-    caps = service.get_effective_module_capabilities(user, ws_id, 'listings') or {}
-    if caps.get('read') is not True:
-        return False
-    scope = caps.get('scope', 'own')
-    return scope in (True, 'workspace')
+    scope = get_module_scope(user=user, workspace_id=ws_id, module='listings', action='read')
+    return scope == 'workspace'
 
 
-def visible_local_listing_query(workspace_id=None, user=None):
+def visible_local_listing_query(workspace_id=None, user=None, access='read'):
     """Listing query scoped to workspace and current user's row-level visibility."""
     ws_id = workspace_id or get_active_workspace_id()
     query = scope_query(LocalListing.query, ws_id)
     user = user or getattr(g, 'user', None)
     if not user:
         return query.filter(LocalListing.id == -1)
-    if workspace_user_can_manage_all_listings(user=user, workspace_id=ws_id):
+    if is_system_admin(user):
         return query
-    # Non-admin workspace users only see listings assigned to them.
-    return query.filter(LocalListing.assigned_to_id == user.id)
+    access_mode = 'write' if str(access or '').strip().lower() == 'write' else 'read'
+    action = 'edit' if access_mode == 'write' else 'read'
+    scope = get_module_scope(user=user, workspace_id=ws_id, module='listings', action=action)
+    if not scope:
+        return query.filter(LocalListing.id == -1)
+    if scope == 'workspace':
+        return query
+
+    allowed_user_ids = (
+        get_writable_user_ids_for_module(user=user, workspace_id=ws_id, module='listings', action='edit')
+        if access_mode == 'write'
+        else get_readable_user_ids_for_module(user=user, workspace_id=ws_id, module='listings')
+    )
+    if not allowed_user_ids:
+        return query.filter(LocalListing.id == -1)
+    return query.filter(LocalListing.assigned_to_id.in_(allowed_user_ids))
 
 
 def visible_folder_query(workspace_id=None, user=None):
@@ -2757,6 +3008,18 @@ def visible_folder_query(workspace_id=None, user=None):
         return query.filter(ListingFolder.id == -1)
     # Folder/category organization is per-user; folders are never shared.
     return query.filter(ListingFolder.owner_user_id == user.id)
+
+
+def get_visible_local_listing_or_status(listing_id, workspace_id=None, user=None, access='read'):
+    """Fetch local listing with visibility status: visible | hidden | missing."""
+    ws_id = workspace_id or get_active_workspace_id()
+    visible_listing = visible_local_listing_query(workspace_id=ws_id, user=user, access=access).filter_by(id=listing_id).first()
+    if visible_listing:
+        return visible_listing, 'visible'
+    existing = scope_query(LocalListing.query, ws_id).filter_by(id=listing_id).first()
+    if existing:
+        return None, 'hidden'
+    return None, 'missing'
 
 
 def get_visible_folder_or_404(folder_id, workspace_id=None, user=None):
@@ -2789,31 +3052,38 @@ def workspace_user_can_manage_all_leads(user=None, workspace_id=None):
     user = user or getattr(g, 'user', None)
     if not user:
         return False
-    if is_system_admin(user):
-        return True
     ws_id = workspace_id or get_active_workspace_id()
     if not ws_id:
         return False
-    from src.services.permissions import get_permission_service
-    service = get_permission_service()
-    caps = service.get_effective_module_capabilities(user, ws_id, 'leads') or {}
-    if caps.get('read') is not True:
-        return False
-    scope = caps.get('scope', 'own')
-    return scope in (True, 'workspace')
+    scope = get_module_scope(user=user, workspace_id=ws_id, module='leads', action='read')
+    return scope == 'workspace'
 
 
-def visible_lead_query(workspace_id=None, user=None):
+def visible_lead_query(workspace_id=None, user=None, access='read'):
     """Lead query scoped to workspace and current user's row-level visibility."""
     ws_id = workspace_id or get_active_workspace_id()
     query = scope_query(Lead.query, ws_id)
     user = user or getattr(g, 'user', None)
     if not user:
         return query.filter(Lead.id == -1)
-    if workspace_user_can_manage_all_leads(user=user, workspace_id=ws_id):
+    if is_system_admin(user):
         return query
-    # Non-admin workspace users only see leads assigned to them.
-    return query.filter(Lead.assigned_to_id == user.id)
+    access_mode = 'write' if str(access or '').strip().lower() == 'write' else 'read'
+    action = 'edit' if access_mode == 'write' else 'read'
+    scope = get_module_scope(user=user, workspace_id=ws_id, module='leads', action=action)
+    if not scope:
+        return query.filter(Lead.id == -1)
+    if scope == 'workspace':
+        return query
+
+    allowed_user_ids = (
+        get_writable_user_ids_for_module(user=user, workspace_id=ws_id, module='leads', action='edit')
+        if access_mode == 'write'
+        else get_readable_user_ids_for_module(user=user, workspace_id=ws_id, module='leads')
+    )
+    if not allowed_user_ids:
+        return query.filter(Lead.id == -1)
+    return query.filter(Lead.assigned_to_id.in_(allowed_user_ids))
 
 
 def resolve_leads_scope_request(workspace_id=None, user=None):
@@ -2825,14 +3095,17 @@ def resolve_leads_scope_request(workspace_id=None, user=None):
         requested_scope = 'my'
 
     can_manage_all = workspace_user_can_manage_all_leads(user=user, workspace_id=ws_id)
-    effective_scope = requested_scope if can_manage_all else 'my'
+    can_view_team_leads = can_view_team_scope(user=user, workspace_id=ws_id, module='leads')
+    effective_scope = requested_scope if can_view_team_leads else 'my'
+
+    readable_user_ids = get_readable_user_ids_for_module(user=user, workspace_id=ws_id, module='leads')
 
     raw_assigned_to_id = (request.args.get('assigned_to_id') or '').strip()
     assigned_to_id = None
     if effective_scope == 'team' and raw_assigned_to_id:
         assigned_to_id = _validate_assignee(ws_id, raw_assigned_to_id)
-        if not assigned_to_id:
-            raise ValueError('assigned_to_id must belong to a workspace member')
+        if not assigned_to_id or assigned_to_id not in readable_user_ids:
+            raise ValueError('assigned_to_id must belong to your readable team scope')
 
     tag_ids = _parse_tag_ids_query_param()
     if tag_ids:
@@ -2845,6 +3118,8 @@ def resolve_leads_scope_request(workspace_id=None, user=None):
         'assigned_to_id': assigned_to_id,
         'tag_ids': tag_ids,
         'can_manage_all': can_manage_all,
+        'can_view_team_leads': can_view_team_leads,
+        'readable_user_ids': readable_user_ids,
     }
 
 
@@ -2854,12 +3129,15 @@ def scoped_leads_query(workspace_id=None, user=None):
     user = user or getattr(g, 'user', None)
     scope_meta = resolve_leads_scope_request(workspace_id=ws_id, user=user)
 
-    query = visible_lead_query(workspace_id=ws_id, user=user)
+    query = visible_lead_query(workspace_id=ws_id, user=user, access='read')
     if scope_meta['effective_scope'] == 'my':
         query = query.filter(Lead.assigned_to_id == user.id)
     else:
         # Team scope only includes leads assigned to workspace members.
-        query = query.filter(Lead.assigned_to_id.isnot(None))
+        query = query.filter(
+            Lead.assigned_to_id.isnot(None),
+            Lead.assigned_to_id.in_(scope_meta['readable_user_ids'])
+        )
         if scope_meta['assigned_to_id']:
             query = query.filter(Lead.assigned_to_id == scope_meta['assigned_to_id'])
 
@@ -2879,10 +3157,10 @@ def scoped_leads_query(workspace_id=None, user=None):
     return query, scope_meta
 
 
-def get_visible_lead_or_404(lead_id, workspace_id=None, user=None):
+def get_visible_lead_or_404(lead_id, workspace_id=None, user=None, access='read'):
     """Fetch a lead through visibility rules (404 if hidden/missing)."""
     ws_id = workspace_id or get_active_workspace_id()
-    return visible_lead_query(workspace_id=ws_id, user=user).filter_by(id=lead_id).first_or_404()
+    return visible_lead_query(workspace_id=ws_id, user=user, access=access).filter_by(id=lead_id).first_or_404()
 
 
 def require_workspace_leads_admin(f):
@@ -3191,6 +3469,44 @@ def _validate_assignee(workspace_id, assignee_id):
     if not member:
         return None
     return assignee_id
+
+
+def _validate_team_leader_assignment(workspace_id, member_user_id, team_leader_user_id):
+    """Validate and normalize direct team leader assignment for a workspace member."""
+    if team_leader_user_id in (None, '', 'null'):
+        return None
+    try:
+        leader_user_id = int(team_leader_user_id)
+    except (TypeError, ValueError):
+        raise ValueError('team_leader_user_id must be a valid workspace member user id')
+
+    if member_user_id and int(member_user_id) == leader_user_id:
+        raise ValueError('team_leader_user_id cannot be the same as the member user')
+
+    leader_member = WorkspaceMember.query.filter_by(
+        workspace_id=workspace_id,
+        user_id=leader_user_id
+    ).first()
+    if not leader_member:
+        raise ValueError('team_leader_user_id must belong to an active workspace member')
+    if leader_member.role not in ('owner', 'admin', 'team_leader'):
+        raise ValueError('team leader must have role owner, admin, or team_leader')
+
+    leader_user = User.query.get(leader_user_id)
+    if not leader_user or not leader_user.is_active:
+        raise ValueError('team_leader_user_id must belong to an active user')
+
+    return leader_user_id
+
+
+def _clear_team_leader_references(workspace_id, leader_user_id):
+    """Clear direct-report links when a team leader is removed or demoted."""
+    if not workspace_id or not leader_user_id:
+        return 0
+    return WorkspaceMember.query.filter_by(
+        workspace_id=workspace_id,
+        team_leader_user_id=leader_user_id
+    ).update({'team_leader_user_id': None}, synchronize_session=False)
 
 
 def get_default_assigned_agent_email(workspace_id=None, user=None):
@@ -3844,12 +4160,15 @@ def handle_exception(e):
     # Check if it's an API request
     if request.path.startswith('/api/'):
         return jsonify({
+            'code': 'internal_error',
             'error': f'{type(e).__name__}: {str(e)}',
             'success': False
         }), 500
     
     # For non-API requests, show error page or redirect
-    flash(f'An error occurred: {str(e)}', 'error')
+    lang = getattr(g, 'ui_lang', DEFAULT_LANGUAGE)
+    base = i18n_translate('errors.internal_error', lang=lang, default='An error occurred')
+    flash(f'{base}: {str(e)}', 'error')
     return redirect(url_for('index'))
 
 
@@ -4446,12 +4765,14 @@ def login():
         
         if user and user.check_password(password):
             if not user.is_active:
-                flash('Your account has been deactivated. Contact an administrator.', 'error')
+                lang = resolve_ui_language(user=user, session_obj=session, request_obj=request)
+                flash(i18n_translate('flash.account_deactivated', lang=lang, default='Your account has been deactivated. Contact an administrator.'), 'error')
                 return render_template('login.html')
             
             # Log in the user
             session.clear()
             session['user_id'] = user.id
+            session['ui_lang'] = resolve_ui_language(user=user, session_obj=session, request_obj=request)
             if remember:
                 session.permanent = True
             
@@ -4459,7 +4780,8 @@ def login():
             user.last_login = datetime.utcnow()
             db.session.commit()
             
-            flash(f'Welcome back, {user.name}!', 'success')
+            lang = session.get('ui_lang', DEFAULT_LANGUAGE)
+            flash(i18n_translate('flash.welcome_back', lang=lang, default='Welcome back, {name}!', name=user.name), 'success')
             
             # Redirect to next page or index
             next_page = request.args.get('next')
@@ -4467,7 +4789,8 @@ def login():
                 return redirect(next_page)
             return redirect(url_for('index'))
         else:
-            flash('Invalid email or password.', 'error')
+            lang = resolve_ui_language(user=None, session_obj=session, request_obj=request)
+            flash(i18n_translate('flash.invalid_credentials', lang=lang, default='Invalid email or password.'), 'error')
     
     return render_template('login.html')
 
@@ -4475,8 +4798,9 @@ def login():
 @app.route('/logout')
 def logout():
     """Logout the user"""
+    lang = resolve_ui_language(user=getattr(g, 'user', None), session_obj=session, request_obj=request)
     session.clear()
-    flash('You have been logged out.', 'info')
+    flash(i18n_translate('flash.logged_out', lang=lang, default='You have been logged out.'), 'info')
     return redirect(url_for('login'))
 
 
@@ -4501,6 +4825,8 @@ def users_page():
             data['workspace_member_id'] = member.id
             data['workspace_role'] = member.role
             data['workspace_role_name'] = WorkspaceMember.ROLES.get(member.role, {}).get('name', member.role.title())
+            data['team_leader_user_id'] = member.team_leader_user_id
+            data['team_leader_name'] = member.team_leader.name if member.team_leader else None
         user_payloads.append(data)
     pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
     workspace = Workspace.query.get(ws_id)
@@ -5323,6 +5649,8 @@ def workspace_users(workspace_slug):
             data['workspace_member_id'] = member.id
             data['workspace_role'] = member.role
             data['workspace_role_name'] = WorkspaceMember.ROLES.get(member.role, {}).get('name', member.role.title())
+            data['team_leader_user_id'] = member.team_leader_user_id
+            data['team_leader_name'] = member.team_leader.name if member.team_leader else None
         user_payloads.append(data)
     pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
     workspace = Workspace.query.get(ws_id)
@@ -5581,9 +5909,11 @@ def api_add_workspace_member(workspace_id):
     if not can_manage_workspace_members(g.user, workspace_id):
         return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
-    data = request.get_json()
+    data = request.get_json() or {}
     user_id = data.get('user_id')
-    role = data.get('role', 'member')
+    role = str(data.get('role', 'member')).strip()
+    if role not in WorkspaceMember.ROLES:
+        return jsonify({'success': False, 'error': 'Invalid role'}), 400
     
     if not user_id:
         return jsonify({'success': False, 'error': 'User ID required'}), 400
@@ -5607,11 +5937,21 @@ def api_add_workspace_member(workspace_id):
     
     if existing:
         return jsonify({'success': False, 'error': 'User is already a member'}), 400
+
+    try:
+        team_leader_user_id = _validate_team_leader_assignment(
+            workspace_id=workspace_id,
+            member_user_id=user_id,
+            team_leader_user_id=data.get('team_leader_user_id')
+        ) if 'team_leader_user_id' in data else None
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
     
     member = WorkspaceMember(
         workspace_id=workspace_id,
         user_id=user_id,
         role=role,
+        team_leader_user_id=team_leader_user_id,
         invited_by_id=g.user.id
     )
     db.session.add(member)
@@ -5620,6 +5960,59 @@ def api_add_workspace_member(workspace_id):
     return jsonify({
         'success': True,
         'member': member.to_dict()
+    })
+
+
+@app.route('/api/workspaces/<int:workspace_id>/team-mapping/audit', methods=['GET'])
+@login_required
+def api_audit_workspace_team_mapping(workspace_id):
+    """Read-only audit for direct-team mappings in a workspace."""
+    workspace = Workspace.query.get_or_404(workspace_id)
+    if not can_manage_workspace_members(g.user, workspace_id):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
+
+    members_all = WorkspaceMember.query.filter_by(workspace_id=workspace_id).all()
+    members, _ = _filter_workspace_memberships_for_org(members_all)
+    eligible_leaders = [m for m in members if m.role in ('owner', 'admin', 'team_leader')]
+    reports_count_by_leader = {}
+    for member in members:
+        if member.team_leader_user_id:
+            reports_count_by_leader[member.team_leader_user_id] = reports_count_by_leader.get(member.team_leader_user_id, 0) + 1
+
+    members_without_team_leader = [
+        {
+            'member_id': member.id,
+            'user_id': member.user_id,
+            'name': member.user.name if member.user else None,
+            'email': member.user.email if member.user else None,
+            'role': member.role,
+        }
+        for member in members
+        if member.role not in ('owner', 'admin') and not member.team_leader_user_id
+    ]
+
+    leaders_without_reports = [
+        {
+            'member_id': leader.id,
+            'user_id': leader.user_id,
+            'name': leader.user.name if leader.user else None,
+            'email': leader.user.email if leader.user else None,
+            'role': leader.role,
+        }
+        for leader in eligible_leaders
+        if reports_count_by_leader.get(leader.user_id, 0) == 0
+    ]
+
+    return jsonify({
+        'success': True,
+        'workspace_id': workspace.id,
+        'workspace_slug': workspace.slug,
+        'members_without_team_leader': members_without_team_leader,
+        'leaders_without_reports': leaders_without_reports,
+        'summary': {
+            'members_without_team_leader': len(members_without_team_leader),
+            'leaders_without_reports': len(leaders_without_reports),
+        }
     })
 
 
@@ -5641,16 +6034,35 @@ def api_update_workspace_member(workspace_id, member_id):
         return jsonify({'success': False, 'error': 'System users cannot be managed as workspace members.'}), 400
     
     data = request.get_json() or {}
+    next_role = member.role
     if 'role' in data:
+        requested_role = str(data['role']).strip()
+        if requested_role not in WorkspaceMember.ROLES:
+            return jsonify({'success': False, 'error': 'Invalid role'}), 400
         # Prevent demoting the last owner
         if member.role == 'owner':
             owner_count = WorkspaceMember.query.filter_by(
                 workspace_id=workspace_id,
                 role='owner'
             ).count()
-            if owner_count <= 1 and data['role'] != 'owner':
+            if owner_count <= 1 and requested_role != 'owner':
                 return jsonify({'success': False, 'error': 'Cannot demote the last owner'}), 400
-        member.role = data['role']
+        next_role = requested_role
+
+    if 'team_leader_user_id' in data:
+        try:
+            member.team_leader_user_id = _validate_team_leader_assignment(
+                workspace_id=workspace_id,
+                member_user_id=member.user_id,
+                team_leader_user_id=data.get('team_leader_user_id')
+            )
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
+
+    previous_role = member.role
+    member.role = next_role
+    if previous_role != next_role and next_role not in ('owner', 'admin', 'team_leader'):
+        _clear_team_leader_references(workspace_id, member.user_id)
     
     db.session.commit()
     member_data = member.to_dict()
@@ -5685,6 +6097,9 @@ def api_remove_workspace_member(workspace_id, member_id):
         ).count()
         if owner_count <= 1:
             return jsonify({'success': False, 'error': 'Cannot remove the last owner'}), 400
+
+    if member.role in ('owner', 'admin', 'team_leader'):
+        _clear_team_leader_references(workspace_id, member.user_id)
     
     db.session.delete(member)
     db.session.commit()
@@ -6823,6 +7238,46 @@ def api_check_access():
     })
 
 
+@app.route('/api/i18n/<lang>', methods=['GET'])
+def api_i18n_payload(lang):
+    """Expose translation dictionary for client-side localization."""
+    normalized = lang if lang in SUPPORTED_LANGUAGES else DEFAULT_LANGUAGE
+    cache_key = f'i18n_payload:{normalized}:v1'
+    cached_payload = cache.get(cache_key)
+    if cached_payload:
+        return jsonify(cached_payload)
+
+    payload = {
+        'success': True,
+        'language': normalized,
+        'direction': i18n_direction(normalized),
+        'messages': i18n_dictionary(normalized),
+        'version': 'v1'
+    }
+    cache.set(cache_key, payload, timeout=3600)
+    return jsonify(payload)
+
+
+@app.route('/api/profile/language', methods=['POST'])
+@login_required
+def api_update_profile_language():
+    """Persist per-user UI language preference."""
+    data = request.get_json(silent=True) or {}
+    language = (data.get('language') or '').strip().lower()
+    if language not in SUPPORTED_LANGUAGES:
+        return api_error('invalid_language', status=400)
+
+    save_user_language(g.user, language)
+    session['ui_lang'] = language
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'language': language,
+        'direction': i18n_direction(language),
+    })
+
+
 @app.route('/profile', methods=['GET', 'POST'])
 @login_required
 def profile():
@@ -6836,13 +7291,13 @@ def profile():
         
         if new_password:
             if not g.user.check_password(current_password):
-                flash('Current password is incorrect.', 'error')
+                flash_i18n('flash.current_password_incorrect', category='error')
                 return redirect(url_for('profile'))
             g.user.set_password(new_password)
-            flash('Password updated successfully.', 'success')
+            flash_i18n('flash.password_updated', category='success')
         
         db.session.commit()
-        flash('Profile updated.', 'success')
+        flash_i18n('flash.profile_updated', category='success')
         return redirect(url_for('profile'))
     
     return render_template('profile.html')
@@ -7111,7 +7566,7 @@ def view_listing(listing_id):
     try:
         local_id = int(listing_id)
         ws_id = get_active_workspace_id()
-        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
+        local_listing, visibility_status = get_visible_local_listing_or_status(local_id, workspace_id=ws_id, access='read')
         if local_listing:
             listing_dict = local_listing.to_dict()
             # If synced to PF, fetch current PF state for display (best-effort)
@@ -7131,6 +7586,9 @@ def view_listing(listing_id):
                 except Exception:
                     listing_dict['pf_state_error'] = 'Unable to fetch PF state'
             return render_template('listing_detail.html', listing=listing_dict)
+        if visibility_status == 'hidden':
+            flash('Listing not found', 'error')
+            return redirect(url_for('listings'))
     except (ValueError, TypeError):
         pass  # Not an integer ID, try API
     
@@ -7158,7 +7616,7 @@ def edit_listing(listing_id):
     try:
         local_id = int(listing_id)
         ws_id = get_active_workspace_id()
-        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
+        local_listing, visibility_status = get_visible_local_listing_or_status(local_id, workspace_id=ws_id, access='write')
         if local_listing:
             # Pass the model object directly so template can use get_images()
             return render_template('listing_form.html', 
@@ -7168,6 +7626,9 @@ def edit_listing(listing_id):
                                  workspace_members=[m.user.to_dict() for m in members],
                                  default_assigned_agent_email=default_assigned_agent_email,
                                  default_assigned_to_id=None)
+        if visibility_status == 'hidden':
+            flash('Listing not found', 'error')
+            return redirect(url_for('listings'))
     except (ValueError, TypeError):
         pass  # Not an integer ID, try API
     
@@ -7265,6 +7726,39 @@ def api_pf_insights():
     
     listings = cache.get('listings', [])
     leads = cache.get('leads', [])
+
+    # Enforce row-level visibility for non-workspace-wide users by mapping PF data
+    # to visible local listings only.
+    if not workspace_user_can_manage_all_listings(workspace_id=ws_id):
+        visible_local_listings = visible_local_listing_query(ws_id, access='read').all()
+        visible_pf_ids = set()
+        visible_refs = set()
+        for local_listing in visible_local_listings:
+            pf_key = _normalize_listing_lookup_key(local_listing.pf_listing_id)
+            ref_key = _normalize_listing_lookup_key(local_listing.reference)
+            if pf_key:
+                visible_pf_ids.add(pf_key)
+            if ref_key:
+                visible_refs.add(ref_key)
+
+        def _pf_listing_is_visible(pf_listing):
+            if not isinstance(pf_listing, dict):
+                return False
+            pf_key = _normalize_listing_lookup_key(pf_listing.get('id'))
+            ref_key = _normalize_listing_lookup_key(pf_listing.get('reference'))
+            if pf_key and pf_key in visible_pf_ids:
+                return True
+            if ref_key and ref_key in visible_refs:
+                return True
+            return False
+
+        listings = [item for item in listings if _pf_listing_is_visible(item)]
+        scoped_pf_leads = []
+        for lead in leads:
+            listing_node = lead.get('listing') if isinstance(lead, dict) else None
+            if _pf_listing_is_visible(listing_node):
+                scoped_pf_leads.append(lead)
+        leads = scoped_pf_leads
     
     # Get cached location map (no API calls - just use what we have)
     location_map = get_cached_locations(workspace_id=ws_id)
@@ -8112,7 +8606,7 @@ def api_publish_listing(listing_id):
     # Check if this is a local listing ID (integer)
     try:
         local_id = int(listing_id)
-        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
+        local_listing, visibility_status = get_visible_local_listing_or_status(local_id, workspace_id=ws_id, access='write')
         if local_listing:
             publish_outcome = _publish_local_listing_to_pf(local_listing, client)
             if not publish_outcome.get('success'):
@@ -8149,6 +8643,11 @@ def api_publish_listing(listing_id):
                     flash(warning, 'warning')
             flash(f'Publish request submitted for listing {publish_outcome.get("pf_listing_id")}', 'success')
             return redirect(url_for('view_listing', listing_id=listing_id))
+        if visibility_status == 'hidden':
+            if prefers_json:
+                return jsonify({'success': False, 'error': 'Listing not found'}), 404
+            flash('Listing not found', 'error')
+            return redirect(url_for('listings'))
     except (ValueError, TypeError):
         pass
     
@@ -8169,7 +8668,7 @@ def api_unpublish_listing(listing_id):
     # Check if this is a local listing ID (integer)
     try:
         local_id = int(listing_id)
-        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
+        local_listing, visibility_status = get_visible_local_listing_or_status(local_id, workspace_id=ws_id, access='write')
         if local_listing and local_listing.pf_listing_id:
             # Use the PF listing ID instead
             client.unpublish_listing(local_listing.pf_listing_id)
@@ -8194,6 +8693,8 @@ def api_unpublish_listing(listing_id):
             })
         if local_listing and not local_listing.pf_listing_id:
             return jsonify({'success': False, 'error': 'Listing is not synced to PropertyFinder'}), 400
+        if visibility_status == 'hidden':
+            return jsonify({'success': False, 'error': 'Listing not found'}), 404
     except (ValueError, TypeError):
         pass
     
@@ -8639,7 +9140,7 @@ def update_listing_form(listing_id):
     try:
         local_id = int(listing_id)
         ws_id = get_active_workspace_id()
-        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
+        local_listing, visibility_status = get_visible_local_listing_or_status(local_id, workspace_id=ws_id, access='write')
         if local_listing:
             # Update local listing
             form = request.form
@@ -8733,6 +9234,9 @@ def update_listing_form(listing_id):
 
             flash('Listing updated successfully!', 'success')
             return redirect(url_for('view_listing', listing_id=listing_id))
+        if visibility_status == 'hidden':
+            flash('Listing not found', 'error')
+            return redirect(url_for('listings'))
     except (ValueError, TypeError):
         pass  # Not an integer ID, continue with PF listing
     
@@ -8766,7 +9270,7 @@ def duplicate_listing(listing_id):
     try:
         local_id = int(listing_id)
         ws_id = get_active_workspace_id()
-        original = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
+        original = visible_local_listing_query(ws_id, access='write').filter_by(id=local_id).first()
         
         if not original:
             flash('Listing not found', 'error')
@@ -8855,7 +9359,7 @@ def send_to_pf_draft(listing_id):
     try:
         local_id = int(listing_id)
         ws_id = get_active_workspace_id()
-        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
+        local_listing = visible_local_listing_query(ws_id, access='write').filter_by(id=local_id).first()
         
         if not local_listing:
             flash('Listing not found', 'error')
@@ -8967,7 +9471,7 @@ def publish_listing_form(listing_id):
     try:
         local_id = int(listing_id)
         ws_id = get_active_workspace_id()
-        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
+        local_listing, visibility_status = get_visible_local_listing_or_status(local_id, workspace_id=ws_id, access='write')
         if local_listing:
             client = get_client(workspace_id=ws_id)
             publish_outcome = _publish_local_listing_to_pf(local_listing, client)
@@ -8984,6 +9488,9 @@ def publish_listing_form(listing_id):
                     flash(warning, 'warning')
             flash(f'Publish request submitted for listing {publish_outcome.get("pf_listing_id")}', 'success')
             return redirect(url_for('view_listing', listing_id=listing_id))
+        if visibility_status == 'hidden':
+            flash('Listing not found', 'error')
+            return redirect(url_for('listings'))
     except (ValueError, TypeError):
         pass  # Not an integer ID, continue with PF listing
     
@@ -9004,7 +9511,7 @@ def unpublish_listing_form(listing_id):
     try:
         local_id = int(listing_id)
         ws_id = get_active_workspace_id()
-        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
+        local_listing, visibility_status = get_visible_local_listing_or_status(local_id, workspace_id=ws_id, access='write')
         if local_listing:
             if not local_listing.pf_listing_id:
                 flash('This listing is not published on PropertyFinder', 'warning')
@@ -9040,6 +9547,9 @@ def unpublish_listing_form(listing_id):
                 else:
                     flash('Unpublish request submitted. Status will update after PF confirms.', 'info')
             return redirect(url_for('view_listing', listing_id=listing_id))
+        if visibility_status == 'hidden':
+            flash('Listing not found', 'error')
+            return redirect(url_for('listings'))
     except (ValueError, TypeError):
         pass  # Not an integer ID, continue with PF listing
     
@@ -9060,7 +9570,7 @@ def sync_pf_status_form(listing_id):
     try:
         local_id = int(listing_id)
         ws_id = get_active_workspace_id()
-        local_listing = visible_local_listing_query(ws_id).filter_by(id=local_id).first()
+        local_listing = visible_local_listing_query(ws_id, access='write').filter_by(id=local_id).first()
         if not local_listing:
             flash('Listing not found', 'error')
             return redirect(request.referrer or url_for('listings'))
@@ -9240,7 +9750,7 @@ def api_local_get_listing(listing_id):
 def api_local_update_listing(listing_id):
     """Update a local listing"""
     ws_id = get_active_workspace_id()
-    listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first_or_404()
+    listing = visible_local_listing_query(ws_id, access='write').filter_by(id=listing_id).first_or_404()
     data = request.get_json()
     can_manage_all = workspace_user_can_manage_all_listings(workspace_id=ws_id)
     
@@ -9279,7 +9789,7 @@ def api_local_update_listing(listing_id):
 def api_local_delete_listing(listing_id):
     """Delete a local listing"""
     ws_id = get_active_workspace_id()
-    listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first_or_404()
+    listing = visible_local_listing_query(ws_id, access='write').filter_by(id=listing_id).first_or_404()
     db.session.delete(listing)
     db.session.commit()
 
@@ -9301,7 +9811,7 @@ def api_local_delete_listing(listing_id):
 def api_local_sync_pf_status(listing_id):
     """Sync local listing status with PropertyFinder state"""
     ws_id = get_active_workspace_id()
-    listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first_or_404()
+    listing = visible_local_listing_query(ws_id, access='write').filter_by(id=listing_id).first_or_404()
     client = get_client(workspace_id=ws_id)
     pf_listing_id = listing.pf_listing_id
     pf_listing = None
@@ -9410,7 +9920,7 @@ def api_local_bulk_update():
         return jsonify({'success': False, 'error': 'No updates provided'}), 400
 
     # Apply only to visible listings; admins can see all workspace listings.
-    visible_listings = visible_local_listing_query(ws_id).filter(LocalListing.id.in_(listing_ids)).all()
+    visible_listings = visible_local_listing_query(ws_id, access='write').filter(LocalListing.id.in_(listing_ids)).all()
     updated = 0
     for listing in visible_listings:
         for field, value in updates.items():
@@ -9707,6 +10217,70 @@ def _resolve_reminder_assignee_id(workspace_id, data, can_manage_all):
     return g.user.id
 
 
+def mask_phone_keep_last4(value):
+    text_value = str(value or '').strip()
+    if not text_value:
+        return text_value
+    digits = re.sub(r'[^0-9]', '', text_value)
+    if not digits:
+        return '****'
+    if len(digits) <= 4:
+        return '****'
+    return f"****{digits[-4:]}"
+
+
+def is_source_masked_value(value):
+    text_value = str(value or '').strip()
+    if not text_value:
+        return False
+    lowered = text_value.lower()
+    if '*' in text_value or 'x' in lowered:
+        return True
+    digits = re.sub(r'[^0-9]', '', text_value)
+    return bool(digits) and len(digits) <= 4
+
+
+def can_view_full_lead_contact(user, workspace_id, lead):
+    if not user or not lead:
+        return False
+    if is_system_admin(user):
+        return True
+    if workspace_user_can_manage_all_leads(user=user, workspace_id=workspace_id):
+        return True
+    if lead.assigned_to_id and lead.assigned_to_id == user.id:
+        return True
+
+    if lead.assigned_to_id and can_view_team_scope(user=user, workspace_id=workspace_id, module='leads'):
+        direct_ids = get_direct_team_member_ids(workspace_id, user.id)
+        if lead.assigned_to_id in direct_ids:
+            return True
+    return False
+
+
+def serialize_lead_for_response(lead, workspace_id=None, user=None):
+    """Serialize lead with contact visibility policy."""
+    ws_id = workspace_id or get_active_workspace_id()
+    user = user or getattr(g, 'user', None)
+    data = lead.to_dict()
+
+    if can_view_full_lead_contact(user, ws_id, lead):
+        data['contact_visibility'] = 'full'
+        return data
+
+    has_source_mask = False
+    for field in ('phone', 'whatsapp'):
+        value = data.get(field)
+        if not value:
+            continue
+        if is_source_masked_value(value):
+            has_source_mask = True
+            continue
+        data[field] = mask_phone_keep_last4(value)
+
+    data['contact_visibility'] = 'masked_source' if has_source_mask else 'masked_policy'
+    return data
+
+
 def _sync_lead_next_follow_up_from_reminders(lead, workspace_id):
     """Sync lead.next_follow_up to the nearest pending reminder due date."""
     next_due = LeadReminder.query.filter_by(
@@ -9759,8 +10333,12 @@ def api_get_leads_config():
         WorkspaceMember.workspace_id == ws_id,
         User.is_active == True
     ).all()
+    can_view_team_leads = can_view_team_scope(user=g.user, workspace_id=ws_id, module='leads')
+    readable_user_ids = get_readable_user_ids_for_module(user=g.user, workspace_id=ws_id, module='leads')
     team_members = []
     for member in members:
+        if readable_user_ids and member.user_id not in readable_user_ids:
+            continue
         team_members.append({
             'id': member.user_id,
             'name': member.user.name if member.user else None,
@@ -9776,7 +10354,8 @@ def api_get_leads_config():
         'sources': sources,
         'tags': tags,
         'team_members': team_members,
-        'can_manage_settings': can_manage_settings
+        'can_manage_settings': can_manage_settings,
+        'can_view_team_leads': can_view_team_leads,
     })
 
 
@@ -9940,13 +10519,14 @@ def api_get_leads():
     leads = query.all()
     return jsonify({
         'success': True,
-        'leads': [l.to_dict() for l in leads],
+        'leads': [serialize_lead_for_response(l, workspace_id=ws_id, user=g.user) for l in leads],
         'meta': {
             'requested_scope': scope_meta['requested_scope'],
             'effective_scope': scope_meta['effective_scope'],
             'assigned_to_id': scope_meta['assigned_to_id'],
             'tag_ids': scope_meta['tag_ids'],
             'can_manage_all': scope_meta['can_manage_all'],
+            'can_view_team_leads': scope_meta['can_view_team_leads'],
         }
     })
 
@@ -9997,7 +10577,7 @@ def api_create_lead():
     db.session.add(lead)
     db.session.commit()
     
-    return jsonify({'success': True, 'lead': lead.to_dict()})
+    return jsonify({'success': True, 'lead': serialize_lead_for_response(lead, workspace_id=ws_id, user=g.user)})
 
 
 @app.route('/api/leads/<int:lead_id>', methods=['GET'])
@@ -10006,8 +10586,8 @@ def api_create_lead():
 def api_get_lead(lead_id):
     """Get a single lead"""
     ws_id = get_active_workspace_id()
-    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
-    return jsonify({'lead': lead.to_dict()})
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id, access='read')
+    return jsonify({'lead': serialize_lead_for_response(lead, workspace_id=ws_id, user=g.user)})
 
 
 @app.route('/api/leads/<int:lead_id>', methods=['PATCH'])
@@ -10016,7 +10596,7 @@ def api_get_lead(lead_id):
 def api_update_lead(lead_id):
     """Update a lead"""
     ws_id = get_active_workspace_id()
-    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id, access='write')
     data = request.get_json() or {}
     can_manage_all = workspace_user_can_manage_all_leads(workspace_id=ws_id)
 
@@ -10054,7 +10634,7 @@ def api_update_lead(lead_id):
         lead.last_contact = datetime.utcnow()
     
     db.session.commit()
-    return jsonify({'success': True, 'lead': lead.to_dict()})
+    return jsonify({'success': True, 'lead': serialize_lead_for_response(lead, workspace_id=ws_id, user=g.user)})
 
 
 @app.route('/api/leads/<int:lead_id>', methods=['DELETE'])
@@ -10063,7 +10643,7 @@ def api_update_lead(lead_id):
 def api_delete_lead(lead_id):
     """Delete a lead"""
     ws_id = get_active_workspace_id()
-    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id, access='write')
     db.session.delete(lead)
     db.session.commit()
     return jsonify({'success': True})
@@ -10074,7 +10654,7 @@ def api_delete_lead(lead_id):
 @require_active_workspace
 def api_get_lead_reminders(lead_id):
     ws_id = get_active_workspace_id()
-    get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    get_visible_lead_or_404(lead_id, workspace_id=ws_id, access='read')
     reminders = LeadReminder.query.filter_by(
         workspace_id=ws_id,
         lead_id=lead_id
@@ -10094,7 +10674,7 @@ def api_get_lead_reminders(lead_id):
 @require_active_workspace
 def api_create_lead_reminder(lead_id):
     ws_id = get_active_workspace_id()
-    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id, access='write')
     data = request.get_json() or {}
 
     reminder_type = str(data.get('type') or '').strip().lower()
@@ -10146,7 +10726,7 @@ def api_create_lead_reminder(lead_id):
 @require_active_workspace
 def api_update_lead_reminder(lead_id, reminder_id):
     ws_id = get_active_workspace_id()
-    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id, access='write')
     reminder = _get_lead_reminder_or_404(lead.id, reminder_id, ws_id)
     data = request.get_json() or {}
 
@@ -10199,7 +10779,7 @@ def api_update_lead_reminder(lead_id, reminder_id):
 @require_active_workspace
 def api_complete_lead_reminder(lead_id, reminder_id):
     ws_id = get_active_workspace_id()
-    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id, access='write')
     reminder = _get_lead_reminder_or_404(lead.id, reminder_id, ws_id)
 
     reminder.status = LeadReminder.STATUS_COMPLETED
@@ -10220,7 +10800,7 @@ def api_complete_lead_reminder(lead_id, reminder_id):
 @require_active_workspace
 def api_cancel_lead_reminder(lead_id, reminder_id):
     ws_id = get_active_workspace_id()
-    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id, access='write')
     reminder = _get_lead_reminder_or_404(lead.id, reminder_id, ws_id)
 
     reminder.status = LeadReminder.STATUS_CANCELLED
@@ -10241,7 +10821,7 @@ def api_cancel_lead_reminder(lead_id, reminder_id):
 @require_active_workspace
 def api_delete_lead_reminder(lead_id, reminder_id):
     ws_id = get_active_workspace_id()
-    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id, access='write')
     reminder = _get_lead_reminder_or_404(lead.id, reminder_id, ws_id)
     db.session.delete(reminder)
     _sync_lead_next_follow_up_from_reminders(lead, ws_id)
@@ -10264,7 +10844,7 @@ def api_bulk_delete_leads():
         return jsonify({'success': False, 'error': 'No leads selected'}), 400
     
     ws_id = get_active_workspace_id()
-    visible_leads = visible_lead_query(ws_id).filter(Lead.id.in_(lead_ids)).all()
+    visible_leads = visible_lead_query(ws_id, access='write').filter(Lead.id.in_(lead_ids)).all()
     deleted = 0
     for lead in visible_leads:
         db.session.delete(lead)
@@ -10322,7 +10902,7 @@ def api_bulk_update_leads():
         return jsonify({'success': False, 'error': 'No updates provided'}), 400
     
     updated = 0
-    visible_leads = visible_lead_query(ws_id).filter(Lead.id.in_(lead_ids)).all()
+    visible_leads = visible_lead_query(ws_id, access='write').filter(Lead.id.in_(lead_ids)).all()
     for lead in visible_leads:
         for field, value in updates.items():
             setattr(lead, field, value)
@@ -10385,7 +10965,7 @@ def api_get_lead_comments(lead_id):
     try:
         from werkzeug.exceptions import HTTPException
         ws_id = get_active_workspace_id()
-        lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+        lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id, access='read')
         comments = LeadComment.query.filter_by(lead_id=lead_id).order_by(LeadComment.created_at.desc()).all()
         return jsonify({'comments': [c.to_dict() for c in comments]})
     except HTTPException:
@@ -10401,7 +10981,7 @@ def api_get_lead_comments(lead_id):
 def api_add_lead_comment(lead_id):
     """Add a comment to a lead"""
     ws_id = get_active_workspace_id()
-    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id, access='write')
     data = request.get_json() or {}
     
     content = data.get('content', '').strip()
@@ -10425,7 +11005,7 @@ def api_add_lead_comment(lead_id):
 def api_delete_lead_comment(lead_id, comment_id):
     """Delete a comment from a lead"""
     ws_id = get_active_workspace_id()
-    get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+    get_visible_lead_or_404(lead_id, workspace_id=ws_id, access='write')
     comment = LeadComment.query.filter_by(id=comment_id, lead_id=lead_id).first_or_404()
     
     # Only allow deletion by comment author or admin
@@ -10738,7 +11318,7 @@ def api_create_contact():
         full_phone = country_code + phone.lstrip('0')
     
     if data.get('lead_id'):
-        lead = visible_lead_query(ws_id).filter_by(id=data.get('lead_id')).first()
+        lead = visible_lead_query(ws_id, access='write').filter_by(id=data.get('lead_id')).first()
         if not lead:
             return jsonify({'error': 'Lead not found'}), 404
     
@@ -10823,7 +11403,7 @@ def api_create_contact_from_lead(lead_id):
     try:
         from werkzeug.exceptions import HTTPException
         ws_id = get_active_workspace_id()
-        lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id)
+        lead = get_visible_lead_or_404(lead_id, workspace_id=ws_id, access='write')
         
         # Check if contact already exists with same phone
         phone = lead.phone or lead.whatsapp or ''
@@ -12274,7 +12854,7 @@ def api_process_image_with_settings():
         source_url = (data.get('source_url') or data.get('url') or '').strip()
         ws_id = get_active_workspace_id()
         if listing_id:
-            listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first()
+            listing = visible_local_listing_query(ws_id, access='write').filter_by(id=listing_id).first()
             if not listing:
                 return jsonify({'error': 'Listing not found'}), 404
         image_bytes = None
@@ -12500,7 +13080,7 @@ def api_upload_image():
         ws_id = get_active_workspace_id()
         listing = None
         if listing_id:
-            listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first()
+            listing = visible_local_listing_query(ws_id, access='write').filter_by(id=listing_id).first()
             if not listing:
                 return jsonify({'error': 'Listing not found'}), 404
         
@@ -12734,7 +13314,7 @@ def api_delete_folder(folder_id):
     folder = get_visible_folder_or_404(folder_id, workspace_id=ws_id)
     
     # Move all listings in this folder to uncategorized
-    visible_local_listing_query(ws_id).filter_by(folder_id=folder_id).update({'folder_id': None}, synchronize_session=False)
+    visible_local_listing_query(ws_id, access='write').filter_by(folder_id=folder_id).update({'folder_id': None}, synchronize_session=False)
     
     db.session.delete(folder)
     db.session.commit()
@@ -12762,7 +13342,7 @@ def api_move_listings_to_folder():
             return jsonify({'error': 'Folder not found'}), 404
     
     # Update listings
-    updated = visible_local_listing_query(ws_id).filter(
+    updated = visible_local_listing_query(ws_id, access='write').filter(
         LocalListing.id.in_(listing_ids),
     ).update(
         {'folder_id': folder_id},
@@ -13300,7 +13880,7 @@ def api_assign_images_to_listing(listing_id):
     import uuid
     
     ws_id = get_active_workspace_id()
-    listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first_or_404()
+    listing = visible_local_listing_query(ws_id, access='write').filter_by(id=listing_id).first_or_404()
     data = request.json
     
     if not data or 'images' not in data:
@@ -13428,7 +14008,7 @@ def api_assign_images_to_listing(listing_id):
 def api_delete_listing_images(listing_id):
     """Delete images from a listing"""
     ws_id = get_active_workspace_id()
-    listing = visible_local_listing_query(ws_id).filter_by(id=listing_id).first_or_404()
+    listing = visible_local_listing_query(ws_id, access='write').filter_by(id=listing_id).first_or_404()
     data = request.json
     
     images_to_delete = data.get('images', [])  # List of image paths to delete

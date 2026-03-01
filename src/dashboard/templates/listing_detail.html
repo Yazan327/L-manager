@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block title %}{{ listing.title.en if listing.title is mapping else (listing.title_en or listing.title or 'Listing') }} - L-Manager{% endblock %}
-{% block page_title %}Listing Details{% endblock %}
+{% block page_title %}{{ t('listings.details', default='Listing Details') }}{% endblock %}
 
 {% block content %}
 <div class="max-w-4xl">

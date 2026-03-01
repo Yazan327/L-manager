@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}System Administration - L-Manager{% endblock %}
-{% block page_title %}System Administration{% endblock %}
+{% block title %}{{ t('system.administration', default='System Administration') }} - L-Manager{% endblock %}
+{% block page_title %}{{ t('system.administration', default='System Administration') }}{% endblock %}
 
 {% block content %}
 <div x-data="systemAdminManager()" x-init="init()" class="max-w-7xl mx-auto">
@@ -622,7 +622,8 @@ function systemAdminManager() {
         
         formatDate(dateStr) {
             if (!dateStr) return '-';
-            return new Date(dateStr).toLocaleString();
+            const locale = (window.I18N && window.I18N.lang === 'ar') ? 'ar-AE-u-nu-latn' : 'en-AE';
+            return new Date(dateStr).toLocaleString(locale);
         }
     };
 }

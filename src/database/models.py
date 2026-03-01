@@ -71,6 +71,7 @@ class User(db.Model):
     password_hash = db.Column(db.String(256), nullable=False)
     name = db.Column(db.String(100), nullable=False, index=True)
     role = db.Column(db.String(20), default='user')  # admin, user (admin has all permissions)
+    preferred_language = db.Column(db.String(5), nullable=False, default='en')
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_login = db.Column(db.DateTime)
@@ -319,6 +320,7 @@ class User(db.Model):
             'name': self.name,
             'role': self.role,
             'role_name': self.ROLES.get(self.role, {}).get('name', 'User'),
+            'preferred_language': self.preferred_language or 'en',
             'permissions': self.get_permissions(),
             'section_permissions': self.get_section_permissions(),
             'accessible_sections': self.get_accessible_sections(),
@@ -423,24 +425,28 @@ class WorkspaceMember(db.Model):
         db.UniqueConstraint('workspace_id', 'user_id', name='uq_workspace_user'),
         db.Index('idx_workspace_members_user', 'user_id'),
         db.Index('idx_workspace_members_workspace', 'workspace_id'),
+        db.Index('idx_workspace_members_team_leader', 'team_leader_user_id'),
     )
     
     id = db.Column(db.Integer, primary_key=True)
     workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id'), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    role = db.Column(db.String(20), default='member')  # owner, admin, member, viewer
+    role = db.Column(db.String(20), default='member')  # owner, admin, team_leader, member, viewer
     joined_at = db.Column(db.DateTime, default=datetime.utcnow)
     invited_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    team_leader_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     
     # Relationships
     workspace = db.relationship('Workspace', back_populates='members')
     user = db.relationship('User', foreign_keys=[user_id])
     invited_by = db.relationship('User', foreign_keys=[invited_by_id])
+    team_leader = db.relationship('User', foreign_keys=[team_leader_user_id])
     
     # Role definitions
     ROLES = {
         'owner': {'name': 'Owner', 'description': 'Full control, can delete workspace'},
         'admin': {'name': 'Admin', 'description': 'Manage members and connections'},
+        'team_leader': {'name': 'Team Leader', 'description': 'Can view team records and manage own records'},
         'member': {'name': 'Member', 'description': 'Full access to workspace data'},
         'viewer': {'name': 'Viewer', 'description': 'Read-only access'}
     }
@@ -452,7 +458,7 @@ class WorkspaceMember(db.Model):
         return self.role in ('owner', 'admin')
     
     def can_edit_data(self):
-        return self.role in ('owner', 'admin', 'member')
+        return self.role in ('owner', 'admin', 'team_leader', 'member')
     
     def can_view_data(self):
         return True
@@ -466,6 +472,8 @@ class WorkspaceMember(db.Model):
             'user_email': self.user.email if self.user else None,
             'role': self.role,
             'role_name': self.ROLES.get(self.role, {}).get('name', 'Member'),
+            'team_leader_user_id': self.team_leader_user_id,
+            'team_leader_name': self.team_leader.name if self.team_leader else None,
             'joined_at': self.joined_at.isoformat() if self.joined_at else None,
             'can_manage_members': self.can_manage_members(),
             'can_manage_connections': self.can_manage_connections(),

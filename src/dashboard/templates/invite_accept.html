@@ -1,10 +1,13 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ ui_lang|default('en') }}" dir="{{ ui_dir|default('ltr') }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Accept Invite - L-Manager</title>
+    <title>{{ t('auth.accept_invite_title', default='Accept Invite - L-Manager') }}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+    {% if is_rtl %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/rtl.css') }}">
+    {% endif %}
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body class="bg-gradient-to-br from-indigo-600 to-purple-700 min-h-screen flex items-center justify-center px-4">
@@ -14,7 +17,7 @@
                 <i class="fas fa-user-plus text-indigo-600 text-2xl"></i>
             </div>
             <h1 class="text-3xl font-bold text-white">L-Manager</h1>
-            <p class="text-indigo-200 mt-2">Join your workspace</p>
+            <p class="text-indigo-200 mt-2">{{ t('auth.join_workspace', default='Join your workspace') }}</p>
         </div>
 
         <div class="bg-white rounded-2xl shadow-2xl p-8">
@@ -22,51 +25,51 @@
             <div class="mb-4 p-4 rounded-lg bg-red-100 text-red-700">
                 <div class="flex items-center">
                     <i class="fas fa-exclamation-circle mr-2"></i>
-                    {{ error }}
+                    {{ localize_message(error) }}
                 </div>
             </div>
             {% endif %}
 
             {% if existing_user %}
-                <p class="text-sm text-gray-700 mb-4">An account with this email already exists. Please log in to accept the invite.</p>
+                <p class="text-sm text-gray-700 mb-4">{{ localize_message('An account with this email already exists. Please log in to accept the invite.') }}</p>
                 <a href="{{ login_next }}" class="w-full inline-flex items-center justify-center bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700">
-                    <i class="fas fa-sign-in-alt mr-2"></i>Go to Login
+                    <i class="fas fa-sign-in-alt mr-2"></i>{{ t('auth.go_to_login', default='Go to Login') }}
                 </a>
             {% elif invite %}
                 <div class="mb-4 text-sm text-gray-700">
-                    You are invited to join
-                    <span class="font-semibold">{{ workspace.name if workspace else 'a workspace' }}</span>.
+                    {{ t('auth.invited_join', default='You are invited to join') }}
+                    <span class="font-semibold">{{ workspace.name if workspace else t('auth.a_workspace', default='a workspace') }}</span>.
                 </div>
                 <form method="POST" class="space-y-5">
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">{{ t('auth.email', default='Email') }}</label>
                         <input type="email" value="{{ invite.email }}" readonly
                                class="w-full border border-gray-300 rounded-lg px-4 py-2 bg-gray-50">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">{{ t('auth.full_name', default='Full Name') }}</label>
                         <input type="text" name="name" required
                                class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
-                               placeholder="Your name">
+                               placeholder="{{ t('auth.your_name', default='Your name') }}">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">{{ t('auth.password', default='Password') }}</label>
                         <input type="password" name="password" required minlength="6"
                                class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500"
-                               placeholder="Create a password">
+                               placeholder="{{ t('auth.create_password', default='Create a password') }}">
                     </div>
                     <button type="submit" class="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700">
-                        <i class="fas fa-check mr-2"></i>Join Workspace
+                        <i class="fas fa-check mr-2"></i>{{ t('auth.join_workspace_button', default='Join Workspace') }}
                     </button>
                 </form>
             {% else %}
-                <p class="text-sm text-gray-700">Invite not found.</p>
+                <p class="text-sm text-gray-700">{{ t('auth.invite_not_found', default='Invite not found.') }}</p>
             {% endif %}
         </div>
 
         <p class="text-center text-indigo-200 text-sm mt-6">
             <i class="fas fa-shield-alt mr-1"></i>
-            Secure access powered by L-Manager
+            {{ t('auth.secure_access', default='Secure access powered by L-Manager') }}
         </p>
     </div>
 </body>

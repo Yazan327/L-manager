@@ -1,10 +1,13 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ ui_lang|default('en') }}" dir="{{ ui_dir|default('ltr') }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - L-Manager</title>
+    <title>{{ t('auth.login_title', default='Login - L-Manager') }}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+    {% if is_rtl %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/rtl.css') }}">
+    {% endif %}
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body class="bg-gradient-to-br from-indigo-600 to-purple-700 min-h-screen flex items-center justify-center px-4">
@@ -15,7 +18,7 @@
                 <i class="fas fa-building text-indigo-600 text-2xl"></i>
             </div>
             <h1 class="text-3xl font-bold text-white">L-Manager</h1>
-            <p class="text-indigo-200 mt-2">Sign in to manage your listings</p>
+            <p class="text-indigo-200 mt-2">{{ t('auth.sign_in_manage_listings', default='Sign in to manage your listings') }}</p>
         </div>
         
         <!-- Login Card -->
@@ -27,7 +30,7 @@
                         <div class="mb-4 p-4 rounded-lg {% if category == 'error' %}bg-red-100 text-red-700{% elif category == 'success' %}bg-green-100 text-green-700{% elif category == 'warning' %}bg-yellow-100 text-yellow-700{% else %}bg-blue-100 text-blue-700{% endif %}">
                             <div class="flex items-center">
                                 <i class="fas {% if category == 'error' %}fa-exclamation-circle{% elif category == 'success' %}fa-check-circle{% elif category == 'warning' %}fa-exclamation-triangle{% else %}fa-info-circle{% endif %} mr-2"></i>
-                                {{ message }}
+                                {{ localize_message(message) }}
                             </div>
                         </div>
                     {% endfor %}
@@ -38,7 +41,7 @@
                 <!-- Email -->
                 <div>
                     <label for="email" class="block text-sm font-medium text-gray-700 mb-2">
-                        Email Address
+                        {{ t('auth.email_address', default='Email Address') }}
                     </label>
                     <div class="relative">
                         <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -53,7 +56,7 @@
                 <!-- Password -->
                 <div>
                     <label for="password" class="block text-sm font-medium text-gray-700 mb-2">
-                        Password
+                        {{ t('auth.password', default='Password') }}
                     </label>
                     <div class="relative">
                         <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -69,14 +72,14 @@
                 <div class="flex items-center justify-between">
                     <label class="flex items-center">
                         <input type="checkbox" name="remember" class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
-                        <span class="ml-2 text-sm text-gray-600">Remember me</span>
+                        <span class="ml-2 text-sm text-gray-600">{{ t('auth.remember_me', default='Remember me') }}</span>
                     </label>
                 </div>
                 
                 <!-- Submit Button -->
                 <button type="submit" 
                         class="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 focus:ring-4 focus:ring-indigo-300 transition transform hover:scale-[1.02]">
-                    <i class="fas fa-sign-in-alt mr-2"></i>Sign In
+                    <i class="fas fa-sign-in-alt mr-2"></i>{{ t('auth.sign_in', default='Sign In') }}
                 </button>
             </form>
         </div>
@@ -84,7 +87,7 @@
         <!-- Footer -->
         <p class="text-center text-indigo-200 text-sm mt-6">
             <i class="fas fa-shield-alt mr-1"></i>
-            Secure login powered by L-Manager
+            {{ t('auth.secure_login', default='Secure login powered by L-Manager') }}
         </p>
     </div>
 </body>

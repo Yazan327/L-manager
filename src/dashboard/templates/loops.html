@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}Loops - L-Manager{% endblock %}
-{% block page_title %}Listing Loops{% endblock %}
+{% block title %}{{ t('common.loops', default='Loops') }} - L-Manager{% endblock %}
+{% block page_title %}{{ t('loops.listing_loops', default='Listing Loops') }}{% endblock %}
 
 {% block content %}
 <div x-data="loopsManager()" x-init="init()" class="space-y-6">
@@ -505,7 +505,7 @@
                                     </div>
                                 </div>
                                 <div class="text-sm text-gray-500">
-                                    <span x-text="new Date(log.executed_at).toLocaleString()"></span>
+                                    <span x-text="new Date(log.executed_at).toLocaleString((window.I18N && window.I18N.lang === 'ar') ? 'ar-AE-u-nu-latn' : 'en-AE')"></span>
                                     <span class="ml-2" x-text="log.duration_ms + 'ms'"></span>
                                 </div>
                             </div>
@@ -540,7 +540,7 @@
                                           :class="dup.status === 'published' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'"
                                           x-text="dup.status">
                                     </span>
-                                    <span class="text-sm text-gray-500" x-text="new Date(dup.created_at).toLocaleString()"></span>
+                                    <span class="text-sm text-gray-500" x-text="new Date(dup.created_at).toLocaleString((window.I18N && window.I18N.lang === 'ar') ? 'ar-AE-u-nu-latn' : 'en-AE')"></span>
                                 </div>
                             </div>
                         </template>
@@ -876,7 +876,8 @@ function loopsManager() {
                     normalized += 'Z';
                 }
                 const date = new Date(normalized);
-                return new Intl.DateTimeFormat('en-AE', {
+                const locale = (window.I18N && window.I18N.lang === 'ar') ? 'ar-AE-u-nu-latn' : 'en-AE';
+                return new Intl.DateTimeFormat(locale, {
                     timeZone: tzName || 'Asia/Dubai',
                     year: 'numeric',
                     month: 'short',
@@ -886,7 +887,7 @@ function loopsManager() {
                 }).format(date);
             } catch (e) {
                 try {
-                    return new Date(dateStr).toLocaleString();
+                    return new Date(dateStr).toLocaleString((window.I18N && window.I18N.lang === 'ar') ? 'ar-AE-u-nu-latn' : 'en-AE');
                 } catch {
                     return dateStr;
                 }

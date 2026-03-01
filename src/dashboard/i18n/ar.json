@@ -1,0 +1,185 @@
+{
+  "meta": {
+    "app_name": "إل-مانجر"
+  },
+  "common": {
+    "dashboard": "لوحة التحكم",
+    "listings": "العقارات",
+    "new_listing": "إضافة عقار",
+    "bulk_upload": "رفع جماعي",
+    "image_editor": "محرر الصور",
+    "loops": "الحلقات",
+    "insights": "التحليلات",
+    "leads": "العملاء المحتملون",
+    "tasks": "المهام",
+    "users": "المستخدمون",
+    "settings": "الإعدادات",
+    "workspaces": "مساحات العمل",
+    "permissions": "الصلاحيات",
+    "system_admin": "إدارة النظام",
+    "connected": "متصل",
+    "profile": "ملفي الشخصي",
+    "sign_out": "تسجيل الخروج",
+    "english": "الإنجليزية",
+    "arabic": "العربية",
+    "view_all": "عرض الكل",
+    "actions": "الإجراءات",
+    "reference": "المرجع",
+    "title": "العنوان",
+    "type": "النوع",
+    "beds": "غرف النوم",
+    "size": "المساحة",
+    "location": "الموقع",
+    "price": "السعر",
+    "status": "الحالة",
+    "never": "أبدًا",
+    "today": "اليوم",
+    "not_available": "غير متاح",
+    "no_data": "لا توجد بيانات",
+    "cancel": "إلغاء",
+    "save": "حفظ",
+    "create": "إنشاء",
+    "update": "تحديث",
+    "delete": "حذف",
+    "search": "بحث",
+    "all": "الكل",
+    "language": "اللغة"
+  },
+  "listings": {
+    "new": "جديد",
+    "edit": "تعديل",
+    "edit_listing": "تعديل العقار",
+    "create_new_listing": "إنشاء عقار جديد",
+    "details": "تفاصيل العقار"
+  },
+  "users": {
+    "management": "إدارة المستخدمين"
+  },
+  "loops": {
+    "listing_loops": "حلقات العقارات"
+  },
+  "workspaces": {
+    "administration": "إدارة مساحة العمل"
+  },
+  "system": {
+    "administration": "إدارة النظام"
+  },
+  "connections": {
+    "center": "مركز الاتصالات"
+  },
+  "permissions": {
+    "center": "مركز الصلاحيات"
+  },
+  "auth_page": {
+    "api_configuration": "إعدادات الواجهة البرمجية",
+    "pf_api_configuration": "إعدادات واجهة بروبرتي فايندر"
+  },
+  "storage": {
+    "title": "التخزين",
+    "management": "إدارة التخزين"
+  },
+  "nav": {
+    "pf_connect": "ربط بروبرتي فايندر",
+    "exit_workspace": "الخروج من مساحة العمل"
+  },
+  "auth": {
+    "login_title": "تسجيل الدخول - إل-مانجر",
+    "sign_in_manage_listings": "سجّل الدخول لإدارة عقاراتك",
+    "email_address": "البريد الإلكتروني",
+    "password": "كلمة المرور",
+    "remember_me": "تذكرني",
+    "sign_in": "تسجيل الدخول",
+    "secure_login": "تسجيل دخول آمن عبر إل-مانجر",
+    "accept_invite_title": "قبول الدعوة - إل-مانجر",
+    "join_workspace": "انضم إلى مساحة العمل",
+    "go_to_login": "الذهاب لتسجيل الدخول",
+    "invited_join": "تمت دعوتك للانضمام إلى",
+    "a_workspace": "مساحة عمل",
+    "email": "البريد الإلكتروني",
+    "full_name": "الاسم الكامل",
+    "your_name": "اسمك",
+    "create_password": "أنشئ كلمة مرور",
+    "join_workspace_button": "الانضمام لمساحة العمل",
+    "invite_not_found": "الدعوة غير موجودة.",
+    "secure_access": "وصول آمن عبر إل-مانجر",
+    "reset_password_title": "إعادة تعيين كلمة المرور - إل-مانجر",
+    "reset_password_subtitle": "أعد تعيين كلمة المرور",
+    "new_password": "كلمة المرور الجديدة",
+    "enter_new_password": "أدخل كلمة المرور الجديدة",
+    "update_password": "تحديث كلمة المرور",
+    "secure_reset": "إعادة تعيين آمنة عبر إل-مانجر"
+  },
+    "dashboard": {
+    "total_listings": "إجمالي العقارات",
+    "published": "منشور",
+    "drafts": "مسودات",
+    "views_today": "المشاهدات اليوم",
+    "pf_credit_balance": "رصيد بروبرتي فايندر",
+    "quick_actions": "إجراءات سريعة",
+    "analytics": "التحليلات",
+    "api_status": "حالة الواجهة البرمجية",
+    "connection": "الاتصال",
+    "connected": "متصل",
+    "disconnected": "غير متصل",
+    "api_token": "رمز الواجهة",
+    "configured": "مُعد",
+    "not_set": "غير مُعد",
+    "last_sync": "آخر مزامنة",
+    "recent_listings": "أحدث العقارات",
+    "studio": "استوديو",
+    "untitled": "بدون عنوان",
+    "no_listings_found": "لا توجد عقارات",
+    "create_first_listing": "أنشئ أول عقار"
+  },
+  "errors": {
+    "permission_denied": "ليس لديك صلاحية.",
+    "invalid_language": "لغة غير صالحة. استخدم en أو ar.",
+    "internal_error": "حدث خطأ داخلي في الخادم.",
+    "not_found": "غير موجود."
+  },
+  "flash": {
+    "session_expired": "انتهت جلستك. الرجاء تسجيل الدخول مرة أخرى.",
+    "please_login": "يرجى تسجيل الدخول للوصول إلى هذه الصفحة.",
+    "logged_out": "تم تسجيل خروجك.",
+    "welcome_back": "مرحبًا بعودتك، {name}!",
+    "invalid_credentials": "البريد الإلكتروني أو كلمة المرور غير صحيحة.",
+    "account_deactivated": "تم تعطيل حسابك. تواصل مع المسؤول.",
+    "profile_updated": "تم تحديث الملف الشخصي.",
+    "password_updated": "تم تحديث كلمة المرور بنجاح.",
+    "current_password_incorrect": "كلمة المرور الحالية غير صحيحة."
+  },
+  "legacy_messages": {
+    "Permission denied": { "code": "permission_denied", "text": "تم رفض الصلاحية" },
+    "Listing not found": { "code": "listing_not_found", "text": "العقار غير موجود" },
+    "Lead not found": { "code": "lead_not_found", "text": "العميل المحتمل غير موجود" },
+    "No files specified": { "code": "files_missing", "text": "لم يتم تحديد ملفات" },
+    "No data provided": { "code": "payload_missing", "text": "لم يتم إرسال بيانات" },
+    "No file provided": { "code": "file_missing", "text": "لم يتم إرسال ملف" },
+    "No file selected": { "code": "file_missing", "text": "لم يتم اختيار ملف" },
+    "No images provided": { "code": "images_missing", "text": "لم يتم إرسال صور" },
+    "Invalid role": { "code": "invalid_role", "text": "الدور غير صالح" },
+    "Invalid token": { "code": "invalid_token", "text": "الرمز غير صالح" },
+    "User not found": { "code": "user_not_found", "text": "المستخدم غير موجود" },
+    "Folder not found": { "code": "folder_not_found", "text": "المجلد غير موجود" },
+    "Name is required": { "code": "name_required", "text": "الاسم مطلوب" },
+    "Email is required": { "code": "email_required", "text": "البريد الإلكتروني مطلوب" },
+    "Password is required.": { "code": "password_required", "text": "كلمة المرور مطلوبة." },
+    "Invalid email or password.": { "code": "invalid_credentials", "text": "البريد الإلكتروني أو كلمة المرور غير صحيحة." },
+    "Please log in to access this page.": { "code": "auth_required", "text": "يرجى تسجيل الدخول للوصول إلى هذه الصفحة." },
+    "Your session has expired. Please log in again.": { "code": "session_expired", "text": "انتهت جلستك. الرجاء تسجيل الدخول مرة أخرى." },
+    "You have been logged out.": { "code": "logged_out", "text": "تم تسجيل خروجك." },
+    "You do not have permission to access this feature.": { "code": "permission_denied", "text": "ليس لديك صلاحية للوصول إلى هذه الميزة." },
+    "No active workspace is available for your account. Please contact your administrator.": {
+      "code": "workspace_missing",
+      "text": "لا توجد مساحة عمل نشطة لحسابك. يرجى التواصل مع مدير النظام."
+    },
+    "Invalid role selected.": { "code": "invalid_role", "text": "تم اختيار دور غير صالح." },
+    "User is already a member of this workspace": { "code": "member_exists", "text": "المستخدم عضو بالفعل في مساحة العمل هذه" },
+    "An account with this email already exists. Please log in to accept the invite.": {
+      "code": "invite_existing_account",
+      "text": "يوجد حساب بهذا البريد الإلكتروني. يرجى تسجيل الدخول لقبول الدعوة."
+    },
+    "Page not found": { "code": "not_found", "text": "الصفحة غير موجودة" },
+    "NotFound: 404 Not Found": { "code": "not_found", "text": "غير موجود: 404" }
+  }
+}

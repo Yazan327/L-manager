@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block title %}Connection Center - {{ workspace.name }} - L-Manager{% endblock %}
-{% block page_title %}Connection Center{% endblock %}
+{% block page_title %}{{ t('connections.center', default='Connection Center') }}{% endblock %}
 
 {% block content %}
 <div x-data="connectionsManager()" x-init="init()" class="max-w-6xl mx-auto">
