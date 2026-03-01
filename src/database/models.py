@@ -2303,12 +2303,14 @@ class LeadReminder(db.Model):
         db.Index('idx_lead_reminders_lead_due', 'lead_id', 'due_at'),
         db.Index('idx_lead_reminders_assignee_status_due', 'assigned_to_id', 'status', 'due_at'),
         db.Index('idx_lead_reminders_workspace_status', 'workspace_id', 'status'),
+        db.Index('idx_lead_reminders_task_id', 'task_id'),
     )
 
     TYPE_EVENT = 'event'
     TYPE_MEETING = 'meeting'
     TYPE_ACTION = 'action'
-    TYPES = (TYPE_EVENT, TYPE_MEETING, TYPE_ACTION)
+    TYPE_TASK = 'task'
+    TYPES = (TYPE_EVENT, TYPE_MEETING, TYPE_ACTION, TYPE_TASK)
 
     STATUS_PENDING = 'pending'
     STATUS_COMPLETED = 'completed'
@@ -2324,6 +2326,8 @@ class LeadReminder(db.Model):
     title = db.Column(db.String(255), nullable=False)
     notes = db.Column(db.Text)
     due_at = db.Column(db.DateTime, nullable=False)
+    notify_on_lead_card = db.Column(db.Boolean, nullable=False, default=False)
+    task_id = db.Column(db.Integer, db.ForeignKey('tasks.id'), nullable=True, index=True)
     status = db.Column(db.String(20), nullable=False, default=STATUS_PENDING)
     completed_at = db.Column(db.DateTime)
     cancelled_at = db.Column(db.DateTime)
@@ -2334,6 +2338,19 @@ class LeadReminder(db.Model):
     lead = db.relationship('Lead', backref=db.backref('reminders', lazy='dynamic', cascade='all, delete-orphan'))
     assigned_to = db.relationship('User', foreign_keys=[assigned_to_id])
     created_by = db.relationship('User', foreign_keys=[created_by_id])
+    task = db.relationship('Task', foreign_keys=[task_id])
+
+    def _task_preview(self):
+        if not self.task:
+            return None
+        return {
+            'id': self.task.id,
+            'title': self.task.title,
+            'board_id': self.task.board_id,
+            'column_id': self.task.column_id,
+            'is_completed': self.task.is_completed,
+            'due_date': self.task.due_date.isoformat() if self.task.due_date else None,
+        }
 
     def to_dict(self):
         now = datetime.utcnow()
@@ -2354,6 +2371,9 @@ class LeadReminder(db.Model):
             'title': self.title,
             'notes': self.notes,
             'due_at': self.due_at.isoformat() if self.due_at else None,
+            'notify_on_lead_card': bool(self.notify_on_lead_card),
+            'task_id': self.task_id,
+            'task': self._task_preview(),
             'status': self.status,
             'completed_at': self.completed_at.isoformat() if self.completed_at else None,
             'cancelled_at': self.cancelled_at.isoformat() if self.cancelled_at else None,

@@ -277,6 +277,8 @@ with app.app_context():
                             title VARCHAR(255) NOT NULL,
                             notes TEXT,
                             due_at TIMESTAMP NOT NULL,
+                            notify_on_lead_card BOOLEAN NOT NULL DEFAULT FALSE,
+                            task_id INTEGER REFERENCES tasks(id),
                             status VARCHAR(20) NOT NULL DEFAULT 'pending',
                             completed_at TIMESTAMP NULL,
                             cancelled_at TIMESTAMP NULL,
@@ -288,8 +290,27 @@ with app.app_context():
                     conn.execute(text("CREATE INDEX idx_lead_reminders_lead_due ON lead_reminders(lead_id, due_at)"))
                     conn.execute(text("CREATE INDEX idx_lead_reminders_assignee_status_due ON lead_reminders(assigned_to_id, status, due_at)"))
                     conn.execute(text("CREATE INDEX idx_lead_reminders_workspace_status ON lead_reminders(workspace_id, status)"))
+                    conn.execute(text("CREATE INDEX idx_lead_reminders_task_id ON lead_reminders(task_id)"))
                     conn.commit()
                     print("[MIGRATION] lead_reminders table created successfully")
+                else:
+                    col_result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='lead_reminders' AND column_name='notify_on_lead_card'"))
+                    if not col_result.fetchone():
+                        print("[MIGRATION] Adding notify_on_lead_card column to lead_reminders...")
+                        conn.execute(text("ALTER TABLE lead_reminders ADD COLUMN notify_on_lead_card BOOLEAN NOT NULL DEFAULT FALSE"))
+                        conn.commit()
+
+                    col_result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='lead_reminders' AND column_name='task_id'"))
+                    if not col_result.fetchone():
+                        print("[MIGRATION] Adding task_id column to lead_reminders...")
+                        conn.execute(text("ALTER TABLE lead_reminders ADD COLUMN task_id INTEGER REFERENCES tasks(id)"))
+                        conn.commit()
+
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_lead_reminders_task_id ON lead_reminders(task_id)"))
+                    conn.commit()
+
+                    conn.execute(text("UPDATE lead_reminders SET notify_on_lead_card = FALSE WHERE notify_on_lead_card IS NULL"))
+                    conn.commit()
         except Exception as e:
             print(f"[MIGRATION] lead_reminders table migration skipped or failed: {e}")
         
@@ -10217,6 +10238,155 @@ def _resolve_reminder_assignee_id(workspace_id, data, can_manage_all):
     return g.user.id
 
 
+def _parse_bool_value(raw_value, field_name):
+    if isinstance(raw_value, bool):
+        return raw_value
+    if raw_value is None:
+        return False
+    if isinstance(raw_value, (int, float)):
+        return bool(raw_value)
+    value = str(raw_value).strip().lower()
+    if value in ('1', 'true', 'yes', 'on'):
+        return True
+    if value in ('0', 'false', 'no', 'off', ''):
+        return False
+    raise ValueError(f'{field_name} must be a boolean')
+
+
+def _resolve_task_board_and_column_for_reminder(workspace_id, data):
+    raw_board_id = data.get('task_board_id') if isinstance(data, dict) else None
+    if raw_board_id in (None, ''):
+        raise ValueError('task_board_id is required for task reminders')
+
+    try:
+        board_id = int(raw_board_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('task_board_id is invalid') from exc
+
+    board = TaskBoard.query.filter_by(id=board_id, workspace_id=workspace_id).first()
+    if not board:
+        raise ValueError('task_board_id is invalid')
+    if not board.user_can(g.user.id, 'can_create_tasks'):
+        raise PermissionError('You do not have permission to create tasks on this board')
+
+    columns = board.get_columns() or []
+    column_ids = [str(col.get('id')) for col in columns if col.get('id')]
+    if not column_ids:
+        raise ValueError('Selected board has no columns configured')
+
+    raw_column_id = data.get('task_column_id')
+    if raw_column_id in (None, ''):
+        column_id = column_ids[0]
+    else:
+        column_id = str(raw_column_id)
+        if column_id not in column_ids:
+            raise ValueError('task_column_id is invalid for the selected board')
+
+    return board, column_id
+
+
+def _build_lead_task_description(reminder, lead):
+    lead_ref = lead.listing_reference or lead.pf_listing_id or '-'
+    lines = [
+        f"Lead: {lead.name or 'Unknown'}",
+        f"Lead ID: {lead.id}",
+        f"Listing Ref: {lead_ref}",
+    ]
+    if reminder.notes:
+        lines.extend(['', reminder.notes.strip()])
+    return '\n'.join(lines)
+
+
+def _create_task_from_reminder(reminder, lead, workspace_id, data):
+    board, column_id = _resolve_task_board_and_column_for_reminder(workspace_id, data)
+    max_position = db.session.query(db.func.max(Task.position)).filter(
+        Task.board_id == board.id,
+        Task.column_id == column_id
+    ).scalar() or 0
+
+    task = Task(
+        title=reminder.title,
+        description=_build_lead_task_description(reminder, lead),
+        board_id=board.id,
+        column_id=column_id,
+        position=max_position + 1,
+        priority='medium',
+        due_date=reminder.due_at,
+        created_by_id=g.user.id,
+        assignee_id=reminder.assigned_to_id
+    )
+    db.session.add(task)
+    db.session.flush()
+    reminder.task_id = task.id
+    return task
+
+
+def _sync_linked_task_from_reminder(reminder, lead, workspace_id, changed_fields=None):
+    if not reminder.task_id:
+        return
+    task = Task.query.join(TaskBoard, Task.board_id == TaskBoard.id).filter(
+        Task.id == reminder.task_id,
+        TaskBoard.workspace_id == workspace_id
+    ).first()
+    if not task:
+        reminder.task_id = None
+        return
+
+    changed = set(changed_fields or [])
+    if not changed:
+        changed = {'title', 'notes', 'due_at', 'assigned_to_id', 'status'}
+
+    if 'title' in changed:
+        task.title = reminder.title
+    if 'notes' in changed:
+        task.description = _build_lead_task_description(reminder, lead)
+    if 'due_at' in changed:
+        task.due_date = reminder.due_at
+    if 'assigned_to_id' in changed:
+        task.assignee_id = reminder.assigned_to_id
+
+    if 'status' in changed:
+        if reminder.status in (LeadReminder.STATUS_COMPLETED, LeadReminder.STATUS_CANCELLED):
+            task.is_completed = True
+            task.completed_at = task.completed_at or datetime.utcnow()
+        elif reminder.status == LeadReminder.STATUS_PENDING:
+            task.is_completed = False
+            task.completed_at = None
+
+
+def _sync_linked_reminder_from_task(task, workspace_id, changed_fields=None):
+    reminder = LeadReminder.query.filter_by(
+        task_id=task.id,
+        workspace_id=workspace_id
+    ).first()
+    if not reminder:
+        return
+
+    changed = set(changed_fields or [])
+    if not changed:
+        changed = {'is_completed', 'due_date'}
+
+    if 'due_date' in changed and task.due_date:
+        due_at = task.due_date
+        if due_at.tzinfo is not None:
+            due_at = due_at.astimezone(timezone.utc).replace(tzinfo=None)
+        reminder.due_at = due_at
+
+    if 'is_completed' in changed:
+        if task.is_completed:
+            reminder.status = LeadReminder.STATUS_COMPLETED
+            reminder.completed_at = task.completed_at or datetime.utcnow()
+            reminder.cancelled_at = None
+        else:
+            reminder.status = LeadReminder.STATUS_PENDING
+            reminder.completed_at = None
+            reminder.cancelled_at = None
+
+    lead = Lead.query.filter_by(id=reminder.lead_id, workspace_id=workspace_id).first()
+    if lead:
+        _sync_lead_next_follow_up_from_reminders(lead, workspace_id)
+
+
 def mask_phone_keep_last4(value):
     text_value = str(value or '').strip()
     if not text_value:
@@ -10669,6 +10839,48 @@ def api_get_lead_reminders(lead_id):
     })
 
 
+@app.route('/api/leads/reminders/notifications', methods=['GET'])
+@login_required
+@require_active_workspace
+def api_get_lead_reminder_notifications():
+    ws_id = get_active_workspace_id()
+    now_utc = datetime.utcnow()
+
+    reminders = LeadReminder.query.join(
+        Lead, LeadReminder.lead_id == Lead.id
+    ).filter(
+        LeadReminder.workspace_id == ws_id,
+        LeadReminder.status == LeadReminder.STATUS_PENDING,
+        LeadReminder.notify_on_lead_card == True,
+        LeadReminder.due_at <= now_utc,
+        db.or_(
+            LeadReminder.assigned_to_id == g.user.id,
+            db.and_(
+                LeadReminder.assigned_to_id.is_(None),
+                LeadReminder.created_by_id == g.user.id
+            )
+        )
+    ).order_by(
+        LeadReminder.due_at.asc(),
+        LeadReminder.id.asc()
+    ).all()
+
+    return jsonify({
+        'success': True,
+        'notifications': [{
+            'reminder_id': reminder.id,
+            'lead_id': reminder.lead_id,
+            'lead_name': reminder.lead.name if reminder.lead else None,
+            'title': reminder.title,
+            'due_at': reminder.due_at.isoformat() if reminder.due_at else None,
+            'is_overdue': bool(reminder.due_at and reminder.due_at < now_utc),
+            'task_id': reminder.task_id,
+            'type': reminder.type,
+            'assigned_to_id': reminder.assigned_to_id,
+        } for reminder in reminders]
+    })
+
+
 @app.route('/api/leads/<int:lead_id>/reminders', methods=['POST'])
 @login_required
 @require_active_workspace
@@ -10682,12 +10894,16 @@ def api_create_lead_reminder(lead_id):
     notes = str(data.get('notes') or '').strip() or None
 
     if reminder_type not in LeadReminder.TYPES:
-        return jsonify({'success': False, 'error': 'type must be one of: event, meeting, action'}), 400
+        return jsonify({'success': False, 'error': 'type must be one of: event, meeting, action, task'}), 400
     if not title:
         return jsonify({'success': False, 'error': 'title is required'}), 400
 
     try:
         due_at = _parse_reminder_due_at(data.get('due_at'), ws_id)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    try:
+        notify_on_lead_card = _parse_bool_value(data.get('notify_on_lead_card'), 'notify_on_lead_card')
     except ValueError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
 
@@ -10708,9 +10924,22 @@ def api_create_lead_reminder(lead_id):
         title=title,
         notes=notes,
         due_at=due_at,
+        notify_on_lead_card=notify_on_lead_card,
         status=LeadReminder.STATUS_PENDING
     )
     db.session.add(reminder)
+    db.session.flush()
+
+    if reminder.type == LeadReminder.TYPE_TASK:
+        try:
+            _create_task_from_reminder(reminder, lead, ws_id, data)
+        except PermissionError as exc:
+            db.session.rollback()
+            return jsonify({'success': False, 'error': str(exc)}), 403
+        except ValueError as exc:
+            db.session.rollback()
+            return jsonify({'success': False, 'error': str(exc)}), 400
+
     _sync_lead_next_follow_up_from_reminders(lead, ws_id)
     db.session.commit()
 
@@ -10734,27 +10963,32 @@ def api_update_lead_reminder(lead_id, reminder_id):
         return jsonify({'success': False, 'error': 'Only pending reminders can be edited'}), 400
     if 'status' in data:
         return jsonify({'success': False, 'error': 'status is managed by complete/cancel actions'}), 400
+    changed_fields = set()
 
     if 'type' in data:
         reminder_type = str(data.get('type') or '').strip().lower()
         if reminder_type not in LeadReminder.TYPES:
-            return jsonify({'success': False, 'error': 'type must be one of: event, meeting, action'}), 400
+            return jsonify({'success': False, 'error': 'type must be one of: event, meeting, action, task'}), 400
         reminder.type = reminder_type
+        changed_fields.add('type')
 
     if 'title' in data:
         title = str(data.get('title') or '').strip()
         if not title:
             return jsonify({'success': False, 'error': 'title is required'}), 400
         reminder.title = title
+        changed_fields.add('title')
 
     if 'notes' in data:
         reminder.notes = str(data.get('notes') or '').strip() or None
+        changed_fields.add('notes')
 
     if 'due_at' in data:
         try:
             reminder.due_at = _parse_reminder_due_at(data.get('due_at'), ws_id)
         except ValueError as exc:
             return jsonify({'success': False, 'error': str(exc)}), 400
+        changed_fields.add('due_at')
 
     if 'assigned_to_id' in data:
         can_manage_all = workspace_user_can_manage_all_leads(workspace_id=ws_id)
@@ -10764,6 +10998,28 @@ def api_update_lead_reminder(lead_id, reminder_id):
             return jsonify({'success': False, 'error': str(exc)}), 403
         except ValueError as exc:
             return jsonify({'success': False, 'error': str(exc)}), 400
+        changed_fields.add('assigned_to_id')
+
+    if 'notify_on_lead_card' in data:
+        try:
+            reminder.notify_on_lead_card = _parse_bool_value(data.get('notify_on_lead_card'), 'notify_on_lead_card')
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
+        changed_fields.add('notify_on_lead_card')
+
+    if reminder.type == LeadReminder.TYPE_TASK and not reminder.task_id:
+        try:
+            _create_task_from_reminder(reminder, lead, ws_id, data)
+        except PermissionError as exc:
+            db.session.rollback()
+            return jsonify({'success': False, 'error': str(exc)}), 403
+        except ValueError as exc:
+            db.session.rollback()
+            return jsonify({'success': False, 'error': str(exc)}), 400
+        changed_fields.add('task_id')
+
+    if reminder.type == LeadReminder.TYPE_TASK:
+        _sync_linked_task_from_reminder(reminder, lead, ws_id, changed_fields=changed_fields)
 
     _sync_lead_next_follow_up_from_reminders(lead, ws_id)
     db.session.commit()
@@ -10786,6 +11042,12 @@ def api_complete_lead_reminder(lead_id, reminder_id):
     reminder.completed_at = datetime.utcnow()
     reminder.cancelled_at = None
 
+    _sync_linked_task_from_reminder(
+        reminder,
+        lead,
+        ws_id,
+        changed_fields={'status'}
+    )
     _sync_lead_next_follow_up_from_reminders(lead, ws_id)
     db.session.commit()
     return jsonify({
@@ -10807,6 +11069,12 @@ def api_cancel_lead_reminder(lead_id, reminder_id):
     reminder.cancelled_at = datetime.utcnow()
     reminder.completed_at = None
 
+    _sync_linked_task_from_reminder(
+        reminder,
+        lead,
+        ws_id,
+        changed_fields={'status'}
+    )
     _sync_lead_next_follow_up_from_reminders(lead, ws_id)
     db.session.commit()
     return jsonify({
@@ -12064,6 +12332,8 @@ def api_update_task(task_id):
     
     data = request.get_json()
     
+    task_sync_fields = set()
+
     if 'title' in data:
         task.title = data['title']
     if 'description' in data:
@@ -12102,10 +12372,12 @@ def api_update_task(task_id):
         if data['due_date']:
             try:
                 task.due_date = datetime.fromisoformat(data['due_date'].replace('Z', '+00:00'))
+                task_sync_fields.add('due_date')
             except:
                 pass
         else:
             task.due_date = None
+            task_sync_fields.add('due_date')
     
     if 'start_date' in data:
         if data['start_date']:
@@ -12122,6 +12394,7 @@ def api_update_task(task_id):
             task.completed_at = datetime.utcnow()
         else:
             task.completed_at = None
+        task_sync_fields.add('is_completed')
     
     if 'checklist' in data:
         task.set_checklist(data['checklist'])
@@ -12133,6 +12406,9 @@ def api_update_task(task_id):
         ).all()
         task.labels = labels
     
+    if task_sync_fields:
+        _sync_linked_reminder_from_task(task, ws_id, changed_fields=task_sync_fields)
+
     db.session.commit()
     return jsonify({'success': True, 'task': task.to_dict()})
 
@@ -12215,6 +12491,23 @@ def api_delete_task(task_id):
         Task.column_id == task.column_id,
         Task.position > task.position
     ).update({Task.position: Task.position - 1})
+
+    linked_reminders = LeadReminder.query.filter_by(
+        workspace_id=ws_id,
+        task_id=task.id
+    ).all()
+    linked_lead_ids = set()
+    for reminder in linked_reminders:
+        reminder.task_id = None
+        reminder.status = LeadReminder.STATUS_PENDING
+        reminder.completed_at = None
+        reminder.cancelled_at = None
+        if reminder.lead_id:
+            linked_lead_ids.add(reminder.lead_id)
+    for lead_id in linked_lead_ids:
+        lead = Lead.query.filter_by(id=lead_id, workspace_id=ws_id).first()
+        if lead:
+            _sync_lead_next_follow_up_from_reminders(lead, ws_id)
     
     db.session.delete(task)
     db.session.commit()

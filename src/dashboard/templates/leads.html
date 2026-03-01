@@ -5,6 +5,39 @@
 {% block content %}
 {% set can_manage_leads = can_manage_leads|default(false) %}
 <div x-data="leadsManager()" x-init="init()" class="space-y-6 w-full">
+    <!-- Due Reminder Popups -->
+    <div class="fixed top-20 right-4 z-50 w-full max-w-sm space-y-2 pointer-events-none">
+        <template x-for="notification in reminderNotifications" :key="`notif-${notification.reminder_id}-${notification.due_at}`">
+            <div class="pointer-events-auto bg-white border rounded-lg shadow-lg p-3 border-amber-300">
+                <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0">
+                        <div class="text-xs font-semibold text-amber-700">
+                            <span x-text="notification.is_overdue ? 'Overdue Reminder' : 'Due Reminder'"></span>
+                        </div>
+                        <div class="text-sm font-medium text-gray-900 truncate" x-text="notification.title"></div>
+                        <div class="text-xs text-gray-600 mt-1">
+                            <span x-text="notification.lead_name || ('Lead #' + notification.lead_id)"></span>
+                            <span>•</span>
+                            <span x-text="formatDateTime(notification.due_at)"></span>
+                        </div>
+                    </div>
+                    <button @click="dismissReminderNotification(notification)"
+                            class="text-gray-400 hover:text-gray-700">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="mt-2 flex justify-end">
+                    <button @click="openLeadFromReminderNotification(notification)"
+                            class="text-xs px-2 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700">
+                        Open Lead
+                    </button>
+                </div>
+            </div>
+        </template>
+    </div>
+
     <!-- Fixed Header Section (not affected by Kanban scroll) -->
     <div class="w-full overflow-hidden">
         <!-- Header Section -->
@@ -260,7 +293,16 @@
                                        class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
                             </td>
                             <td class="px-4 py-3">
-                                <div class="font-medium text-gray-900" x-text="lead.name"></div>
+                                <div class="flex items-center gap-2">
+                                    <div class="font-medium text-gray-900" x-text="lead.name"></div>
+                                    <span x-show="notificationCountForLead(lead.id) > 0"
+                                          class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700">
+                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V4a2 2 0 10-4 0v1.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0a3 3 0 11-6 0m6 0H9"/>
+                                        </svg>
+                                        <span x-text="notificationCountForLead(lead.id)"></span>
+                                    </span>
+                                </div>
                                 <div class="text-sm text-gray-500" x-text="lead.email"></div>
                                 <div class="text-sm text-gray-500" x-text="lead.phone || lead.whatsapp"></div>
                                 <span class="inline-block mt-1 px-1.5 py-0.5 text-xs rounded font-medium"
@@ -418,7 +460,16 @@
                                     
                                     <!-- Lead Name & Source/Channel (name is required) -->
                                     <div class="flex items-start justify-between mb-2 pr-6">
-                                        <div class="font-medium text-gray-900 truncate pr-2" x-text="lead.name"></div>
+                                        <div class="min-w-0 pr-2">
+                                            <div class="font-medium text-gray-900 truncate" x-text="lead.name"></div>
+                                            <div x-show="notificationCountForLead(lead.id) > 0"
+                                                 class="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700">
+                                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V4a2 2 0 10-4 0v1.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0a3 3 0 11-6 0m6 0H9"/>
+                                                </svg>
+                                                <span x-text="notificationCountForLead(lead.id)"></span>
+                                            </div>
+                                        </div>
                                         <span x-show="showField('source')" class="px-1.5 py-0.5 text-xs rounded flex-shrink-0"
                                               :class="getSourceClass(lead.source)"
                                               x-text="lead.channel || getSourceLabel(lead.source)"></span>
@@ -866,10 +917,12 @@
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
                             <div>
                                 <label class="block text-xs text-gray-500 mb-1">Type</label>
-                                <select x-model="reminderForm.type" class="w-full px-3 py-2 border rounded-lg text-sm">
+                                <select x-model="reminderForm.type" @change="onReminderTypeChange()"
+                                        class="w-full px-3 py-2 border rounded-lg text-sm">
                                     <option value="action">Action</option>
                                     <option value="meeting">Meeting</option>
                                     <option value="event">Event</option>
+                                    <option value="task">Task</option>
                                 </select>
                             </div>
                             <div>
@@ -891,6 +944,37 @@
                                         <option :value="member.id" x-text="member.name"></option>
                                     </template>
                                 </select>
+                            </div>
+                            <div class="md:col-span-2">
+                                <label class="inline-flex items-center gap-2 text-sm text-gray-700">
+                                    <input type="checkbox" x-model="reminderForm.notify_on_lead_card"
+                                           class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                                    Popup on lead card when due
+                                </label>
+                            </div>
+                            <div x-show="reminderForm.type === 'task'">
+                                <label class="block text-xs text-gray-500 mb-1">Task Board</label>
+                                <select x-model="reminderForm.task_board_id" @change="onReminderBoardChange()"
+                                        class="w-full px-3 py-2 border rounded-lg text-sm">
+                                    <option value="">Select board</option>
+                                    <template x-for="board in reminderBoards" :key="`reminder-board-${board.id}`">
+                                        <option :value="String(board.id)" x-text="board.name"></option>
+                                    </template>
+                                </select>
+                            </div>
+                            <div x-show="reminderForm.type === 'task'">
+                                <label class="block text-xs text-gray-500 mb-1">Task Column</label>
+                                <select x-model="reminderForm.task_column_id"
+                                        class="w-full px-3 py-2 border rounded-lg text-sm">
+                                    <option value="">Select column</option>
+                                    <template x-for="col in reminderColumns" :key="`reminder-column-${col.id}`">
+                                        <option :value="String(col.id)" x-text="col.name"></option>
+                                    </template>
+                                </select>
+                                <div x-show="reminderForm.type === 'task' && reminderBoards.length === 0"
+                                     class="text-xs text-red-600 mt-1">
+                                    No accessible boards with task create permission.
+                                </div>
                             </div>
                             <div class="md:col-span-2">
                                 <label class="block text-xs text-gray-500 mb-1">Notes</label>
@@ -924,12 +1008,19 @@
                                                       x-text="reminder.status"></span>
                                                 <span class="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-700 capitalize"
                                                       x-text="reminder.type"></span>
+                                                <span x-show="reminder.notify_on_lead_card"
+                                                      class="px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-700">
+                                                    Popup
+                                                </span>
                                                 <span x-show="reminder.is_overdue" class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700">Overdue</span>
                                             </div>
                                             <div class="text-sm font-medium text-gray-800 truncate" x-text="reminder.title"></div>
                                             <div class="text-xs text-gray-500 mt-1">
                                                 <span x-text="formatDateTime(reminder.due_at)"></span>
                                                 <span x-show="reminder.assigned_to_name">• <span x-text="reminder.assigned_to_name"></span></span>
+                                            </div>
+                                            <div x-show="reminder.task_id" class="text-xs text-indigo-600 mt-1">
+                                                Linked Task #<span x-text="reminder.task_id"></span>
                                             </div>
                                             <div x-show="reminder.notes" class="text-xs text-gray-600 mt-1 whitespace-pre-wrap" x-text="reminder.notes"></div>
                                         </div>
@@ -1418,6 +1509,7 @@ function leadsManager() {
         selectedLeads: [],
         loading: true,
         canManageLeads: {{ 'true' if can_manage_leads else 'false' }},
+        currentUserId: {{ current_user.id if current_user.is_authenticated else 'null' }},
         canViewTeamLeads: false,
         canManageSettings: false,
         leadScope: 'my',
@@ -1482,7 +1574,28 @@ function leadsManager() {
         leadReminders: [],
         loadingReminders: false,
         savingReminder: false,
-        reminderForm: { type: 'action', title: '', due_at: '', assigned_to_id: '', notes: '' },
+        reminderBoards: [],
+        reminderColumns: [],
+        reminderNotifications: [],
+        reminderNotificationCountsByLead: {},
+        reminderNotificationTimer: null,
+        dismissedReminderPopups: (() => {
+            try {
+                return JSON.parse(localStorage.getItem('lead_reminder_popup_dismissed') || '{}') || {};
+            } catch (e) {
+                return {};
+            }
+        })(),
+        reminderForm: {
+            type: 'action',
+            title: '',
+            due_at: '',
+            assigned_to_id: '',
+            notes: '',
+            notify_on_lead_card: false,
+            task_board_id: '',
+            task_column_id: ''
+        },
         
         // Drag and drop for Kanban (leads)
         draggingLeadId: null,
@@ -1547,10 +1660,133 @@ function leadsManager() {
             });
             return values;
         },
+
+        getReminderDismissKey(notification) {
+            return `${this.currentUserId || 'anon'}:${notification.reminder_id}:${notification.due_at || ''}`;
+        },
+
+        isReminderDismissed(notification) {
+            const key = this.getReminderDismissKey(notification);
+            return !!this.dismissedReminderPopups[key];
+        },
+
+        persistDismissedReminderPopups() {
+            localStorage.setItem('lead_reminder_popup_dismissed', JSON.stringify(this.dismissedReminderPopups || {}));
+        },
+
+        notificationCountForLead(leadId) {
+            return this.reminderNotificationCountsByLead[String(leadId)] || 0;
+        },
+
+        dismissReminderNotification(notification) {
+            const key = this.getReminderDismissKey(notification);
+            this.dismissedReminderPopups[key] = true;
+            this.persistDismissedReminderPopups();
+            this.reminderNotifications = this.reminderNotifications.filter(item => this.getReminderDismissKey(item) !== key);
+        },
+
+        async openLeadFromReminderNotification(notification) {
+            const existingLead = this.leads.find(item => item.id === notification.lead_id);
+            if (existingLead) {
+                this.viewLead(existingLead);
+            } else {
+                try {
+                    const resp = await fetch(`/api/leads/${notification.lead_id}`);
+                    const data = await resp.json();
+                    if (!resp.ok || !data.lead) {
+                        throw new Error(data.error || 'Lead is not accessible in your current scope');
+                    }
+                    const normalizedLead = {
+                        ...data.lead,
+                        tags: this.normalizeLeadTags(data.lead.tags || [])
+                    };
+                    this.viewLead(normalizedLead);
+                } catch (e) {
+                    alert(e.message || 'Lead is not accessible in your current scope');
+                }
+            }
+            this.dismissReminderNotification(notification);
+        },
+
+        async loadReminderNotifications() {
+            try {
+                const resp = await fetch('/api/leads/reminders/notifications');
+                const data = await resp.json();
+                if (!resp.ok || data.success === false) {
+                    throw new Error(data.error || 'Failed to load reminder notifications');
+                }
+                const notifications = data.notifications || [];
+                const counts = {};
+                notifications.forEach(item => {
+                    const leadKey = String(item.lead_id || '');
+                    if (!leadKey) return;
+                    counts[leadKey] = (counts[leadKey] || 0) + 1;
+                });
+                this.reminderNotificationCountsByLead = counts;
+                this.reminderNotifications = notifications.filter(item => !this.isReminderDismissed(item));
+            } catch (e) {
+                console.error('Failed to load reminder notifications:', e);
+            }
+        },
+
+        async loadReminderBoards() {
+            try {
+                const resp = await fetch('/api/boards');
+                const data = await resp.json();
+                if (!resp.ok || data.success === false) {
+                    throw new Error(data.error || 'Failed to load boards');
+                }
+                this.reminderBoards = (data.boards || []).filter(board => board.my_role && board.my_role !== 'viewer');
+                if (this.reminderForm.type === 'task') {
+                    if (!this.reminderForm.task_board_id && this.reminderBoards.length > 0) {
+                        this.reminderForm.task_board_id = String(this.reminderBoards[0].id);
+                    }
+                    this.onReminderBoardChange();
+                }
+            } catch (e) {
+                console.error('Failed to load reminder boards:', e);
+                this.reminderBoards = [];
+                this.reminderColumns = [];
+            }
+        },
+
+        onReminderTypeChange() {
+            if (this.reminderForm.type !== 'task') return;
+            if (!this.reminderBoards.length) {
+                this.loadReminderBoards();
+                return;
+            }
+            if (!this.reminderForm.task_board_id) {
+                this.reminderForm.task_board_id = String(this.reminderBoards[0].id);
+            }
+            this.onReminderBoardChange();
+        },
+
+        onReminderBoardChange() {
+            const board = this.reminderBoards.find(item => String(item.id) === String(this.reminderForm.task_board_id || ''));
+            const columns = Array.isArray(board?.columns) ? board.columns : [];
+            this.reminderColumns = columns.filter(col => col && col.id);
+            if (!this.reminderColumns.length) {
+                this.reminderForm.task_column_id = '';
+                return;
+            }
+            const hasSelected = this.reminderColumns.some(col => String(col.id) === String(this.reminderForm.task_column_id || ''));
+            if (!hasSelected) {
+                this.reminderForm.task_column_id = String(this.reminderColumns[0].id);
+            }
+        },
         
         async init() {
             await this.loadConfig();
             await this.loadLeads();
+            await this.loadReminderBoards();
+            await this.loadReminderNotifications();
+            this.reminderNotificationTimer = setInterval(() => {
+                this.loadReminderNotifications();
+            }, 60000);
+            window.addEventListener('beforeunload', () => {
+                if (this.reminderNotificationTimer) clearInterval(this.reminderNotificationTimer);
+            }, { once: true });
             // Watch viewMode changes and save to localStorage
             this.$watch('viewMode', (val) => {
                 localStorage.setItem('leads_view_mode', val);
@@ -1617,6 +1853,7 @@ function leadsManager() {
                 }));
                 this.filterLeads();
                 this.updateStats();
+                await this.loadReminderNotifications();
             } catch (e) {
                 console.error('Failed to load leads:', e);
             }
@@ -1796,13 +2033,18 @@ function leadsManager() {
         },
 
         resetReminderForm() {
+            const firstBoardId = this.reminderBoards.length ? String(this.reminderBoards[0].id) : '';
             this.reminderForm = {
                 type: 'action',
                 title: '',
                 due_at: '',
                 assigned_to_id: '',
-                notes: ''
+                notes: '',
+                notify_on_lead_card: false,
+                task_board_id: firstBoardId,
+                task_column_id: ''
             };
+            this.onReminderBoardChange();
         },
 
         async loadReminders(leadId) {
@@ -1827,6 +2069,10 @@ function leadsManager() {
                 alert('Title and due date are required');
                 return;
             }
+            if (this.reminderForm.type === 'task' && !this.reminderForm.task_board_id) {
+                alert('Task board is required for task reminders');
+                return;
+            }
 
             this.savingReminder = true;
             try {
@@ -1834,10 +2080,17 @@ function leadsManager() {
                     type: this.reminderForm.type,
                     title: this.reminderForm.title.trim(),
                     due_at: this.reminderForm.due_at,
-                    notes: this.reminderForm.notes?.trim() || ''
+                    notes: this.reminderForm.notes?.trim() || '',
+                    notify_on_lead_card: !!this.reminderForm.notify_on_lead_card
                 };
                 if (this.canManageLeads && this.reminderForm.assigned_to_id !== '') {
                     payload.assigned_to_id = this.reminderForm.assigned_to_id || null;
+                }
+                if (this.reminderForm.type === 'task') {
+                    payload.task_board_id = this.reminderForm.task_board_id;
+                    if (this.reminderForm.task_column_id) {
+                        payload.task_column_id = this.reminderForm.task_column_id;
+                    }
                 }
 
                 const resp = await fetch(`/api/leads/${this.selectedLead.id}/reminders`, {
@@ -1852,6 +2105,7 @@ function leadsManager() {
                 this.applyLeadFollowUpUpdate(data.lead);
                 this.resetReminderForm();
                 await this.loadReminders(this.selectedLead.id);
+                await this.loadReminderNotifications();
             } catch (e) {
                 console.error('Failed to create reminder:', e);
                 alert(e.message || 'Failed to create reminder');
@@ -1871,6 +2125,7 @@ function leadsManager() {
                 }
                 this.applyLeadFollowUpUpdate(data.lead);
                 await this.loadReminders(this.selectedLead.id);
+                await this.loadReminderNotifications();
             } catch (e) {
                 console.error('Failed to complete reminder:', e);
                 alert(e.message || 'Failed to complete reminder');
@@ -1889,6 +2144,7 @@ function leadsManager() {
                 }
                 this.applyLeadFollowUpUpdate(data.lead);
                 await this.loadReminders(this.selectedLead.id);
+                await this.loadReminderNotifications();
             } catch (e) {
                 console.error('Failed to cancel reminder:', e);
                 alert(e.message || 'Failed to cancel reminder');
@@ -1908,6 +2164,7 @@ function leadsManager() {
                 }
                 this.applyLeadFollowUpUpdate(data.lead);
                 await this.loadReminders(this.selectedLead.id);
+                await this.loadReminderNotifications();
             } catch (e) {
                 console.error('Failed to delete reminder:', e);
                 alert(e.message || 'Failed to delete reminder');
@@ -2287,6 +2544,7 @@ function leadsManager() {
             this.showViewModal = true;
             this.loadComments(lead.id);
             this.loadReminders(lead.id);
+            this.loadReminderBoards();
         },
         
         // Get leads filtered by status (for kanban)
