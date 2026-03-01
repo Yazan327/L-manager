@@ -109,6 +109,53 @@ class PermissionService:
         ).first()
         
         return member.role if member else None
+
+    def get_workspace_role_code(self, member_role: str) -> str:
+        """Normalize workspace member role to baseline role code."""
+        role = (member_role or '').strip().lower()
+        mapping = {
+            'owner': 'OWNER',
+            'admin': 'ADMIN',
+            'moderator': 'MODERATOR',
+            'member': 'MEMBER',
+            'viewer': 'VIEWER',
+            'external': 'EXTERNAL',
+        }
+        if role in mapping:
+            return mapping[role]
+        return (member_role or '').strip().upper()
+
+    def _workspace_role_code_candidates(self, member_role: str) -> List[str]:
+        """Return ordered candidate workspace role codes for lookup."""
+        normalized = self.get_workspace_role_code(member_role)
+        fallback_map = {
+            'OWNER': ['OWNER', 'WORKSPACE_ADMIN'],
+            'ADMIN': ['ADMIN', 'WORKSPACE_ADMIN'],
+            'MODERATOR': ['MODERATOR'],
+            'MEMBER': ['MEMBER'],
+            'VIEWER': ['VIEWER', 'EXTERNAL'],
+            'EXTERNAL': ['EXTERNAL', 'VIEWER'],
+        }
+        candidates = fallback_map.get(normalized, [normalized])
+        unique = []
+        for code in candidates:
+            if code and code not in unique:
+                unique.append(code)
+        return unique
+
+    def _find_workspace_role(self, workspace_id: int, member_role: str):
+        """Find workspace-specific role definition, falling back to global templates."""
+        from database import WorkspaceRole
+
+        for code in self._workspace_role_code_candidates(member_role):
+            ws_role = WorkspaceRole.query.filter_by(workspace_id=workspace_id, code=code).first()
+            if ws_role:
+                return ws_role
+        for code in self._workspace_role_code_candidates(member_role):
+            ws_role = WorkspaceRole.query.filter_by(workspace_id=None, code=code).first()
+            if ws_role:
+                return ws_role
+        return None
     
     def is_workspace_admin(self, user, workspace_id: int) -> bool:
         """Check if user is admin/owner of workspace"""
@@ -149,10 +196,7 @@ class PermissionService:
             return WorkspaceRole.BUCKET_DENY
         
         # Get workspace role configuration
-        ws_role = WorkspaceRole.query.filter(
-            ((WorkspaceRole.workspace_id == workspace_id) | (WorkspaceRole.workspace_id.is_(None))),
-            WorkspaceRole.code == member.role.upper()
-        ).order_by(WorkspaceRole.workspace_id.desc().nullslast()).first()
+        ws_role = self._find_workspace_role(workspace_id, member.role)
         
         if ws_role:
             buckets = ws_role.get_permission_buckets()
@@ -197,8 +241,8 @@ class PermissionService:
     # ==================== MODULE LEVEL ====================
     
     def get_module_capabilities(self, user, workspace_id: int, module: str) -> Dict[str, Any]:
-        """Get user's capabilities for a specific module in a workspace"""
-        from database import ModulePermission, WorkspaceRole, WorkspaceMember
+        """Get baseline role capabilities for a module in a workspace (without overrides)."""
+        from database import ModulePermission, WorkspaceMember
         
         if self.is_system_admin(user):
             # System admin has all capabilities
@@ -223,10 +267,7 @@ class PermissionService:
             return {}
         
         # Get workspace role definition
-        ws_role = WorkspaceRole.query.filter(
-            ((WorkspaceRole.workspace_id == workspace_id) | (WorkspaceRole.workspace_id.is_(None))),
-            WorkspaceRole.code == member.role.upper()
-        ).order_by(WorkspaceRole.workspace_id.desc().nullslast()).first()
+        ws_role = self._find_workspace_role(workspace_id, member.role)
         
         if not ws_role:
             # Fallback to section-based permissions (legacy)
@@ -243,6 +284,122 @@ class PermissionService:
         
         # Fallback to default based on role
         return self._get_default_module_capabilities(member.role, module)
+
+    def get_role_module_capabilities(self, workspace_id: int, member_role: str, module: str) -> Dict[str, Any]:
+        """Get baseline module capabilities for a workspace member role."""
+        from database import ModulePermission
+
+        if not workspace_id or not module:
+            return {}
+
+        ws_role = self._find_workspace_role(workspace_id, member_role)
+        if ws_role:
+            mod_perm = ModulePermission.query.filter_by(
+                workspace_role_id=ws_role.id,
+                module=module
+            ).first()
+            if mod_perm:
+                return mod_perm.get_capabilities()
+
+        # Fallback to hardcoded defaults for compatibility.
+        return self._get_default_module_capabilities(member_role, module)
+
+    def get_user_overrides(self, workspace_id: int, user_id: int, module: str = None) -> Dict[str, str]:
+        """Get per-user override effects for workspace/module as action -> effect."""
+        from database import WorkspaceUserPermissionOverride
+
+        if not workspace_id or not user_id:
+            return {}
+
+        cache_key = f"ws_override:{workspace_id}:{user_id}:{module or '*'}"
+        if cache_key in self._cache:
+            cached = self._cache[cache_key]
+            if datetime.utcnow().timestamp() - cached['time'] < self._cache_ttl:
+                return cached['value']
+
+        query = WorkspaceUserPermissionOverride.query.filter_by(
+            workspace_id=workspace_id,
+            user_id=user_id
+        )
+        if module:
+            query = query.filter_by(module=module)
+
+        rows = query.all()
+        result = {}
+        for row in rows:
+            if row.effect in (WorkspaceUserPermissionOverride.EFFECT_ALLOW, WorkspaceUserPermissionOverride.EFFECT_DENY):
+                normalized_action = self._normalize_module_action(row.action)
+                result[normalized_action] = row.effect
+
+        self._cache[cache_key] = {'value': result, 'time': datetime.utcnow().timestamp()}
+        return result
+
+    def _normalize_module_action(self, action: str) -> str:
+        action_text = (action or '').strip().lower()
+        aliases = {
+            'view': 'read',
+            'bulk_upload': 'bulk',
+        }
+        return aliases.get(action_text, action_text)
+
+    def check_workspace_module_action(self, user, workspace_id: int, module: str, action: str) -> bool:
+        """Evaluate workspace module access using deny/allow override precedence."""
+        if self.is_system_admin(user):
+            return True
+        if not user or not workspace_id or not module or not action:
+            return False
+
+        member_role = self.get_workspace_role(user, workspace_id)
+        if not member_role:
+            return False
+
+        normalized_action = self._normalize_module_action(action)
+        baseline_caps = self.get_role_module_capabilities(workspace_id, member_role, module) or {}
+        override_effects = self.get_user_overrides(workspace_id, user.id, module=module)
+
+        # Deny always wins.
+        if override_effects.get(normalized_action) == 'deny':
+            print(
+                f"[PERM] workspace={workspace_id} user={user.id} "
+                f"module={module} action={normalized_action} source=override_deny"
+            )
+            return False
+        # Explicit allow wins over baseline deny.
+        if override_effects.get(normalized_action) == 'allow':
+            print(
+                f"[PERM] workspace={workspace_id} user={user.id} "
+                f"module={module} action={normalized_action} source=override_allow"
+            )
+            return True
+
+        return baseline_caps.get(normalized_action, False) is True
+
+    def get_effective_module_capabilities(self, user, workspace_id: int, module: str) -> Dict[str, Any]:
+        """Return module capabilities after applying per-user allow/deny overrides."""
+        if self.is_system_admin(user):
+            return {
+                'read': True,
+                'create': True,
+                'edit': True,
+                'delete': True,
+                'publish': True,
+                'assign': True,
+                'bulk': True,
+                'scope': 'workspace'
+            }
+        if not user:
+            return {}
+
+        member_role = self.get_workspace_role(user, workspace_id)
+        baseline_caps = self.get_role_module_capabilities(workspace_id, member_role, module) or {}
+        effective = dict(baseline_caps)
+        override_effects = self.get_user_overrides(workspace_id, user.id, module=module)
+        for action, effect in override_effects.items():
+            if effect == 'deny':
+                effective[action] = False
+            elif effect == 'allow':
+                effective[action] = True
+        return effective
     
     def _get_legacy_module_permissions(self, user, module: str) -> Dict[str, Any]:
         """Get module permissions from legacy section_permissions"""
@@ -296,8 +453,7 @@ class PermissionService:
     
     def check_module_access(self, user, workspace_id: int, module: str, action: str) -> bool:
         """Check if user can perform action in module"""
-        caps = self.get_module_capabilities(user, workspace_id, module)
-        return caps.get(action, False) == True
+        return self.check_workspace_module_action(user, workspace_id, module, action)
     
     def check_module_scope(self, user, workspace_id: int, module: str, object_owner_id: int) -> bool:
         """Check if user's scope allows access to object owned by object_owner_id"""
@@ -584,6 +740,7 @@ class PermissionService:
             'workspace_role': None,
             'workspace_permissions': {},
             'module_capabilities': {},
+            'user_overrides': {},
             'object_permissions': {},
             'effective': {}
         }
@@ -617,7 +774,8 @@ class PermissionService:
             
             # Module capabilities
             if module:
-                result['module_capabilities'] = self.get_module_capabilities(user, workspace_id, module)
+                result['module_capabilities'] = self.get_effective_module_capabilities(user, workspace_id, module)
+                result['user_overrides'] = self.get_user_overrides(workspace_id, user.id, module=module)
         
         # Object permissions
         if resource_type and resource_id:
@@ -657,14 +815,21 @@ class PermissionService:
     
     # ==================== CACHE MANAGEMENT ====================
     
-    def clear_cache(self, user_id: int = None):
-        """Clear permission cache"""
-        if user_id:
-            keys_to_remove = [k for k in self._cache.keys() if f":{user_id}:" in k]
-            for key in keys_to_remove:
-                del self._cache[key]
-        else:
+    def clear_cache(self, user_id: int = None, workspace_id: int = None):
+        """Clear permission cache (optionally scoped by user/workspace)."""
+        if user_id is None and workspace_id is None:
             self._cache.clear()
+            return
+
+        keys_to_remove = []
+        for key in self._cache.keys():
+            has_user = user_id is None or f":{user_id}" in key or f"{user_id}:" in key
+            has_workspace = workspace_id is None or f":{workspace_id}" in key or f"{workspace_id}:" in key
+            if has_user and has_workspace:
+                keys_to_remove.append(key)
+
+        for key in keys_to_remove:
+            self._cache.pop(key, None)
 
 
 # ==================== SINGLETON INSTANCE ====================

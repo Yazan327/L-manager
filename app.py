@@ -1140,7 +1140,9 @@ with app.app_context():
             print(f"[BACKFILL] Workspace_id backfill failed: {e}")
             db.session.rollback()
         
-        default_ws_id = get_default_workspace_id()
+        # Avoid calling helper before it is defined later in this module.
+        default_ws = Workspace.query.filter_by(is_active=True).order_by(Workspace.id.asc()).first()
+        default_ws_id = default_ws.id if default_ws else None
         
         # Initialize default settings (workspace-scoped)
         AppSettings.init_defaults(workspace_id=default_ws_id)
