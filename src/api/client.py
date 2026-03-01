@@ -171,7 +171,8 @@ class PropertyFinderClient:
         data: dict = None, 
         params: dict = None,
         retries: int = None,
-        skip_auth: bool = False
+        skip_auth: bool = False,
+        headers: dict = None
     ) -> Dict[str, Any]:
         """
         Make an API request with retry logic and automatic token refresh
@@ -228,6 +229,7 @@ class PropertyFinderClient:
                     url=url,
                     json=data,
                     params=params,
+                    headers=headers,
                     timeout=Config.REQUEST_TIMEOUT
                 )
                 
@@ -613,7 +615,14 @@ class PropertyFinderClient:
     
     # ==================== LOCATION OPERATIONS ====================
     
-    def get_locations(self, search: str = None, page: int = 1, per_page: int = 15, **filters) -> Dict[str, Any]:
+    def get_locations(
+        self,
+        search: str = None,
+        page: int = 1,
+        per_page: int = 15,
+        accept_language: str = None,
+        **filters
+    ) -> Dict[str, Any]:
         """
         Search locations in PropertyFinder's location tree
         
@@ -631,7 +640,10 @@ class PropertyFinderClient:
         params = {'page': page, 'perPage': per_page, **filters}
         if search:
             params['search'] = search
-        return self._make_request('GET', '/locations', params=params)
+        headers = None
+        if accept_language:
+            headers = {'Accept-Language': accept_language}
+        return self._make_request('GET', '/locations', params=params, headers=headers)
     
     # ==================== COMPLIANCE (DLD/RERA) ====================
     

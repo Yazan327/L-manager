@@ -1066,6 +1066,26 @@ function locationSearch() {
         results: [],
         showResults: false,
         searching: false,
+
+        detectInputLanguage() {
+            // Arabic block + Arabic supplement/presentation forms
+            return /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(this.locationText)
+                ? 'ar'
+                : 'en';
+        },
+
+        localizedText(value, lang) {
+            if (value === null || value === undefined) return '';
+            if (typeof value === 'string') return value;
+            if (typeof value === 'object') {
+                if (value[lang]) return value[lang];
+                if (value.en) return value.en;
+                if (value.ar) return value.ar;
+                const first = Object.values(value).find(v => typeof v === 'string' && v.trim());
+                return first || '';
+            }
+            return String(value);
+        },
         
         async searchLocations() {
             if (this.locationText.length < 2) {
@@ -1076,20 +1096,23 @@ function locationSearch() {
             
             this.searching = true;
             try {
-                const response = await fetch(`/api/locations?search=${encodeURIComponent(this.locationText)}`);
+                const lang = this.detectInputLanguage();
+                const response = await fetch(
+                    `/api/locations?search=${encodeURIComponent(this.locationText)}&lang=${lang}`
+                );
                 const data = await response.json();
                 
                 if (data.data && Array.isArray(data.data)) {
                     this.results = data.data.map(loc => ({
                         id: loc.id,
-                        name: loc.name?.en || loc.name || `Location ${loc.id}`,
-                        path: this.buildPath(loc)
+                        name: this.localizedText(loc.name, lang) || `Location ${loc.id}`,
+                        path: this.buildPath(loc, lang)
                     }));
                 } else if (Array.isArray(data)) {
                     this.results = data.map(loc => ({
                         id: loc.id,
-                        name: loc.name?.en || loc.name || `Location ${loc.id}`,
-                        path: this.buildPath(loc)
+                        name: this.localizedText(loc.name, lang) || `Location ${loc.id}`,
+                        path: this.buildPath(loc, lang)
                     }));
                 } else {
                     this.results = [];
@@ -1104,12 +1127,15 @@ function locationSearch() {
             }
         },
         
-        buildPath(loc) {
+        buildPath(loc, lang = 'en') {
             const parts = [];
-            if (loc.city?.name?.en) parts.push(loc.city.name.en);
-            if (loc.community?.name?.en) parts.push(loc.community.name.en);
-            if (loc.subCommunity?.name?.en) parts.push(loc.subCommunity.name.en);
-            return parts.join(' > ') || loc.fullName?.en || '';
+            const cityName = this.localizedText(loc.city?.name, lang);
+            const communityName = this.localizedText(loc.community?.name, lang);
+            const subCommunityName = this.localizedText(loc.subCommunity?.name, lang);
+            if (cityName) parts.push(cityName);
+            if (communityName) parts.push(communityName);
+            if (subCommunityName) parts.push(subCommunityName);
+            return parts.join(' > ') || this.localizedText(loc.fullName, lang) || '';
         },
         
         selectLocation(loc) {

@@ -8425,9 +8425,15 @@ def api_get_locations():
     """API: Search locations"""
     search = request.args.get('search', '')
     page = request.args.get('page', 1, type=int)
+    lang = (request.args.get('lang') or '').strip().lower()
+    accept_language = None
+    if lang == 'ar':
+        accept_language = 'ar-AE,ar;q=0.9,en;q=0.8'
+    elif lang == 'en':
+        accept_language = 'en-AE,en;q=0.9,ar;q=0.8'
     
     client = get_client(workspace_id=get_active_workspace_id())
-    result = client.get_locations(search=search, page=page)
+    result = client.get_locations(search=search, page=page, accept_language=accept_language)
     return jsonify(result)
 
 
