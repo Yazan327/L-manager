@@ -8589,6 +8589,86 @@ def _request_prefers_json_response():
     return request.is_json or 'application/json' in accept
 
 
+def _parse_possible_json_blob(value):
+    """Parse JSON-like string payloads that may be embedded in PF error fields."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    candidates = [text]
+    first_brace = text.find('{')
+    last_brace = text.rfind('}')
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        candidates.append(text[first_brace:last_brace + 1])
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, (dict, list)):
+                return parsed
+        except Exception:
+            continue
+    return None
+
+
+def _extract_pf_error_items(payload):
+    """Extract normalized error items from PF error payloads (including nested JSON blobs)."""
+    items = []
+
+    def _collect(obj):
+        if isinstance(obj, list):
+            for entry in obj:
+                _collect(entry)
+            return
+        if not isinstance(obj, dict):
+            return
+
+        raw_errors = obj.get('errors')
+        if isinstance(raw_errors, list):
+            for entry in raw_errors:
+                if isinstance(entry, dict):
+                    items.append(entry)
+                elif entry is not None:
+                    items.append({'detail': str(entry)})
+        elif isinstance(raw_errors, dict):
+            for field, value in raw_errors.items():
+                if isinstance(value, list):
+                    for entry in value:
+                        if isinstance(entry, dict):
+                            item = dict(entry)
+                            item.setdefault('field', field)
+                            items.append(item)
+                        else:
+                            items.append({'field': field, 'detail': str(entry)})
+                elif value is not None:
+                    items.append({'field': field, 'detail': str(value)})
+
+        for key in ('message', 'detail', 'error', 'raw'):
+            nested = _parse_possible_json_blob(obj.get(key))
+            if nested is not None:
+                _collect(nested)
+
+    _collect(payload)
+    return items
+
+
+def _is_pf_reference_in_use_error(exc: PropertyFinderAPIError):
+    """Return True when PF rejected create due to duplicate reference for the client."""
+    payload = exc.response if isinstance(exc.response, dict) else {'message': exc.message}
+    for item in _extract_pf_error_items(payload):
+        type_value = str(item.get('type') or '').lower()
+        pointer = str(item.get('pointer') or item.get('field') or '').lower()
+        detail = str(item.get('detail') or item.get('message') or item.get('reason') or '').lower()
+        if 'referenceinusebyanotherlistingofclient' in type_value:
+            return True
+        if pointer.endswith('/reference') and ('exists' in detail or 'in use' in detail or 'duplicate' in detail):
+            return True
+        if 'catalog with this reference already exists' in detail:
+            return True
+    text = str(exc.message or '').lower()
+    return 'reference already exists' in text or 'catalog with this reference already exists' in text
+
+
 def _format_pf_api_error_message(exc: PropertyFinderAPIError):
     """Build a user-facing PF error message with request diagnostics when available."""
     request_id = None
@@ -8599,6 +8679,10 @@ def _format_pf_api_error_message(exc: PropertyFinderAPIError):
         request_id = exc.response.get('_request_id')
         cloudfront = exc.response.get('_cloudfront')
         details = exc.response.get('errors') or exc.response.get('error') or exc.response.get('raw')
+        if details is None:
+            extracted = _extract_pf_error_items(exc.response)
+            if extracted:
+                details = extracted
     if cloudfront and isinstance(cloudfront, dict):
         cf_id = cloudfront.get('cf_id')
         if cf_id:
@@ -8704,6 +8788,64 @@ def _publish_local_listing_to_pf(local_listing, client):
             local_listing.pf_listing_id = str(pf_id)
             db.session.commit()
         except PropertyFinderAPIError as e:
+            if _is_pf_reference_in_use_error(e) and local_listing.reference:
+                existing_pf_listing = find_pf_listing_in_cache_by_reference(
+                    local_listing.reference,
+                    workspace_id=local_listing.workspace_id
+                )
+                if not existing_pf_listing:
+                    existing_pf_listing = find_pf_listing_by_reference(client, local_listing.reference)
+                existing_pf_id = None
+                if isinstance(existing_pf_listing, dict) and existing_pf_listing.get('id'):
+                    existing_pf_id = str(existing_pf_listing.get('id'))
+
+                if existing_pf_id:
+                    local_listing.pf_listing_id = existing_pf_id
+                    db.session.commit()
+                    try:
+                        client.update_listing(existing_pf_id, listing_data)
+                        media_warnings.append(
+                            f'Reference "{local_listing.reference}" already existed on PropertyFinder '
+                            f'(ID {existing_pf_id}); updated existing listing instead of creating a new one.'
+                        )
+                    except PropertyFinderAPIError as update_error:
+                        msg, request_id, cloudfront, details = _format_pf_api_error_message(update_error)
+                        return {
+                            'success': False,
+                            'status_code': update_error.status_code or 400,
+                            'error': (
+                                f'Reference "{local_listing.reference}" already exists on PropertyFinder '
+                                f'(ID {existing_pf_id}), but updating it failed: {msg}'
+                            ),
+                            'request_id': request_id,
+                            'cloudfront': cloudfront,
+                            'details': details,
+                            'redirect_to': 'view',
+                            'warnings': media_warnings
+                        }
+                    except Exception as update_error:
+                        return {
+                            'success': False,
+                            'status_code': 400,
+                            'error': (
+                                f'Reference "{local_listing.reference}" already exists on PropertyFinder '
+                                f'(ID {existing_pf_id}), but updating it failed: {str(update_error)}'
+                            ),
+                            'redirect_to': 'view',
+                            'warnings': media_warnings
+                        }
+                else:
+                    return {
+                        'success': False,
+                        'status_code': 409,
+                        'error': (
+                            f'Reference "{local_listing.reference}" is already used on PropertyFinder. '
+                            'Open listing and click "Sync PF Status" to link it, or change the reference.'
+                        ),
+                        'redirect_to': 'edit',
+                        'warnings': media_warnings
+                    }
+
             msg, request_id, cloudfront, details = _format_pf_api_error_message(e)
             return {
                 'success': False,
