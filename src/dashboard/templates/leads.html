@@ -118,6 +118,12 @@
                 </svg>
                 Contacts
             </button>
+            <button @click="showCardDisplayModal = true"
+                    class="bg-gray-100 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-200" title="Customize card fields">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                </svg>
+            </button>
             <button x-show="canManageSettings" @click="openSettingsModal()" 
                     class="bg-gray-100 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-200" title="Configure Statuses & Sources">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -151,6 +157,10 @@
                 <div class="text-sm text-gray-500">Won</div>
             </div>
         </div>
+        <div class="mt-2 text-sm text-gray-500">
+            Showing <span class="font-medium" x-text="leads.length"></span> of
+            <span class="font-medium" x-text="pagination.total"></span> leads
+        </div>
 
         <!-- Filters -->
         <div class="bg-white rounded-lg p-4 shadow-sm border mt-6">
@@ -161,39 +171,39 @@
                     <option value="team">Team Leads</option>
                 </select>
                 <div class="flex-1 min-w-[200px]">
-                    <input type="text" x-model="filters.search" @input="filterLeads()"
+                    <input type="text" x-model="filters.search" @input.debounce.400ms="onFiltersChanged()"
                            placeholder="Search by name, email, phone..."
                            class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
                 </div>
-                <select x-model="filters.status" @change="filterLeads()"
+                <select x-model="filters.status" @change="onFiltersChanged()"
                         class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
                     <option value="">All Status</option>
                     <template x-for="status in customStatuses" :key="status.id">
                         <option :value="status.id" x-text="status.label"></option>
                     </template>
                 </select>
-                <select x-model="filters.source" @change="filterLeads()"
+                <select x-model="filters.source" @change="onFiltersChanged()"
                         class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
                     <option value="">All Sources</option>
                     <template x-for="source in customSources" :key="source.id">
                         <option :value="source.id" x-text="source.label"></option>
                     </template>
                 </select>
-                <select multiple x-model="filters.tag_ids" @change="loadLeads()"
+                <select multiple x-model="filters.tag_ids" @change="onFiltersChanged()"
                         class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 min-w-[180px]"
                         title="Filter by tags (match any selected)">
                     <template x-for="tag in customTags" :key="tag.id">
                         <option :value="tag.id" x-text="tag.label"></option>
                     </template>
                 </select>
-                <select x-show="(canManageLeads || canViewTeamLeads) && leadScope === 'team'" x-cloak x-model="selectedTeamMemberId" @change="loadLeads()"
+                <select x-show="(canManageLeads || canViewTeamLeads) && leadScope === 'team'" x-cloak x-model="selectedTeamMemberId" @change="onFiltersChanged()"
                         class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
                     <option value="">All Team Members</option>
                     <template x-for="member in teamMembers" :key="member.id">
                         <option :value="member.id" x-text="member.name"></option>
                     </template>
                 </select>
-                <select x-model="filters.priority" @change="filterLeads()"
+                <select x-model="filters.priority" @change="onFiltersChanged()"
                         class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
                     <option value="">All Priority</option>
                     <option value="urgent">Urgent</option>
@@ -201,7 +211,7 @@
                     <option value="medium">Medium</option>
                     <option value="low">Low</option>
                 </select>
-                <select x-model="filters.lead_type" @change="filterLeads()"
+                <select x-model="filters.lead_type" @change="onFiltersChanged()"
                         class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
                     <option value="">All Types</option>
                     <option value="for_sale">For Sale</option>
@@ -229,11 +239,8 @@
                                 <span x-show="sortColumn === 'name'" x-text="sortDirection === 'asc' ? '↑' : '↓'"></span>
                             </div>
                         </th>
-                        <th @click="sortBy('channel')" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
-                            <div class="flex items-center gap-1">
-                                Channel
-                                <span x-show="sortColumn === 'channel'" x-text="sortDirection === 'asc' ? '↑' : '↓'"></span>
-                            </div>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                            Channel
                         </th>
                         <th @click="sortBy('status')" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
                             <div class="flex items-center gap-1">
@@ -241,18 +248,12 @@
                                 <span x-show="sortColumn === 'status'" x-text="sortDirection === 'asc' ? '↑' : '↓'"></span>
                             </div>
                         </th>
-                        <th @click="sortBy('pf_status')" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
-                            <div class="flex items-center gap-1">
-                                PF Status
-                                <span x-show="sortColumn === 'pf_status'" x-text="sortDirection === 'asc' ? '↑' : '↓'"></span>
-                            </div>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                            PF Status
                         </th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Listing</th>
-                        <th @click="sortBy('assigned_to_id')" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
-                            <div class="flex items-center gap-1">
-                                Responsible
-                                <span x-show="sortColumn === 'assigned_to_id'" x-text="sortDirection === 'asc' ? '↑' : '↓'"></span>
-                            </div>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                            Responsible
                         </th>
                         <th @click="sortBy('created_at')" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100">
                             <div class="flex items-center gap-1">
@@ -394,6 +395,20 @@
                 </tbody>
             </table>
         </div>
+        <div class="px-4 py-3 border-t bg-gray-50 flex items-center justify-between" x-show="pagination.total_pages > 1">
+            <button @click="goToPage(pagination.page - 1)" :disabled="!pagination.has_prev"
+                    class="px-3 py-1.5 text-sm border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-white">
+                Prev
+            </button>
+            <div class="text-sm text-gray-600">
+                Page <span class="font-medium" x-text="pagination.page"></span> of
+                <span class="font-medium" x-text="pagination.total_pages"></span>
+            </div>
+            <button @click="goToPage(pagination.page + 1)" :disabled="!pagination.has_next"
+                    class="px-3 py-1.5 text-sm border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-white">
+                Next
+            </button>
+        </div>
     </div>
 
     <!-- Kanban View (isolated scrollable area with drag-to-scroll) -->
@@ -405,6 +420,9 @@
          @mouseleave="stopDragScroll()"
          :class="isDraggingScroll && 'cursor-grabbing select-none'"
          class="w-full overflow-x-auto cursor-grab">
+        <div x-show="pagination.capped" class="mb-3 px-3 py-2 text-sm rounded bg-amber-50 border border-amber-200 text-amber-700">
+            Showing first <span x-text="leads.length"></span> leads in Kanban. Refine filters to narrow results.
+        </div>
         <div class="pb-4">
             <div class="inline-flex gap-4 min-w-max">
                 <!-- Kanban Columns -->
@@ -1123,6 +1141,46 @@
         </div>
     </div>
 
+    <!-- Card Display Modal -->
+    <div x-show="showCardDisplayModal" x-cloak class="fixed inset-0 z-50 overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen px-4">
+            <div class="fixed inset-0 bg-black opacity-50" @click="showCardDisplayModal = false"></div>
+            <div class="relative bg-white rounded-lg shadow-xl max-w-2xl w-full p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold">Lead Card Display</h3>
+                    <button @click="showCardDisplayModal = false" class="text-gray-400 hover:text-gray-600">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                <p class="text-sm text-gray-600 mb-4">Choose which fields appear on Kanban lead cards. This preference is saved for your account.</p>
+                <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
+                    <template x-for="field in availableCardFields" :key="`pref-${field.id}`">
+                        <label class="flex items-center gap-2 p-2 rounded border hover:bg-gray-50 cursor-pointer"
+                               :class="cardDisplayFields.includes(field.id) ? 'border-blue-300 bg-blue-50' : 'border-gray-200'">
+                            <input type="checkbox"
+                                   :checked="cardDisplayFields.includes(field.id)"
+                                   :disabled="field.required"
+                                   @change="toggleCardField(field.id)"
+                                   class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                            <span class="text-sm" :class="field.required ? 'font-medium' : ''" x-text="field.label"></span>
+                            <span x-show="field.required" class="text-xs text-gray-400">(required)</span>
+                        </label>
+                    </template>
+                </div>
+                <div class="mt-6 flex justify-end gap-3">
+                    <button type="button" @click="showCardDisplayModal = false"
+                            class="px-4 py-2 border rounded-lg hover:bg-gray-50">Close</button>
+                    <button @click="saveCardPreferences(false)" :disabled="savingCardPreferences"
+                            class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                        <span x-text="savingCardPreferences ? 'Saving...' : 'Save Card Display'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Settings Modal -->
     <div x-show="showSettingsModal" x-cloak class="fixed inset-0 z-50 overflow-y-auto">
         <div class="flex items-center justify-center min-h-screen px-4">
@@ -1159,7 +1217,7 @@
                                         <option value="pink">Pink</option>
                                         <option value="indigo">Indigo</option>
                                     </select>
-                                    <input type="text" x-model="status.label" @input="updateStatusId(status)"
+                                    <input type="text" x-model="status.label"
                                            class="flex-1 px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500"
                                            placeholder="Enter status name">
                                     <button @click="removeStatus(index)" :disabled="editStatuses.length <= 1"
@@ -1194,7 +1252,7 @@
                                         <option value="pink">Pink</option>
                                         <option value="indigo">Indigo</option>
                                     </select>
-                                    <input type="text" x-model="source.label" @input="updateSourceId(source)"
+                                    <input type="text" x-model="source.label"
                                            class="flex-1 px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500"
                                            placeholder="Enter source name">
                                     <button @click="removeSource(index)" :disabled="editSources.length <= 1"
@@ -1229,7 +1287,7 @@
                                         <option value="pink">Pink</option>
                                         <option value="indigo">Indigo</option>
                                     </select>
-                                    <input type="text" x-model="tag.label" @input="updateTagId(tag)"
+                                    <input type="text" x-model="tag.label"
                                            class="flex-1 px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500"
                                            placeholder="Enter tag name">
                                     <button @click="removeTag(index)"
@@ -1242,42 +1300,6 @@
                             </template>
                             <div x-show="editTags.length === 0" class="text-xs text-gray-500">No tags configured</div>
                         </div>
-                    </div>
-                </div>
-                
-                <!-- Card Display Settings -->
-                <div class="col-span-2 mt-4 pt-4 border-t">
-                    <div class="flex items-center justify-between mb-3">
-                        <h4 class="font-medium text-gray-900">Kanban Card Display</h4>
-                        <span class="text-xs text-gray-500">Choose which fields to show on lead cards</span>
-                    </div>
-                    <div class="grid grid-cols-3 gap-2">
-                        <template x-for="field in availableCardFields" :key="field.id">
-                            <label class="flex items-center gap-2 p-2 rounded border hover:bg-gray-50 cursor-pointer"
-                                   :class="cardDisplayFields.includes(field.id) ? 'border-blue-300 bg-blue-50' : 'border-gray-200'">
-                                <input type="checkbox" 
-                                       :checked="cardDisplayFields.includes(field.id)"
-                                       :disabled="field.required"
-                                       @change="toggleCardField(field.id)"
-                                       class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                                <span class="text-sm" :class="field.required ? 'font-medium' : ''" x-text="field.label"></span>
-                                <span x-show="field.required" class="text-xs text-gray-400">(required)</span>
-                            </label>
-                        </template>
-                    </div>
-                </div>
-                
-                <!-- Cleanup Section -->
-                <div x-show="canManageSettings" class="col-span-2 mt-4 pt-4 border-t">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <div class="text-sm font-medium text-gray-700">Cleanup Invalid Sources</div>
-                            <div class="text-xs text-gray-500">Fix leads with invalid source IDs (like source_123...)</div>
-                        </div>
-                        <button @click="cleanupSources()" :disabled="cleaningUp"
-                                class="px-3 py-1.5 text-sm bg-orange-100 text-orange-700 rounded hover:bg-orange-200 disabled:opacity-50">
-                            <span x-text="cleaningUp ? 'Fixing...' : 'Fix Now'"></span>
-                        </button>
                     </div>
                 </div>
                 
@@ -1532,15 +1554,34 @@ function leadsManager() {
         customSources: [],
         customTags: [],
         teamMembers: [],
+        showCardDisplayModal: false,
         showSettingsModal: false,
         editStatuses: [],
         editSources: [],
         editTags: [],
         savingConfig: false,
-        cleaningUp: false,
+        savingCardPreferences: false,
+        pagination: {
+            page: 1,
+            per_page: 50,
+            total: 0,
+            total_pages: 1,
+            has_next: false,
+            has_prev: false,
+            capped: false
+        },
+        listPerPage: 50,
+        kanbanPerPage: 300,
         
         // Card display settings
-        cardDisplayFields: JSON.parse(localStorage.getItem('leads_card_fields') || 'null') || ['name', 'source', 'email', 'phone', 'listing_reference', 'lead_type', 'assigned_to', 'received_at'],
+        cardDisplayFields: (() => {
+            try {
+                const parsed = JSON.parse(localStorage.getItem('leads_card_fields') || 'null');
+                return Array.isArray(parsed) ? parsed : null;
+            } catch (e) {
+                return null;
+            }
+        })() || ['name', 'source', 'email', 'phone', 'listing_reference', 'lead_type', 'assigned_to', 'received_at'],
         availableCardFields: [
             { id: 'name', label: 'Name', required: true },
             { id: 'source', label: 'Source/Channel' },
@@ -1661,6 +1702,63 @@ function leadsManager() {
             return values;
         },
 
+        normalizeCardDisplayFields(selectedFields) {
+            const validIds = this.availableCardFields.map(field => field.id);
+            const requiredIds = this.availableCardFields
+                .filter(field => field.required)
+                .map(field => field.id);
+            const normalized = [];
+            const source = Array.isArray(selectedFields) ? selectedFields : [];
+            source.forEach(rawId => {
+                const id = String(rawId || '').trim();
+                if (!id || !validIds.includes(id) || normalized.includes(id)) return;
+                normalized.push(id);
+            });
+            requiredIds.forEach(id => {
+                if (!normalized.includes(id)) normalized.push(id);
+            });
+            return normalized;
+        },
+
+        async loadCardPreferences() {
+            let resolved = this.cardDisplayFields;
+            try {
+                const resp = await fetch('/api/leads/preferences');
+                const data = await resp.json();
+                if (resp.ok && data.success && Array.isArray(data.card_fields)) {
+                    resolved = data.card_fields;
+                }
+            } catch (e) {
+                console.warn('Failed to load lead card preferences from API, using local fallback');
+            }
+            this.cardDisplayFields = this.normalizeCardDisplayFields(resolved);
+            localStorage.setItem('leads_card_fields', JSON.stringify(this.cardDisplayFields));
+        },
+
+        async saveCardPreferences(silent = true) {
+            this.savingCardPreferences = true;
+            this.cardDisplayFields = this.normalizeCardDisplayFields(this.cardDisplayFields);
+            localStorage.setItem('leads_card_fields', JSON.stringify(this.cardDisplayFields));
+            try {
+                const resp = await fetch('/api/leads/preferences', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ card_fields: this.cardDisplayFields })
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok || data.success === false) {
+                    throw new Error(data.error || 'Failed to save card preferences');
+                }
+                this.cardDisplayFields = this.normalizeCardDisplayFields(data.card_fields || this.cardDisplayFields);
+                localStorage.setItem('leads_card_fields', JSON.stringify(this.cardDisplayFields));
+                if (!silent) this.showCardDisplayModal = false;
+            } catch (e) {
+                if (!silent) alert(e.message || 'Failed to save card preferences');
+                console.error('Failed to save card preferences:', e);
+            }
+            this.savingCardPreferences = false;
+        },
+
         getReminderDismissKey(notification) {
             return `${this.currentUserId || 'anon'}:${notification.reminder_id}:${notification.due_at || ''}`;
         },
@@ -1736,7 +1834,7 @@ function leadsManager() {
                 if (!resp.ok || data.success === false) {
                     throw new Error(data.error || 'Failed to load boards');
                 }
-                this.reminderBoards = (data.boards || []).filter(board => board.my_role && board.my_role !== 'viewer');
+                this.reminderBoards = (data.boards || []).filter(board => !!board.can_create_tasks);
                 if (this.reminderForm.type === 'task') {
                     if (!this.reminderForm.task_board_id && this.reminderBoards.length > 0) {
                         this.reminderForm.task_board_id = String(this.reminderBoards[0].id);
@@ -1775,8 +1873,22 @@ function leadsManager() {
                 this.reminderForm.task_column_id = String(this.reminderColumns[0].id);
             }
         },
+
+        onFiltersChanged() {
+            this.pagination.page = 1;
+            this.loadLeads();
+        },
+
+        goToPage(nextPage) {
+            const page = Number(nextPage || 1);
+            if (!Number.isFinite(page)) return;
+            if (page < 1 || page > this.pagination.total_pages || page === this.pagination.page) return;
+            this.pagination.page = page;
+            this.loadLeads();
+        },
         
         async init() {
+            await this.loadCardPreferences();
             await this.loadConfig();
             await this.loadLeads();
             await this.loadReminderBoards();
@@ -1790,6 +1902,7 @@ function leadsManager() {
             // Watch viewMode changes and save to localStorage
             this.$watch('viewMode', (val) => {
                 localStorage.setItem('leads_view_mode', val);
+                this.onFiltersChanged();
             });
         },
         
@@ -1824,12 +1937,23 @@ function leadsManager() {
             try {
                 const params = new URLSearchParams();
                 params.set('scope', this.leadScope || 'my');
+                params.set('view', this.viewMode === 'kanban' ? 'kanban' : 'list');
                 if ((this.canManageLeads || this.canViewTeamLeads) && this.leadScope === 'team' && this.selectedTeamMemberId) {
                     params.set('assigned_to_id', this.selectedTeamMemberId);
                 }
+                if (this.filters.search) params.set('search', this.filters.search);
+                if (this.filters.status) params.set('status', this.filters.status);
+                if (this.filters.source) params.set('source', this.filters.source);
+                if (this.filters.priority) params.set('priority', this.filters.priority);
+                if (this.filters.lead_type) params.set('lead_type', this.filters.lead_type);
                 if (Array.isArray(this.filters.tag_ids) && this.filters.tag_ids.length > 0) {
                     params.set('tag_ids', this.filters.tag_ids.join(','));
                 }
+                params.set('sort', this.sortColumn || 'created_at');
+                params.set('direction', this.sortDirection || 'desc');
+                params.set('page', String(this.pagination.page || 1));
+                params.set('per_page', String(this.viewMode === 'kanban' ? this.kanbanPerPage : this.pagination.per_page || this.listPerPage));
+
                 const resp = await fetch(`/api/leads?${params.toString()}`);
                 const data = await resp.json();
                 if (!resp.ok || data.success === false) {
@@ -1841,12 +1965,19 @@ function leadsManager() {
                 }
                 if (meta.assigned_to_id) {
                     this.selectedTeamMemberId = String(meta.assigned_to_id);
-                } else if (this.leadScope !== 'team') {
+                } else {
                     this.selectedTeamMemberId = '';
                 }
                 if (Array.isArray(meta.tag_ids)) {
                     this.filters.tag_ids = meta.tag_ids;
                 }
+                this.pagination.page = Number(meta.page || this.pagination.page || 1);
+                this.pagination.per_page = Number(meta.per_page || this.pagination.per_page || this.listPerPage);
+                this.pagination.total = Number(meta.total || 0);
+                this.pagination.total_pages = Number(meta.total_pages || 1);
+                this.pagination.has_next = !!meta.has_next;
+                this.pagination.has_prev = !!meta.has_prev;
+                this.pagination.capped = !!meta.capped;
                 this.leads = (data.leads || []).map(lead => ({
                     ...lead,
                     tags: this.normalizeLeadTags(lead.tags || [])
@@ -2217,64 +2348,22 @@ function leadsManager() {
                 this.sortColumn = column;
                 this.sortDirection = 'asc';
             }
-            this.filterLeads();
+            this.onFiltersChanged();
         },
 
         onLeadScopeChanged() {
             if (this.leadScope !== 'team') {
                 this.selectedTeamMemberId = '';
             }
-            this.loadLeads();
+            this.onFiltersChanged();
         },
         
         filterLeads() {
-            let filtered = [...this.leads];
-            if (this.filters.search) {
-                const s = this.filters.search.toLowerCase();
-                filtered = filtered.filter(l => 
-                    l.name?.toLowerCase().includes(s) ||
-                    l.email?.toLowerCase().includes(s) ||
-                    l.phone?.includes(s)
-                );
-            }
-            if (this.filters.status) filtered = filtered.filter(l => l.status === this.filters.status);
-            if (this.filters.source) filtered = filtered.filter(l => l.source === this.filters.source);
-            if (this.filters.priority) filtered = filtered.filter(l => l.priority === this.filters.priority);
-            if (this.filters.lead_type) filtered = filtered.filter(l => l.lead_type === this.filters.lead_type);
-            if (this.selectedTeamMemberId && this.leadScope === 'team') {
-                filtered = filtered.filter(l => String(l.assigned_to_id || '') === String(this.selectedTeamMemberId));
-            }
-            if (Array.isArray(this.filters.tag_ids) && this.filters.tag_ids.length > 0) {
-                filtered = filtered.filter(l => {
-                    const leadTags = this.normalizeLeadTags(l.tags || []);
-                    return this.filters.tag_ids.some(tagId => leadTags.includes(String(tagId).toLowerCase()));
-                });
-            }
-            
-            // Apply sorting
-            filtered.sort((a, b) => {
-                let aVal = a[this.sortColumn] || '';
-                let bVal = b[this.sortColumn] || '';
-                
-                // Handle dates
-                if (this.sortColumn === 'created_at' || this.sortColumn === 'received_at') {
-                    aVal = aVal ? new Date(aVal).getTime() : 0;
-                    bVal = bVal ? new Date(bVal).getTime() : 0;
-                } else if (typeof aVal === 'string') {
-                    aVal = aVal.toLowerCase();
-                    bVal = bVal.toLowerCase();
-                }
-                
-                if (aVal < bVal) return this.sortDirection === 'asc' ? -1 : 1;
-                if (aVal > bVal) return this.sortDirection === 'asc' ? 1 : -1;
-                return 0;
-            });
-            
-            this.filteredLeads = filtered;
+            this.filteredLeads = [...this.leads];
         },
         
         updateStats() {
-            this.stats.total = this.leads.length;
+            this.stats.total = Number(this.pagination.total || this.leads.length);
             this.stats.new = this.leads.filter(l => l.status === 'new').length;
             this.stats.contacted = this.leads.filter(l => l.status === 'contacted').length;
             this.stats.qualified = this.leads.filter(l => l.status === 'qualified').length;
@@ -2855,13 +2944,6 @@ function leadsManager() {
             this.editStatuses.push({ id, label: '', color: 'gray' });
         },
         
-        // Update status ID when label changes (for new statuses only)
-        updateStatusId(status) {
-            if (status.id.startsWith('status_') && status.label) {
-                status.id = status.label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-            }
-        },
-        
         removeStatus(index) {
             if (this.editStatuses.length > 1) {
                 this.editStatuses.splice(index, 1);
@@ -2872,14 +2954,6 @@ function leadsManager() {
             // Generate a temporary ID - will be updated when user types the label
             const id = 'source_' + Date.now();
             this.editSources.push({ id, label: '', color: 'gray' });
-        },
-        
-        // Update source ID when label changes (for new sources only)
-        updateSourceId(source) {
-            if (source.id.startsWith('source_') && source.label) {
-                // Create a slug from the label
-                source.id = source.label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-            }
         },
         
         removeSource(index) {
@@ -2893,35 +2967,31 @@ function leadsManager() {
             this.editTags.push({ id, label: '', color: 'gray' });
         },
 
-        updateTagId(tag) {
-            if (tag.id.startsWith('tag_') && tag.label) {
-                tag.id = tag.label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-            }
-        },
-
         removeTag(index) {
             this.editTags.splice(index, 1);
         },
         
         toggleCardField(fieldId) {
+            const fieldConfig = this.availableCardFields.find(field => field.id === fieldId);
+            if (fieldConfig && fieldConfig.required) return;
             const idx = this.cardDisplayFields.indexOf(fieldId);
             if (idx >= 0) {
                 this.cardDisplayFields.splice(idx, 1);
             } else {
                 this.cardDisplayFields.push(fieldId);
             }
+            this.cardDisplayFields = this.normalizeCardDisplayFields(this.cardDisplayFields);
         },
         
         showField(fieldId) {
+            const fieldConfig = this.availableCardFields.find(field => field.id === fieldId);
+            if (fieldConfig && fieldConfig.required) return true;
             return this.cardDisplayFields.includes(fieldId);
         },
         
         async saveConfig() {
             this.savingConfig = true;
             try {
-                // Save card display fields to localStorage
-                localStorage.setItem('leads_card_fields', JSON.stringify(this.cardDisplayFields));
-                
                 const resp = await fetch('/api/leads/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -2946,28 +3016,6 @@ function leadsManager() {
                 alert('Failed to save: ' + e.message);
             }
             this.savingConfig = false;
-        },
-        
-        async cleanupSources() {
-            this.cleaningUp = true;
-            try {
-                const resp = await fetch('/api/leads/cleanup-sources', { method: 'POST' });
-                const data = await resp.json();
-                if (data.success) {
-                    if (data.fixed > 0) {
-                        alert(`Fixed ${data.fixed} leads with invalid sources`);
-                        await this.loadLeads();
-                    } else {
-                        alert('No leads with invalid sources found');
-                    }
-                } else {
-                    alert('Failed to cleanup: ' + (data.error || 'Unknown error'));
-                }
-            } catch (e) {
-                console.error('Failed to cleanup sources:', e);
-                alert('Failed to cleanup: ' + e.message);
-            }
-            this.cleaningUp = false;
         },
         
         getStatusLabel(statusId) {

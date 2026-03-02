@@ -10060,12 +10060,75 @@ LEAD_CONFIG_ALLOWED_COLORS = {
     'blue', 'yellow', 'green', 'purple', 'orange', 'red',
     'emerald', 'gray', 'pink', 'indigo', 'cyan', 'amber', 'teal'
 }
+LEAD_CONFIG_ID_PATTERN = re.compile(r'^[a-z0-9][a-z0-9_:-]{1,63}$')
+LEAD_CARD_REQUIRED_FIELDS = ('name',)
+LEAD_CARD_ALLOWED_FIELDS = (
+    'name', 'source', 'email', 'phone', 'whatsapp', 'message', 'listing_reference',
+    'lead_type', 'priority', 'pf_status', 'assigned_to', 'received_at',
+    'next_follow_up', 'notes', 'quick_actions'
+)
+LEAD_CARD_DEFAULT_FIELDS = (
+    'name', 'source', 'email', 'phone', 'listing_reference', 'lead_type',
+    'assigned_to', 'received_at'
+)
 
 
 def _slugify_lead_config_id(value):
     text = str(value or '').strip().lower()
     text = re.sub(r'[^a-z0-9]+', '_', text)
     return text.strip('_')
+
+
+def _is_valid_lead_config_id(value):
+    text = str(value or '').strip().lower()
+    return bool(LEAD_CONFIG_ID_PATTERN.match(text))
+
+
+def _generate_lead_config_id(prefix, used_ids):
+    safe_prefix = _slugify_lead_config_id(prefix) or 'item'
+    while True:
+        candidate = f"{safe_prefix}_{secrets.token_hex(4)}"
+        if candidate not in used_ids:
+            return candidate
+
+
+def _normalize_lead_card_fields(raw_fields):
+    parsed = raw_fields
+    if isinstance(parsed, str):
+        try:
+            parsed = json.loads(parsed)
+        except Exception:
+            parsed = []
+    if not isinstance(parsed, list):
+        parsed = []
+
+    allowed = set(LEAD_CARD_ALLOWED_FIELDS)
+    normalized = []
+    for raw in parsed:
+        field_id = str(raw or '').strip()
+        if field_id and field_id in allowed and field_id not in normalized:
+            normalized.append(field_id)
+
+    for required_field in LEAD_CARD_REQUIRED_FIELDS:
+        if required_field not in normalized:
+            normalized.append(required_field)
+
+    if not normalized:
+        normalized = list(LEAD_CARD_DEFAULT_FIELDS)
+    return normalized
+
+
+def _lead_card_fields_setting_key(user_id):
+    return f"lead_card_fields:user:{int(user_id)}"
+
+
+def _set_app_setting_no_commit(key, value, workspace_id):
+    setting = AppSettings.query.filter_by(key=key, workspace_id=workspace_id).first()
+    if not setting:
+        setting = AppSettings(key=key, workspace_id=workspace_id)
+        db.session.add(setting)
+    setting.value = str(value) if value is not None else ''
+    return setting
 
 
 def _normalize_lead_config_items(
@@ -10079,6 +10142,12 @@ def _normalize_lead_config_items(
     """Normalize statuses/sources/tags style config arrays."""
     normalized = []
     seen_ids = set()
+    prefix_map = {
+        'status': 'status',
+        'source': 'source',
+        'tag': 'tag'
+    }
+    id_prefix = prefix_map.get(item_kind, 'item')
 
     if not isinstance(items, list):
         if strict:
@@ -10092,22 +10161,18 @@ def _normalize_lead_config_items(
             continue
 
         label = str(raw.get('label') or '').strip()
-        raw_id = str(raw.get('id') or '').strip()
-        item_id = _slugify_lead_config_id(raw_id or label)
+        raw_id = str(raw.get('id') or '').strip().lower()
         color = str(raw.get('color') or 'gray').strip().lower()
 
         if not label:
             if strict:
                 raise ValueError(f'{item_kind} at position {index + 1} must include a label')
             continue
-        if not item_id:
-            if strict:
-                raise ValueError(f'{item_kind} "{label}" has an invalid id')
-            continue
-        if item_id in seen_ids:
-            if strict:
-                raise ValueError(f'Duplicate {item_kind} id: {item_id}')
-            continue
+
+        if not _is_valid_lead_config_id(raw_id) or raw_id in seen_ids:
+            item_id = _generate_lead_config_id(id_prefix, seen_ids)
+        else:
+            item_id = raw_id
         seen_ids.add(item_id)
 
         if color not in LEAD_CONFIG_ALLOWED_COLORS:
@@ -10537,28 +10602,71 @@ def api_update_leads_config():
     """Update lead configuration (statuses, sources)"""
     ws_id = get_active_workspace_id()
     data = request.get_json() or {}
+    updates = {}
+
     try:
         if 'statuses' in data:
             if not isinstance(data.get('statuses'), list):
                 return jsonify({'success': False, 'error': 'statuses must be a list'}), 400
             statuses = _normalize_lead_statuses(data.get('statuses'), strict=True)
-            AppSettings.set('lead_statuses', json.dumps(statuses), workspace_id=ws_id)
+            updates['lead_statuses'] = json.dumps(statuses)
 
         if 'sources' in data:
             if not isinstance(data.get('sources'), list):
                 return jsonify({'success': False, 'error': 'sources must be a list'}), 400
             sources = _normalize_lead_sources(data.get('sources'), strict=True)
-            AppSettings.set('lead_sources', json.dumps(sources), workspace_id=ws_id)
+            updates['lead_sources'] = json.dumps(sources)
 
         if 'tags' in data:
             if not isinstance(data.get('tags'), list):
                 return jsonify({'success': False, 'error': 'tags must be a list'}), 400
             tags = _normalize_lead_tags(data.get('tags'), strict=True, require_non_empty=False)
-            AppSettings.set('lead_tags', json.dumps(tags), workspace_id=ws_id)
+            updates['lead_tags'] = json.dumps(tags)
     except ValueError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
 
+    try:
+        for key, value in updates.items():
+            _set_app_setting_no_commit(key, value, ws_id)
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
     return jsonify({'success': True})
+
+
+@app.route('/api/leads/preferences', methods=['GET'])
+@login_required
+@require_active_workspace
+def api_get_leads_preferences():
+    ws_id = get_active_workspace_id()
+    key = _lead_card_fields_setting_key(g.user.id)
+    raw = AppSettings.get(key, workspace_id=ws_id)
+    card_fields = _normalize_lead_card_fields(raw if raw else list(LEAD_CARD_DEFAULT_FIELDS))
+    return jsonify({
+        'success': True,
+        'card_fields': card_fields
+    })
+
+
+@app.route('/api/leads/preferences', methods=['PUT'])
+@login_required
+@require_active_workspace
+def api_update_leads_preferences():
+    ws_id = get_active_workspace_id()
+    data = request.get_json() or {}
+    raw_fields = data.get('card_fields')
+    if not isinstance(raw_fields, list):
+        return jsonify({'success': False, 'error': 'card_fields must be a list'}), 400
+
+    card_fields = _normalize_lead_card_fields(raw_fields)
+    key = _lead_card_fields_setting_key(g.user.id)
+    AppSettings.set(key, json.dumps(card_fields), workspace_id=ws_id)
+    return jsonify({
+        'success': True,
+        'card_fields': card_fields
+    })
 
 
 def _normalize_pf_agent_id(value):
@@ -10677,16 +10785,90 @@ def api_get_leads():
       - team: assigned team leads only (unassigned excluded)
     """
     from sqlalchemy.orm import joinedload
-    
-    # Use joinedload to prevent N+1 query problem (each lead would query user separately)
+
     ws_id = get_active_workspace_id()
     try:
         query, scope_meta = scoped_leads_query(workspace_id=ws_id)
     except ValueError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
 
-    query = query.options(joinedload(Lead.assigned_to)).order_by(Lead.created_at.desc())
-    leads = query.all()
+    search = (request.args.get('search') or '').strip()
+    if search:
+        pattern = f"%{search}%"
+        query = query.filter(db.or_(
+            Lead.name.ilike(pattern),
+            Lead.email.ilike(pattern),
+            Lead.phone.ilike(pattern),
+            Lead.whatsapp.ilike(pattern),
+            Lead.message.ilike(pattern),
+            Lead.listing_reference.ilike(pattern),
+        ))
+
+    status = (request.args.get('status') or '').strip()
+    if status:
+        query = query.filter(Lead.status == status)
+
+    source = (request.args.get('source') or '').strip()
+    if source:
+        query = query.filter(Lead.source == source)
+
+    priority = (request.args.get('priority') or '').strip()
+    if priority:
+        query = query.filter(Lead.priority == priority)
+
+    lead_type = (request.args.get('lead_type') or '').strip()
+    if lead_type:
+        query = query.filter(Lead.lead_type == lead_type)
+
+    sort_key = (request.args.get('sort') or 'created_at').strip().lower()
+    direction = (request.args.get('direction') or 'desc').strip().lower()
+    view_mode = (request.args.get('view') or 'list').strip().lower()
+    if view_mode not in ('list', 'kanban'):
+        view_mode = 'list'
+
+    if view_mode == 'kanban':
+        default_per_page = 300
+        max_per_page = 300
+    else:
+        default_per_page = 50
+        max_per_page = 100
+
+    try:
+        page = int(request.args.get('page', '1'))
+    except ValueError:
+        page = 1
+    page = max(1, page)
+
+    try:
+        requested_per_page = int(request.args.get('per_page', str(default_per_page)))
+    except ValueError:
+        requested_per_page = default_per_page
+    requested_per_page = max(1, requested_per_page)
+    per_page = min(requested_per_page, max_per_page)
+
+    sort_columns = {
+        'created_at': Lead.created_at,
+        'received_at': Lead.received_at,
+        'name': Lead.name,
+        'priority': Lead.priority,
+        'status': Lead.status,
+    }
+    sort_column = sort_columns.get(sort_key, Lead.created_at)
+
+    total = query.count()
+    total_pages = max(1, math.ceil(total / per_page)) if total else 1
+    if page > total_pages:
+        page = total_pages
+
+    if direction == 'asc':
+        query = query.order_by(sort_column.asc())
+    else:
+        query = query.order_by(sort_column.desc())
+
+    query = query.options(joinedload(Lead.assigned_to))
+    leads = query.offset((page - 1) * per_page).limit(per_page).all()
+    capped = bool(view_mode == 'kanban' and total > per_page)
+
     return jsonify({
         'success': True,
         'leads': [serialize_lead_for_response(l, workspace_id=ws_id, user=g.user) for l in leads],
@@ -10697,6 +10879,22 @@ def api_get_leads():
             'tag_ids': scope_meta['tag_ids'],
             'can_manage_all': scope_meta['can_manage_all'],
             'can_view_team_leads': scope_meta['can_view_team_leads'],
+            'search': search,
+            'status': status,
+            'source': source,
+            'priority': priority,
+            'lead_type': lead_type,
+            'sort': sort_key,
+            'direction': direction,
+            'view': view_mode,
+            'page': page,
+            'per_page': per_page,
+            'total': total,
+            'total_pages': total_pages,
+            'has_next': page < total_pages,
+            'has_prev': page > 1,
+            'loaded': len(leads),
+            'capped': capped,
         }
     })
 
@@ -10845,6 +11043,11 @@ def api_get_lead_reminders(lead_id):
 def api_get_lead_reminder_notifications():
     ws_id = get_active_workspace_id()
     now_utc = datetime.utcnow()
+    visible_lead_ids = visible_lead_query(
+        workspace_id=ws_id,
+        user=g.user,
+        access='read'
+    ).with_entities(Lead.id).subquery()
 
     reminders = LeadReminder.query.join(
         Lead, LeadReminder.lead_id == Lead.id
@@ -10859,7 +11062,8 @@ def api_get_lead_reminder_notifications():
                 LeadReminder.assigned_to_id.is_(None),
                 LeadReminder.created_by_id == g.user.id
             )
-        )
+        ),
+        LeadReminder.lead_id.in_(db.session.query(visible_lead_ids.c.id))
     ).order_by(
         LeadReminder.due_at.asc(),
         LeadReminder.id.asc()
@@ -11190,39 +11394,6 @@ def api_bulk_update_leads():
     
     db.session.commit()
     return jsonify({'success': True, 'updated': updated})
-
-
-@app.route('/api/leads/cleanup-sources', methods=['POST'])
-@login_required
-@require_active_workspace
-@require_workspace_leads_admin
-def api_cleanup_lead_sources():
-    """Fix leads with invalid source IDs (like source_12345...) by setting them to 'other'"""
-    import json
-    
-    # Get valid sources
-    ws_id = get_active_workspace_id()
-    sources_json = AppSettings.get('lead_sources', workspace_id=ws_id)
-    try:
-        valid_sources = json.loads(sources_json) if sources_json else []
-        valid_source_ids = {s['id'] for s in valid_sources}
-    except:
-        valid_source_ids = set()
-    
-    # Add some default valid sources
-    valid_source_ids.update(['propertyfinder', 'bayut', 'website', 'facebook', 'instagram', 
-                              'whatsapp', 'phone', 'email', 'referral', 'zapier', 'other'])
-    
-    # Find and fix leads with invalid sources
-    fixed = 0
-    leads = scope_query(Lead.query, ws_id).all()
-    for lead in leads:
-        if lead.source and lead.source not in valid_source_ids:
-            lead.source = 'other'
-            fixed += 1
-    
-    db.session.commit()
-    return jsonify({'success': True, 'fixed': fixed})
 
 
 @app.route('/api/leads/<int:lead_id>/comments', methods=['GET'])
@@ -11779,7 +11950,13 @@ def api_get_boards():
         result = []
         for board in boards:
             board_dict = board.to_dict()
-            board_dict['my_role'] = board.get_user_role(user_id) or ('viewer' if not board.is_private else None)
+            my_role = board.get_user_role(user_id) or ('viewer' if not board.is_private else None)
+            board_dict['my_role'] = my_role
+            board_dict['can_view'] = board.user_can(user_id, 'can_view')
+            board_dict['can_edit'] = board.user_can(user_id, 'can_edit')
+            board_dict['can_create_tasks'] = board.user_can(user_id, 'can_create_tasks')
+            board_dict['can_delete_tasks'] = board.user_can(user_id, 'can_delete_tasks')
+            board_dict['can_manage_members'] = board.user_can(user_id, 'can_manage_members')
             result.append(board_dict)
         
         return jsonify({'success': True, 'boards': result})
