@@ -77,6 +77,77 @@ class PropertyFinderClient:
             self.session.proxies.update(proxies)
             if Config.DEBUG:
                 print("[DEBUG] PF proxy enabled")
+
+    def _format_error_item(self, item: Any) -> str:
+        """Normalize a single API error item into readable text."""
+        if item is None:
+            return ''
+        if isinstance(item, str):
+            return item.strip()
+        if not isinstance(item, dict):
+            return str(item).strip()
+
+        field = item.get('field') or item.get('pointer') or item.get('path') or item.get('code') or item.get('type')
+        detail = item.get('message') or item.get('detail') or item.get('reason') or item.get('error')
+
+        field_text = str(field).strip() if field is not None else ''
+        detail_text = str(detail).strip() if detail is not None else ''
+
+        if field_text and detail_text:
+            return f"{field_text}: {detail_text}"
+        if detail_text:
+            return detail_text
+        if field_text:
+            return field_text
+
+        try:
+            return json.dumps(item, ensure_ascii=False)
+        except Exception:
+            return str(item).strip()
+
+    def _extract_error_details(self, response_data: Any) -> List[str]:
+        """Extract normalized validation/business error details from API response."""
+        details: List[str] = []
+        if not isinstance(response_data, dict):
+            return details
+
+        raw_errors = response_data.get('errors')
+        if isinstance(raw_errors, list):
+            for entry in raw_errors:
+                text = self._format_error_item(entry)
+                if text:
+                    details.append(text)
+        elif isinstance(raw_errors, dict):
+            for key, value in raw_errors.items():
+                if isinstance(value, list):
+                    for entry in value:
+                        if isinstance(entry, dict):
+                            text = self._format_error_item({**entry, 'field': entry.get('field') or key})
+                        else:
+                            text = self._format_error_item({'field': key, 'detail': entry})
+                        if text:
+                            details.append(text)
+                else:
+                    text = self._format_error_item({'field': key, 'detail': value})
+                    if text:
+                        details.append(text)
+
+        if not details:
+            nested = response_data.get('details')
+            if nested:
+                text = self._format_error_item(nested)
+                if text:
+                    details.append(text)
+
+        deduped: List[str] = []
+        seen = set()
+        for item in details:
+            normalized = item.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append(normalized)
+        return deduped
     
     # ==================== AUTHENTICATION ====================
     
@@ -348,19 +419,22 @@ class PropertyFinderClient:
                 # Check for errors
                 if not response.ok:
                     error_msg = None
+                    error_details = []
                     if isinstance(response_data, dict):
-                        error_msg = response_data.get('message') or response_data.get('error') or response_data.get('raw')
+                        error_msg = (
+                            response_data.get('message')
+                            or response_data.get('error')
+                            or response_data.get('detail')
+                            or response_data.get('title')
+                            or response_data.get('raw')
+                        )
+                        error_details = self._extract_error_details(response_data)
                     if not error_msg:
                         error_msg = f'HTTP {response.status_code}'
-                    if 'errors' in response_data:
-                        # Extract validation errors
-                        errors = response_data.get('errors', [])
-                        if errors:
-                            error_details = '; '.join([
-                                f"{e.get('field', 'unknown')}: {e.get('message', e.get('reason', 'unknown error'))}"
-                                for e in errors
-                            ])
-                            error_msg = f"{error_msg} - {error_details}"
+                    if error_details:
+                        error_msg = f"{error_msg} - {'; '.join(error_details)}"
+                    if len(error_msg) > 2000:
+                        error_msg = error_msg[:2000] + '...'
                     
                     raise PropertyFinderAPIError(
                         message=error_msg,
