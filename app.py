@@ -2212,6 +2212,8 @@ def inject_user():
     can_access_loops = False
     can_create_listing = False
     can_bulk_upload = False
+    can_manage_users = False
+    can_manage_settings = False
     workspace = getattr(g, 'workspace', None)
     if not workspace:
         try:
@@ -2229,13 +2231,19 @@ def inject_user():
             service = get_permission_service()
             can_create_listing = service.check_workspace_module_action(g.user, workspace.id, 'listings', 'create')
             can_bulk_upload = service.check_workspace_module_action(g.user, workspace.id, 'listings', 'bulk')
+            can_manage_users = service.check_workspace_module_action(g.user, workspace.id, 'users', 'edit')
+            can_manage_settings = service.check_workspace_module_action(g.user, workspace.id, 'settings', 'edit')
         elif g.user:
             can_create_listing = g.user.has_permission('create')
             can_bulk_upload = g.user.has_permission('bulk_upload')
+            can_manage_users = g.user.has_permission('manage_users')
+            can_manage_settings = g.user.has_permission('settings')
     except Exception:
         can_access_loops = False
         can_create_listing = False
         can_bulk_upload = False
+        can_manage_users = False
+        can_manage_settings = False
 
     ui_lang = getattr(g, 'ui_lang', DEFAULT_LANGUAGE)
     ui_dir = getattr(g, 'ui_dir', 'ltr')
@@ -2264,6 +2272,8 @@ def inject_user():
         can_access_loops=can_access_loops,
         can_create_listing=can_create_listing,
         can_bulk_upload=can_bulk_upload,
+        can_manage_users=can_manage_users,
+        can_manage_settings=can_manage_settings,
         ui_lang=ui_lang,
         ui_dir=ui_dir,
         is_rtl=is_rtl,
@@ -3210,6 +3220,10 @@ def workspace_user_can_manage_loops(user=None, workspace_id=None):
     if not user:
         return False
     ws_id = workspace_id or get_active_workspace_id()
+    member = WorkspaceMember.query.filter_by(workspace_id=ws_id, user_id=user.id).first() if ws_id else None
+    # Team leaders are explicitly excluded from loops access.
+    if member and member.role == 'team_leader':
+        return False
     from src.services.permissions import get_permission_service
     service = get_permission_service()
     if service.check_workspace_module_action(user, ws_id, 'loops', 'read'):

@@ -96,18 +96,22 @@
                 {# Users link - workspace-scoped or regular #}
                 {% if is_workspace_context and current_workspace %}
                     {% set ws_slug = current_workspace.slug %}
+                    {% if can_manage_users %}
                     <a href="{{ url_for('workspace_users', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_users' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-users w-8"></i>
                         <span x-show="sidebarOpen">{{ t('common.users', default='Users') }}</span>
                     </a>
+                    {% endif %}
                     <a href="{{ url_for('workspace_auth', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_auth' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-plug w-8"></i>
                         <span x-show="sidebarOpen">{{ t('nav.pf_connect', default='PF Connect') }}</span>
                     </a>
+                    {% if can_manage_settings %}
                     <a href="{{ url_for('workspace_settings', workspace_slug=ws_slug) }}" class="flex items-center px-4 py-3 text-gray-200 hover:bg-indigo-700 {% if request.endpoint == 'workspace_settings' %}bg-indigo-700{% endif %}">
                         <i class="fas fa-cog w-8"></i>
                         <span x-show="sidebarOpen">{{ t('common.settings', default='Settings') }}</span>
                     </a>
+                    {% endif %}
                 {% elif is_system_admin %}
                     {# No additional links here for system admin; main system nav already rendered above #}
                 {% endif %}

@@ -268,6 +268,17 @@ class PermissionService:
         
         if not member:
             return {}
+        if self._is_team_leader_restricted_module(member.role, module):
+            return {
+                'read': False,
+                'create': False,
+                'edit': False,
+                'delete': False,
+                'publish': False,
+                'assign': False,
+                'bulk': False,
+                'scope': 'own'
+            }
         
         # Get workspace role definition
         ws_role = self._find_workspace_role(workspace_id, member.role)
@@ -294,6 +305,17 @@ class PermissionService:
 
         if not workspace_id or not module:
             return {}
+        if self._is_team_leader_restricted_module(member_role, module):
+            return {
+                'read': False,
+                'create': False,
+                'edit': False,
+                'delete': False,
+                'publish': False,
+                'assign': False,
+                'bulk': False,
+                'scope': 'own'
+            }
 
         ws_role = self._find_workspace_role(workspace_id, member_role)
         if ws_role:
@@ -345,6 +367,10 @@ class PermissionService:
         }
         return aliases.get(action_text, action_text)
 
+    def _is_team_leader_restricted_module(self, member_role: str, module: str) -> bool:
+        """Hard guard: team leaders cannot access workspace users/settings/loops modules."""
+        return (member_role or '').strip().lower() == 'team_leader' and module in {'users', 'settings', 'loops'}
+
     def check_workspace_module_action(self, user, workspace_id: int, module: str, action: str) -> bool:
         """Evaluate workspace module access using deny/allow override precedence."""
         if self.is_system_admin(user):
@@ -354,6 +380,8 @@ class PermissionService:
 
         member_role = self.get_workspace_role(user, workspace_id)
         if not member_role:
+            return False
+        if self._is_team_leader_restricted_module(member_role, module):
             return False
 
         normalized_action = self._normalize_module_action(action)
@@ -394,6 +422,17 @@ class PermissionService:
             return {}
 
         member_role = self.get_workspace_role(user, workspace_id)
+        if self._is_team_leader_restricted_module(member_role, module):
+            return {
+                'read': False,
+                'create': False,
+                'edit': False,
+                'delete': False,
+                'publish': False,
+                'assign': False,
+                'bulk': False,
+                'scope': 'own'
+            }
         baseline_caps = self.get_role_module_capabilities(workspace_id, member_role, module) or {}
         effective = dict(baseline_caps)
         override_effects = self.get_user_overrides(workspace_id, user.id, module=module)
@@ -446,6 +485,12 @@ class PermissionService:
                 'bulk': False, 'scope': 'own'
             }
         elif role_lower == 'team_leader':
+            if module in ('users', 'settings', 'loops'):
+                return {
+                    'read': False, 'create': False, 'edit': False,
+                    'delete': False, 'publish': False, 'assign': False,
+                    'bulk': False, 'scope': 'own'
+                }
             if module in ('listings', 'leads'):
                 return {
                     'read': True, 'create': True, 'edit': True,
