@@ -232,6 +232,13 @@
                                 {% else %}bg-gray-100 text-gray-800{% endif %}">
                                 {{ user.workspace_role_name or 'Member' }}
                             </span>
+                            {% if user.workspace_role in ['owner', 'admin', 'team_leader'] %}
+                            <div class="text-xs text-gray-500 mt-1">
+                                Team Size:
+                                <span class="font-medium">{{ user.direct_reports_count or 0 }}</span>
+                                users
+                            </div>
+                            {% endif %}
                         </td>
                         <td class="px-6 py-4">
                             {% if user.team_leader_name %}
@@ -345,6 +352,18 @@
                     <p class="text-xs text-gray-500 mt-1">Only owner/admin/team leader can be selected.</p>
                 </div>
 
+                <div x-show="editingUser.workspace_role === 'team_leader' && canManageTeamComposition">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Users Under This Leader</label>
+                    <select x-model="editingUser.direct_report_user_ids" multiple
+                            class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-indigo-500 min-h-[140px]">
+                        <template x-for="report in assignableDirectReports(editingUser.id)" :key="`report-${report.id}`">
+                            <option :value="String(report.id)"
+                                    x-text="`${report.name} (${report.workspace_role_name || report.workspace_role || 'member'})`"></option>
+                        </template>
+                    </select>
+                    <p class="text-xs text-gray-500 mt-1">Only Member/Viewer users can be assigned as direct reports.</p>
+                </div>
+
                 <div class="flex justify-end space-x-3 pt-4">
                     <button type="button" @click="showEditModal = false"
                             class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">
@@ -372,12 +391,14 @@ function usersPage() {
         workspaceRoleOptions: {{ workspace_member_roles|tojson|safe if workspace_member_roles is defined else '{}' }},
         workspaceMemberships: {{ workspace_memberships_json|tojson|safe if workspace_memberships_json is defined else '{}' }},
         canManageMembers: {{ 'true' if can_manage_members else 'false' }},
+        canManageTeamComposition: {{ 'true' if can_manage_team_composition else 'false' }},
         inviteEmail: '',
         inviteRole: 'member',
         inviteLink: '',
         pendingInvites: [],
 
         init() {
+            this.recalculateDirectReportCounts();
             if (this.canManageMembers) {
                 this.loadInvites();
             }
@@ -392,7 +413,10 @@ function usersPage() {
             }
             this.editingUser = {
                 ...user,
-                team_leader_user_id: user.team_leader_user_id ? String(user.team_leader_user_id) : ''
+                team_leader_user_id: user.team_leader_user_id ? String(user.team_leader_user_id) : '',
+                direct_report_user_ids: Array.isArray(user.direct_report_user_ids)
+                    ? user.direct_report_user_ids.map(id => String(id))
+                    : []
             };
             this.showEditModal = true;
         },
@@ -402,6 +426,30 @@ function usersPage() {
             return this.users.filter(user => {
                 if (excluded && Number(user.id) === excluded) return false;
                 return ['owner', 'admin', 'team_leader'].includes(String(user.workspace_role || '').toLowerCase());
+            });
+        },
+
+        assignableDirectReports(excludeUserId = null) {
+            const excluded = Number(excludeUserId || 0);
+            return this.users.filter(user => {
+                if (excluded && Number(user.id) === excluded) return false;
+                return ['member', 'viewer'].includes(String(user.workspace_role || '').toLowerCase());
+            });
+        },
+
+        recalculateDirectReportCounts() {
+            const reportsByLeader = {};
+            this.users.forEach(user => {
+                const leaderId = Number(user.team_leader_user_id || 0);
+                if (!leaderId) return;
+                if (!reportsByLeader[leaderId]) reportsByLeader[leaderId] = [];
+                reportsByLeader[leaderId].push(Number(user.id));
+            });
+
+            this.users.forEach(user => {
+                const reportIds = reportsByLeader[Number(user.id)] || [];
+                user.direct_report_user_ids = reportIds;
+                user.direct_reports_count = reportIds.length;
             });
         },
 
@@ -491,13 +539,21 @@ function usersPage() {
         async saveWorkspaceMember() {
             if (!this.workspaceId || !this.editingUser.workspace_member_id) return;
             try {
+                const payload = {
+                    role: this.editingUser.workspace_role,
+                    team_leader_user_id: this.editingUser.team_leader_user_id || null
+                };
+                if (this.canManageTeamComposition && this.editingUser.workspace_role === 'team_leader') {
+                    const selectedDirectReports = (this.editingUser.direct_report_user_ids || [])
+                        .map(value => Number(value))
+                        .filter(value => Number.isFinite(value) && value > 0);
+                    payload.direct_report_user_ids = Array.from(new Set(selectedDirectReports));
+                }
+
                 const response = await fetch(`/api/workspaces/${this.workspaceId}/members/${this.editingUser.workspace_member_id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        role: this.editingUser.workspace_role,
-                        team_leader_user_id: this.editingUser.team_leader_user_id || null
-                    })
+                    body: JSON.stringify(payload)
                 });
                 const data = await response.json().catch(() => ({}));
                 if (response.ok && data.success) {
@@ -507,7 +563,32 @@ function usersPage() {
                         this.users[idx].workspace_role_name = data.member.role_name;
                         this.users[idx].team_leader_user_id = data.member.team_leader_user_id;
                         this.users[idx].team_leader_name = data.member.team_leader_name;
+                        this.users[idx].direct_report_user_ids = data.member.direct_report_user_ids || [];
+                        this.users[idx].direct_reports_count = data.member.direct_reports_count || 0;
                     }
+
+                    if (this.canManageTeamComposition && this.editingUser.workspace_role === 'team_leader') {
+                        const selectedIds = new Set((data.member.direct_report_user_ids || []).map(id => Number(id)));
+                        this.users.forEach(user => {
+                            const userId = Number(user.id);
+                            if (userId === Number(this.editingUser.id)) return;
+                            if (selectedIds.has(userId)) {
+                                user.team_leader_user_id = Number(this.editingUser.id);
+                                user.team_leader_name = this.editingUser.name;
+                            } else if (Number(user.team_leader_user_id || 0) === Number(this.editingUser.id)) {
+                                user.team_leader_user_id = null;
+                                user.team_leader_name = null;
+                            }
+                        });
+                    } else if (!['owner', 'admin', 'team_leader'].includes(String(this.editingUser.workspace_role || '').toLowerCase())) {
+                        this.users.forEach(user => {
+                            if (Number(user.team_leader_user_id || 0) === Number(this.editingUser.id)) {
+                                user.team_leader_user_id = null;
+                                user.team_leader_name = null;
+                            }
+                        });
+                    }
+                    this.recalculateDirectReportCounts();
                     this.showEditModal = false;
                 } else {
                     alert(data.error || 'Failed to update workspace role');

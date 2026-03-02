@@ -3548,6 +3548,62 @@ def _clear_team_leader_references(workspace_id, leader_user_id):
     ).update({'team_leader_user_id': None}, synchronize_session=False)
 
 
+def _normalize_direct_report_user_ids(workspace_id, leader_user_id, raw_ids):
+    """Validate and normalize direct report IDs for a team leader update."""
+    if raw_ids is None:
+        return None
+    if not isinstance(raw_ids, list):
+        raise ValueError('direct_report_user_ids must be an array of workspace member user ids')
+
+    normalized = []
+    seen = set()
+    for raw in raw_ids:
+        try:
+            user_id = int(raw)
+        except (TypeError, ValueError):
+            raise ValueError('direct_report_user_ids must contain valid integer user ids')
+        if user_id in seen:
+            continue
+        seen.add(user_id)
+        normalized.append(user_id)
+
+    if leader_user_id and int(leader_user_id) in seen:
+        raise ValueError('direct reports cannot include the team leader user')
+    if not normalized:
+        return []
+
+    members = WorkspaceMember.query.filter(
+        WorkspaceMember.workspace_id == workspace_id,
+        WorkspaceMember.user_id.in_(normalized)
+    ).all()
+    members_by_user_id = {member.user_id: member for member in members}
+    if len(members_by_user_id) != len(normalized):
+        raise ValueError('direct_report_user_ids must belong to active workspace members')
+
+    for user_id in normalized:
+        member = members_by_user_id[user_id]
+        if member.role not in ('member', 'viewer'):
+            raise ValueError('direct reports must have member or viewer role')
+        user = member.user
+        if not user or not user.is_active:
+            raise ValueError('direct_report_user_ids must belong to active users')
+        if has_any_system_role(user):
+            raise ValueError('System users cannot be assigned as direct reports.')
+
+    return normalized
+
+
+def _get_direct_report_user_ids_for_leader(workspace_id, leader_user_id):
+    """Return sorted direct-report user IDs for a leader in a workspace."""
+    if not workspace_id or not leader_user_id:
+        return []
+    rows = WorkspaceMember.query.filter_by(
+        workspace_id=workspace_id,
+        team_leader_user_id=leader_user_id
+    ).all()
+    return sorted({int(row.user_id) for row in rows if row.user_id})
+
+
 def get_default_assigned_agent_email(workspace_id=None, user=None):
     """Resolve default assigned agent email for listing forms/creation."""
     ws_id = workspace_id or get_active_workspace_id()
@@ -4860,6 +4916,13 @@ def users_page():
     user_ids = [m.user_id for m in memberships]
     users = User.query.filter(User.id.in_(user_ids)).order_by(User.created_at.desc()).all()
     membership_by_user_id = {m.user_id: m for m in memberships}
+    direct_reports_by_leader = {}
+    for member in memberships:
+        if member.team_leader_user_id:
+            direct_reports_by_leader.setdefault(member.team_leader_user_id, []).append(member.user_id)
+    for leader_user_id in direct_reports_by_leader:
+        direct_reports_by_leader[leader_user_id] = sorted(set(direct_reports_by_leader[leader_user_id]))
+
     user_payloads = []
     for u in users:
         data = u.to_dict()
@@ -4870,10 +4933,16 @@ def users_page():
             data['workspace_role_name'] = WorkspaceMember.ROLES.get(member.role, {}).get('name', member.role.title())
             data['team_leader_user_id'] = member.team_leader_user_id
             data['team_leader_name'] = member.team_leader.name if member.team_leader else None
+            data['direct_report_user_ids'] = direct_reports_by_leader.get(member.user_id, [])
+            data['direct_reports_count'] = len(data['direct_report_user_ids'])
         user_payloads.append(data)
     pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
     workspace = Workspace.query.get(ws_id)
     can_manage_members = can_manage_workspace_members(g.user, ws_id)
+    current_membership = WorkspaceMember.query.filter_by(workspace_id=ws_id, user_id=g.user.id).first()
+    can_manage_team_composition = is_system_admin(g.user) or (
+        current_membership is not None and current_membership.role in ('owner', 'admin')
+    )
     return render_template('users.html', 
                            users=user_payloads,
                            roles=User.ROLES,
@@ -4883,7 +4952,8 @@ def users_page():
                            workspace=workspace.to_dict() if workspace else None,
                            workspace_memberships={m.user_id: m for m in memberships},
                            workspace_memberships_json={m.user_id: m.to_dict() for m in memberships},
-                           can_manage_members=can_manage_members)
+                           can_manage_members=can_manage_members,
+                           can_manage_team_composition=can_manage_team_composition)
 
 
 @app.route('/users/create', methods=['POST'])
@@ -5684,6 +5754,13 @@ def workspace_users(workspace_slug):
     user_ids = [m.user_id for m in memberships]
     users = User.query.filter(User.id.in_(user_ids)).order_by(User.created_at.desc()).all() if user_ids else []
     membership_by_user_id = {m.user_id: m for m in memberships}
+    direct_reports_by_leader = {}
+    for member in memberships:
+        if member.team_leader_user_id:
+            direct_reports_by_leader.setdefault(member.team_leader_user_id, []).append(member.user_id)
+    for leader_user_id in direct_reports_by_leader:
+        direct_reports_by_leader[leader_user_id] = sorted(set(direct_reports_by_leader[leader_user_id]))
+
     user_payloads = []
     for u in users:
         data = u.to_dict()
@@ -5694,10 +5771,16 @@ def workspace_users(workspace_slug):
             data['workspace_role_name'] = WorkspaceMember.ROLES.get(member.role, {}).get('name', member.role.title())
             data['team_leader_user_id'] = member.team_leader_user_id
             data['team_leader_name'] = member.team_leader.name if member.team_leader else None
+            data['direct_report_user_ids'] = direct_reports_by_leader.get(member.user_id, [])
+            data['direct_reports_count'] = len(data['direct_report_user_ids'])
         user_payloads.append(data)
     pf_users = PFCache.get_cache('users', workspace_id=ws_id) or []
     workspace = Workspace.query.get(ws_id)
     can_manage_members = can_manage_workspace_members(g.user, ws_id)
+    current_membership = WorkspaceMember.query.filter_by(workspace_id=ws_id, user_id=g.user.id).first()
+    can_manage_team_composition = is_system_admin(g.user) or (
+        current_membership is not None and current_membership.role in ('owner', 'admin')
+    )
 
     return render_template('users.html',
                            users=user_payloads,
@@ -5708,7 +5791,8 @@ def workspace_users(workspace_slug):
                            workspace=workspace.to_dict() if workspace else None,
                            workspace_memberships={m.user_id: m for m in memberships},
                            workspace_memberships_json={m.user_id: m.to_dict() for m in memberships},
-                           can_manage_members=can_manage_members)
+                           can_manage_members=can_manage_members,
+                           can_manage_team_composition=can_manage_team_composition)
 
 
 @app.route('/<workspace_slug>/settings')
@@ -5928,9 +6012,18 @@ def api_get_workspace_members(workspace_id):
         return jsonify({'success': False, 'error': 'Access denied'}), 403
     
     members, _ = _filter_workspace_memberships_for_org(workspace.members)
+    direct_reports_by_leader = {}
+    for member in members:
+        if member.team_leader_user_id:
+            direct_reports_by_leader.setdefault(member.team_leader_user_id, []).append(member.user_id)
+    for leader_user_id in direct_reports_by_leader:
+        direct_reports_by_leader[leader_user_id] = sorted(set(direct_reports_by_leader[leader_user_id]))
+
     member_payloads = []
     for m in members:
         data = m.to_dict()
+        data['direct_report_user_ids'] = direct_reports_by_leader.get(m.user_id, [])
+        data['direct_reports_count'] = len(data['direct_report_user_ids'])
         override_rows = WorkspaceUserPermissionOverride.get_user_overrides(workspace_id, m.user_id)
         data['permission_overrides'] = _serialize_override_rows(override_rows)
         # Legacy key kept for backward compatibility only.
@@ -6078,6 +6171,7 @@ def api_update_workspace_member(workspace_id, member_id):
     
     data = request.get_json() or {}
     next_role = member.role
+    direct_report_user_ids = None
     if 'role' in data:
         requested_role = str(data['role']).strip()
         if requested_role not in WorkspaceMember.ROLES:
@@ -6102,13 +6196,57 @@ def api_update_workspace_member(workspace_id, member_id):
         except ValueError as exc:
             return jsonify({'success': False, 'error': str(exc)}), 400
 
+    if 'direct_report_user_ids' in data:
+        if not (is_system_admin(g.user) or _is_workspace_admin(g.user.id, workspace_id)):
+            return jsonify({'success': False, 'error': 'Only workspace owner/admin can manage team composition.'}), 403
+        if next_role not in ('owner', 'admin', 'team_leader'):
+            return jsonify({'success': False, 'error': 'Direct reports can only be assigned to owner/admin/team_leader.'}), 400
+        try:
+            direct_report_user_ids = _normalize_direct_report_user_ids(
+                workspace_id=workspace_id,
+                leader_user_id=member.user_id,
+                raw_ids=data.get('direct_report_user_ids')
+            )
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
+
     previous_role = member.role
     member.role = next_role
     if previous_role != next_role and next_role not in ('owner', 'admin', 'team_leader'):
         _clear_team_leader_references(workspace_id, member.user_id)
+
+    if direct_report_user_ids is not None:
+        target_report_ids = set(direct_report_user_ids)
+        existing_report_rows = WorkspaceMember.query.filter_by(
+            workspace_id=workspace_id,
+            team_leader_user_id=member.user_id
+        ).all()
+        existing_report_ids = {row.user_id for row in existing_report_rows}
+        to_clear_ids = existing_report_ids - target_report_ids
+        if to_clear_ids:
+            WorkspaceMember.query.filter(
+                WorkspaceMember.workspace_id == workspace_id,
+                WorkspaceMember.user_id.in_(to_clear_ids),
+                WorkspaceMember.team_leader_user_id == member.user_id
+            ).update({'team_leader_user_id': None}, synchronize_session=False)
+
+        if target_report_ids:
+            WorkspaceMember.query.filter(
+                WorkspaceMember.workspace_id == workspace_id,
+                WorkspaceMember.user_id.in_(target_report_ids)
+            ).update({'team_leader_user_id': member.user_id}, synchronize_session=False)
+
+        added_count = len(target_report_ids - existing_report_ids)
+        removed_count = len(existing_report_ids - target_report_ids)
+        print(
+            f"[TEAM_MAP] workspace_id={workspace_id} leader_user_id={member.user_id} "
+            f"added={added_count} removed={removed_count}"
+        )
     
     db.session.commit()
     member_data = member.to_dict()
+    member_data['direct_report_user_ids'] = _get_direct_report_user_ids_for_leader(workspace_id, member.user_id)
+    member_data['direct_reports_count'] = len(member_data['direct_report_user_ids'])
     override_rows = WorkspaceUserPermissionOverride.get_user_overrides(workspace_id, member.user_id)
     member_data['permission_overrides'] = _serialize_override_rows(override_rows)
     member_data['extra_permissions'] = get_workspace_user_extra_permissions(member.user_id, workspace_id=workspace_id)
@@ -12063,7 +12201,9 @@ def api_get_board(board_id):
     if board.is_private and not board.user_can(user_id, 'can_view'):
         return jsonify({'success': False, 'error': 'Access denied'}), 403
     
-    board_dict = board.to_dict(include_tasks=True, include_members=True)
+    board_dict = board.to_dict(include_tasks=False, include_members=True)
+    board_tasks = board.tasks.order_by(Task.position).all()
+    board_dict['tasks'] = _serialize_tasks_with_linked_lead(board_tasks, ws_id, user=g.user)
     board_dict['my_role'] = board.get_user_role(user_id) or 'viewer'
     board_dict['my_permissions'] = BOARD_PERMISSIONS.get(board_dict['my_role'], {})
     
@@ -12401,6 +12541,72 @@ def _get_task_comment_in_workspace(comment_id, ws_id):
         TaskBoard.workspace_id == ws_id
     ).first_or_404()
 
+
+def _get_task_linked_lead_map(tasks, workspace_id, user=None):
+    """Return task_id -> linked lead payload for visible reminder-linked leads."""
+    task_ids = [int(task.id) for task in (tasks or []) if getattr(task, 'id', None)]
+    if not task_ids:
+        return {}
+
+    reminders = LeadReminder.query.filter(
+        LeadReminder.workspace_id == workspace_id,
+        LeadReminder.task_id.in_(task_ids)
+    ).order_by(LeadReminder.updated_at.desc(), LeadReminder.id.desc()).all()
+    if not reminders:
+        return {}
+
+    reminder_by_task_id = {}
+    lead_ids = set()
+    for reminder in reminders:
+        if not reminder.task_id or reminder.task_id in reminder_by_task_id:
+            continue
+        reminder_by_task_id[reminder.task_id] = reminder
+        if reminder.lead_id:
+            lead_ids.add(reminder.lead_id)
+
+    if not lead_ids:
+        return {}
+
+    user = user or getattr(g, 'user', None)
+    visible_leads = visible_lead_query(
+        workspace_id=workspace_id,
+        user=user,
+        access='read'
+    ).filter(Lead.id.in_(lead_ids)).all()
+    if not visible_leads:
+        return {}
+
+    leads_by_id = {lead.id: lead for lead in visible_leads}
+    result = {}
+    for task_id, reminder in reminder_by_task_id.items():
+        lead = leads_by_id.get(reminder.lead_id)
+        if not lead:
+            continue
+        result[task_id] = {
+            'id': lead.id,
+            'name': lead.name,
+            'listing_reference': lead.listing_reference,
+            'status': lead.status,
+        }
+    return result
+
+
+def _serialize_tasks_with_linked_lead(tasks, workspace_id, user=None):
+    """Serialize tasks and append linked lead metadata when visible."""
+    serialized = [task.to_dict() for task in (tasks or [])]
+    linked_map = _get_task_linked_lead_map(tasks, workspace_id, user=user)
+    for task_dict in serialized:
+        linked_lead = linked_map.get(task_dict.get('id'))
+        task_dict['linked_lead'] = linked_lead
+        task_dict['linked_lead_id'] = linked_lead.get('id') if linked_lead else None
+    return serialized
+
+
+def _serialize_task_with_linked_lead(task, workspace_id, user=None):
+    """Serialize a single task with linked lead metadata."""
+    serialized = _serialize_tasks_with_linked_lead([task], workspace_id, user=user)
+    return serialized[0] if serialized else task.to_dict()
+
 @app.route('/api/boards/<int:board_id>/tasks', methods=['GET'])
 @login_required
 @require_active_workspace
@@ -12415,7 +12621,8 @@ def api_get_board_tasks(board_id):
         return jsonify({'success': False, 'error': 'Access denied'}), 403
     
     tasks = Task.query.filter_by(board_id=board_id).order_by(Task.position).all()
-    return jsonify({'success': True, 'tasks': [t.to_dict() for t in tasks]})
+    task_dicts = _serialize_tasks_with_linked_lead(tasks, ws_id, user=g.user)
+    return jsonify({'success': True, 'tasks': task_dicts})
 
 
 @app.route('/api/boards/<int:board_id>/tasks', methods=['POST'])
@@ -12497,7 +12704,7 @@ def api_create_task(board_id):
     
     db.session.commit()
     
-    return jsonify({'success': True, 'task': task.to_dict()})
+    return jsonify({'success': True, 'task': _serialize_task_with_linked_lead(task, ws_id, user=g.user)})
 
 
 @app.route('/api/tasks/<int:task_id>', methods=['GET'])
@@ -12514,7 +12721,7 @@ def api_get_task(task_id):
     if board.is_private and not board.user_can(user_id, 'can_view'):
         return jsonify({'success': False, 'error': 'Access denied'}), 403
     
-    task_dict = task.to_dict()
+    task_dict = _serialize_task_with_linked_lead(task, ws_id, user=g.user)
     task_dict['comments'] = [c.to_dict() for c in task.comments.order_by(TaskComment.created_at.desc()).all()]
     
     # Add board members for assignee picker
@@ -12621,7 +12828,7 @@ def api_update_task(task_id):
         _sync_linked_reminder_from_task(task, ws_id, changed_fields=task_sync_fields)
 
     db.session.commit()
-    return jsonify({'success': True, 'task': task.to_dict()})
+    return jsonify({'success': True, 'task': _serialize_task_with_linked_lead(task, ws_id, user=g.user)})
 
 
 @app.route('/api/tasks/<int:task_id>/move', methods=['PATCH'])
@@ -12676,7 +12883,7 @@ def api_move_task(task_id):
     task.position = new_position
     
     db.session.commit()
-    return jsonify({'success': True, 'task': task.to_dict()})
+    return jsonify({'success': True, 'task': _serialize_task_with_linked_lead(task, ws_id, user=g.user)})
 
 
 @app.route('/api/tasks/<int:task_id>', methods=['DELETE'])
@@ -12746,6 +12953,8 @@ def api_get_my_tasks():
     secondary_tasks = Task.query.filter(Task.id.in_(assigned_task_ids), Task.board_id.in_(board_ids))
     
     all_tasks = primary_tasks.union(secondary_tasks).order_by(Task.due_date.asc().nullslast(), Task.priority.desc()).all()
+    serialized_tasks = _serialize_tasks_with_linked_lead(all_tasks, ws_id, user=g.user)
+    serialized_by_id = {task_dict.get('id'): task_dict for task_dict in serialized_tasks}
     
     # Group by board
     tasks_by_board = {}
@@ -12756,11 +12965,13 @@ def api_get_my_tasks():
                 'board': task.board.to_dict() if task.board else None,
                 'tasks': []
             }
-        tasks_by_board[board_id]['tasks'].append(task.to_dict())
+        task_payload = serialized_by_id.get(task.id)
+        if task_payload:
+            tasks_by_board[board_id]['tasks'].append(task_payload)
     
     return jsonify({
         'success': True,
-        'tasks': [task.to_dict() for task in all_tasks],
+        'tasks': serialized_tasks,
         'tasks_by_board': list(tasks_by_board.values()),
         'total': len(all_tasks)
     })
@@ -12800,7 +13011,7 @@ def api_assign_task(task_id):
         task.assignees = []
     
     db.session.commit()
-    return jsonify({'success': True, 'task': task.to_dict()})
+    return jsonify({'success': True, 'task': _serialize_task_with_linked_lead(task, ws_id, user=g.user)})
 
 
 @app.route('/api/tasks/<int:task_id>/unassign', methods=['POST'])
@@ -12827,7 +13038,7 @@ def api_unassign_task(task_id):
     task.assignees = [u for u in task.assignees if u.id != target_user_id]
     
     db.session.commit()
-    return jsonify({'success': True, 'task': task.to_dict()})
+    return jsonify({'success': True, 'task': _serialize_task_with_linked_lead(task, ws_id, user=g.user)})
 
 
 # ---- Task Comments API ----

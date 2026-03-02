@@ -1037,9 +1037,13 @@
                                                 <span x-text="formatDateTime(reminder.due_at)"></span>
                                                 <span x-show="reminder.assigned_to_name">• <span x-text="reminder.assigned_to_name"></span></span>
                                             </div>
-                                            <div x-show="reminder.task_id" class="text-xs text-indigo-600 mt-1">
-                                                Linked Task #<span x-text="reminder.task_id"></span>
-                                            </div>
+                                            <template x-if="reminder.task_id">
+                                                <a :href="buildTaskUrl(reminder.task_id, selectedLead?.id)"
+                                                   class="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 hover:underline mt-1">
+                                                    <span>Linked Task</span>
+                                                    <span>#<span x-text="reminder.task_id"></span></span>
+                                                </a>
+                                            </template>
                                             <div x-show="reminder.notes" class="text-xs text-gray-600 mt-1 whitespace-pre-wrap" x-text="reminder.notes"></div>
                                         </div>
                                         <div class="flex items-center gap-1">
@@ -1572,6 +1576,9 @@ function leadsManager() {
         },
         listPerPage: 50,
         kanbanPerPage: 300,
+        workspaceSlug: {{ (current_workspace.slug if current_workspace else none)|tojson }},
+        pendingLeadIdFromUrl: null,
+        initialLeadDeepLinkHandled: false,
         
         // Card display settings
         cardDisplayFields: (() => {
@@ -1688,6 +1695,27 @@ function leadsManager() {
             return Array.from(agents).sort();
         },
 
+        buildWorkspacePath(path) {
+            const cleanPath = String(path || '').startsWith('/') ? String(path || '') : `/${String(path || '')}`;
+            if (this.workspaceSlug) {
+                return `/${this.workspaceSlug}${cleanPath}`;
+            }
+            return cleanPath;
+        },
+
+        buildTaskUrl(taskId, leadId = null) {
+            const resolvedTaskId = Number(taskId);
+            if (!Number.isFinite(resolvedTaskId) || resolvedTaskId <= 0) {
+                return this.buildWorkspacePath('/tasks');
+            }
+            const params = new URLSearchParams({ task_id: String(resolvedTaskId) });
+            const resolvedLeadId = Number(leadId);
+            if (Number.isFinite(resolvedLeadId) && resolvedLeadId > 0) {
+                params.set('lead_id', String(resolvedLeadId));
+            }
+            return `${this.buildWorkspacePath('/tasks')}?${params.toString()}`;
+        },
+
         getSelectedValues(selectEl) {
             return Array.from(selectEl?.selectedOptions || []).map(opt => opt.value).filter(Boolean);
         },
@@ -1783,26 +1811,38 @@ function leadsManager() {
             this.reminderNotifications = this.reminderNotifications.filter(item => this.getReminderDismissKey(item) !== key);
         },
 
-        async openLeadFromReminderNotification(notification) {
-            const existingLead = this.leads.find(item => item.id === notification.lead_id);
+        async openLeadById(leadId, { showError = true } = {}) {
+            const resolvedLeadId = Number(leadId);
+            if (!Number.isFinite(resolvedLeadId) || resolvedLeadId <= 0) {
+                return false;
+            }
+            const existingLead = this.leads.find(item => Number(item.id) === resolvedLeadId);
             if (existingLead) {
                 this.viewLead(existingLead);
-            } else {
-                try {
-                    const resp = await fetch(`/api/leads/${notification.lead_id}`);
-                    const data = await resp.json();
-                    if (!resp.ok || !data.lead) {
-                        throw new Error(data.error || 'Lead is not accessible in your current scope');
-                    }
-                    const normalizedLead = {
-                        ...data.lead,
-                        tags: this.normalizeLeadTags(data.lead.tags || [])
-                    };
-                    this.viewLead(normalizedLead);
-                } catch (e) {
+                return true;
+            }
+            try {
+                const resp = await fetch(`/api/leads/${resolvedLeadId}`);
+                const data = await resp.json();
+                if (!resp.ok || !data.lead) {
+                    throw new Error(data.error || 'Lead is not accessible in your current scope');
+                }
+                const normalizedLead = {
+                    ...data.lead,
+                    tags: this.normalizeLeadTags(data.lead.tags || [])
+                };
+                this.viewLead(normalizedLead);
+                return true;
+            } catch (e) {
+                if (showError) {
                     alert(e.message || 'Lead is not accessible in your current scope');
                 }
+                return false;
             }
+        },
+
+        async openLeadFromReminderNotification(notification) {
+            await this.openLeadById(notification.lead_id);
             this.dismissReminderNotification(notification);
         },
 
@@ -1888,9 +1928,18 @@ function leadsManager() {
         },
         
         async init() {
+            const urlParams = new URLSearchParams(window.location.search || '');
+            const urlLeadId = Number(urlParams.get('lead_id'));
+            if (Number.isFinite(urlLeadId) && urlLeadId > 0) {
+                this.pendingLeadIdFromUrl = urlLeadId;
+            }
             await this.loadCardPreferences();
             await this.loadConfig();
             await this.loadLeads();
+            if (this.pendingLeadIdFromUrl && !this.initialLeadDeepLinkHandled) {
+                this.initialLeadDeepLinkHandled = true;
+                await this.openLeadById(this.pendingLeadIdFromUrl, { showError: false });
+            }
             await this.loadReminderBoards();
             await this.loadReminderNotifications();
             this.reminderNotificationTimer = setInterval(() => {
