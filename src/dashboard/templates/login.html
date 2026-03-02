@@ -12,6 +12,16 @@
 </head>
 <body class="bg-gradient-to-br from-indigo-600 to-purple-700 min-h-screen flex items-center justify-center px-4">
     <div class="max-w-md w-full">
+        <div class="flex justify-end mb-3">
+            <div class="inline-flex items-center border border-indigo-200 bg-white/90 rounded-lg overflow-hidden">
+                <button type="button" data-lang-toggle="en" class="px-3 py-1.5 text-xs font-medium hover:bg-gray-50 {% if ui_lang == 'en' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600{% endif %}">
+                    {{ t('common.english', default='English') }}
+                </button>
+                <button type="button" data-lang-toggle="ar" class="px-3 py-1.5 text-xs font-medium hover:bg-gray-50 {% if ui_lang == 'ar' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600{% endif %}">
+                    {{ t('common.arabic', default='Arabic') }}
+                </button>
+            </div>
+        </div>
         <!-- Logo/Brand -->
         <div class="text-center mb-8">
             <div class="inline-flex items-center justify-center w-16 h-16 bg-white rounded-full shadow-lg mb-4">
@@ -49,7 +59,7 @@
                         </div>
                         <input type="email" id="email" name="email" required autofocus
                                class="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
-                               placeholder="you@example.com">
+                               placeholder="{{ t('auth.email_placeholder', default='you@example.com') }}">
                     </div>
                 </div>
                 
@@ -90,5 +100,22 @@
             {{ t('auth.secure_login', default='Secure login powered by L-Manager') }}
         </p>
     </div>
+    <script>
+        document.querySelectorAll('[data-lang-toggle]').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                const lang = btn.getAttribute('data-lang-toggle');
+                if (!lang) return;
+                try {
+                    const res = await fetch('/api/profile/language', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ language: lang })
+                    });
+                    if (!res.ok) return;
+                    window.location.reload();
+                } catch (_) {}
+            });
+        });
+    </script>
 </body>
 </html>

@@ -114,6 +114,8 @@ Creates a local listing in the workspace bound to the credential.
 - `reference` must be unique within the credential workspace.
 - `assigned_to_id` is validated against workspace members.
 - If `assigned_agent` is omitted, workspace default agent email is applied.
+- If `assigned_to_id` is omitted, server attempts assignee inference from `assigned_agent` **email** (case-insensitive exact match to active workspace member email).
+- If no email match is found, create still succeeds with normal fallback assignment behavior.
 
 ## Example request (canonical)
 

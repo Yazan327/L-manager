@@ -3492,6 +3492,24 @@ def _validate_assignee(workspace_id, assignee_id):
     return assignee_id
 
 
+def _resolve_assignee_id_from_assigned_agent_email(workspace_id, assigned_agent_value):
+    """Resolve workspace assignee from assigned_agent when it is an email."""
+    value = str(assigned_agent_value or '').strip().lower()
+    if not value or '@' not in value:
+        return None
+
+    member = WorkspaceMember.query.join(
+        User, WorkspaceMember.user_id == User.id
+    ).filter(
+        WorkspaceMember.workspace_id == workspace_id,
+        User.is_active == True,
+        db.func.lower(User.email) == value
+    ).first()
+    if not member:
+        return None
+    return member.user_id
+
+
 def _validate_team_leader_assignment(workspace_id, member_user_id, team_leader_user_id):
     """Validate and normalize direct team leader assignment for a workspace member."""
     if team_leader_user_id in (None, '', 'null'):
@@ -3607,7 +3625,11 @@ def _create_local_listing_record(data, workspace_id, actor_user=None, can_manage
                     return None, ('validation_error', 'Assigned user must be in this workspace.', 422, {'assigned_to_id': 'Invalid workspace member.'})
                 listing.assigned_to_id = assigned_to_id
         else:
-            listing.assigned_to_id = default_assigned_to_id
+            inferred_assignee_id = _resolve_assignee_id_from_assigned_agent_email(
+                workspace_id,
+                listing.assigned_agent
+            )
+            listing.assigned_to_id = inferred_assignee_id or default_assigned_to_id
     elif actor_user:
         listing.assigned_to_id = default_assigned_to_id or actor_user.id
 
@@ -7263,7 +7285,7 @@ def api_check_access():
 def api_i18n_payload(lang):
     """Expose translation dictionary for client-side localization."""
     normalized = lang if lang in SUPPORTED_LANGUAGES else DEFAULT_LANGUAGE
-    cache_key = f'i18n_payload:{normalized}:v1'
+    cache_key = f'i18n_payload:{normalized}:v2'
     cached_payload = cache.get(cache_key)
     if cached_payload:
         return jsonify(cached_payload)
@@ -7273,24 +7295,24 @@ def api_i18n_payload(lang):
         'language': normalized,
         'direction': i18n_direction(normalized),
         'messages': i18n_dictionary(normalized),
-        'version': 'v1'
+        'version': 'v2'
     }
     cache.set(cache_key, payload, timeout=3600)
     return jsonify(payload)
 
 
 @app.route('/api/profile/language', methods=['POST'])
-@login_required
 def api_update_profile_language():
-    """Persist per-user UI language preference."""
+    """Persist UI language preference in session, and user profile when authenticated."""
     data = request.get_json(silent=True) or {}
     language = (data.get('language') or '').strip().lower()
     if language not in SUPPORTED_LANGUAGES:
         return api_error('invalid_language', status=400)
 
-    save_user_language(g.user, language)
     session['ui_lang'] = language
-    db.session.commit()
+    if getattr(g, 'user', None):
+        save_user_language(g.user, language)
+        db.session.commit()
 
     return jsonify({
         'success': True,
@@ -9880,29 +9902,41 @@ def api_local_sync_pf_status(listing_id):
 @require_active_workspace
 def api_local_bulk_create():
     """Bulk create local listings"""
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     listings_data = data.get('listings', [])
     ws_id = get_active_workspace_id()
+    can_manage_all = workspace_user_can_manage_all_listings(workspace_id=ws_id)
+
+    if not isinstance(listings_data, list):
+        return jsonify({'success': False, 'error': 'listings must be a list'}), 400
     
     created = []
     errors = []
     
     for idx, item in enumerate(listings_data):
         try:
-            # Check for duplicate reference
-            if LocalListing.query.filter_by(reference=item.get('reference'), workspace_id=ws_id).first():
-                errors.append({'index': idx, 'error': 'Reference already exists', 'reference': item.get('reference')})
+            listing, create_error = _create_local_listing_record(
+                data=item or {},
+                workspace_id=ws_id,
+                actor_user=g.user,
+                can_manage_all=can_manage_all,
+                force_draft=False
+            )
+            if create_error:
+                _error_code, message, _status_code, details = create_error
+                error_entry = {
+                    'index': idx,
+                    'error': message,
+                    'reference': (item or {}).get('reference')
+                }
+                if details:
+                    error_entry['details'] = details
+                errors.append(error_entry)
                 continue
-            
-            listing = LocalListing.from_dict(item)
-            listing.workspace_id = ws_id
-            db.session.add(listing)
-            db.session.flush()
             created.append(listing.to_dict())
         except Exception as e:
-            errors.append({'index': idx, 'error': str(e), 'reference': item.get('reference')})
-    
-    db.session.commit()
+            ref = item.get('reference') if isinstance(item, dict) else None
+            errors.append({'index': idx, 'error': str(e), 'reference': ref})
     
     return jsonify({
         'success': True,

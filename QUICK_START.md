@@ -45,9 +45,24 @@ Production note:
 ### Localization (EN/AR)
 
 ```bash
-# Validate Arabic/English translation keys
+# Validate Arabic/English dictionary shape
 python scripts/check_i18n.py
+
+# Validate template key usage against dictionaries
+python scripts/i18n/check_missing_keys.py
+
+# Prevent new hardcoded JS/UI literals
+python scripts/i18n/check_hardcoded_strings.py
+
+# Optional: generate translation inventory CSV
+python scripts/i18n/extract_ui_strings.py
 ```
+
+Localization notes:
+- Use `{{ t('namespace.key', default='...') }}` for template strings.
+- Use `i18nT('namespace.key', 'fallback', vars)` for JS strings.
+- Keep Arabic UI with Western digits (`ar-AE-u-nu-latn`).
+- For runtime alerts/confirms built from old literals, add entries to `legacy_messages` or `runtime_prefixes` in `src/dashboard/i18n/*.json`.
 
 ### Production (Railway)
 

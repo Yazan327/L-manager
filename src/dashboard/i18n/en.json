@@ -43,7 +43,12 @@
     "delete": "Delete",
     "search": "Search",
     "all": "All",
-    "language": "Language"
+    "language": "Language",
+    "close": "Close",
+    "prev": "Prev",
+    "next": "Next",
+    "loading": "Loading...",
+    "save_changes": "Save Changes"
   },
   "listings": {
     "new": "New",
@@ -107,9 +112,10 @@
     "new_password": "New Password",
     "enter_new_password": "Enter new password",
     "update_password": "Update Password",
-    "secure_reset": "Secure reset powered by L-Manager"
+    "secure_reset": "Secure reset powered by L-Manager",
+    "email_placeholder": "you@example.com"
   },
-    "dashboard": {
+  "dashboard": {
     "total_listings": "Total Listings",
     "published": "Published",
     "drafts": "Drafts",
@@ -149,37 +155,402 @@
     "current_password_incorrect": "Current password is incorrect."
   },
   "legacy_messages": {
-    "Permission denied": { "code": "permission_denied", "text": "Permission denied" },
-    "Listing not found": { "code": "listing_not_found", "text": "Listing not found" },
-    "Lead not found": { "code": "lead_not_found", "text": "Lead not found" },
-    "No files specified": { "code": "files_missing", "text": "No files specified" },
-    "No data provided": { "code": "payload_missing", "text": "No data provided" },
-    "No file provided": { "code": "file_missing", "text": "No file provided" },
-    "No file selected": { "code": "file_missing", "text": "No file selected" },
-    "No images provided": { "code": "images_missing", "text": "No images provided" },
-    "Invalid role": { "code": "invalid_role", "text": "Invalid role" },
-    "Invalid token": { "code": "invalid_token", "text": "Invalid token" },
-    "User not found": { "code": "user_not_found", "text": "User not found" },
-    "Folder not found": { "code": "folder_not_found", "text": "Folder not found" },
-    "Name is required": { "code": "name_required", "text": "Name is required" },
-    "Email is required": { "code": "email_required", "text": "Email is required" },
-    "Password is required.": { "code": "password_required", "text": "Password is required." },
-    "Invalid email or password.": { "code": "invalid_credentials", "text": "Invalid email or password." },
-    "Please log in to access this page.": { "code": "auth_required", "text": "Please log in to access this page." },
-    "Your session has expired. Please log in again.": { "code": "session_expired", "text": "Your session has expired. Please log in again." },
-    "You have been logged out.": { "code": "logged_out", "text": "You have been logged out." },
-    "You do not have permission to access this feature.": { "code": "permission_denied", "text": "You do not have permission to access this feature." },
+    "Permission denied": {
+      "code": "permission_denied",
+      "text": "Permission denied"
+    },
+    "Listing not found": {
+      "code": "listing_not_found",
+      "text": "Listing not found"
+    },
+    "Lead not found": {
+      "code": "lead_not_found",
+      "text": "Lead not found"
+    },
+    "No files specified": {
+      "code": "files_missing",
+      "text": "No files specified"
+    },
+    "No data provided": {
+      "code": "payload_missing",
+      "text": "No data provided"
+    },
+    "No file provided": {
+      "code": "file_missing",
+      "text": "No file provided"
+    },
+    "No file selected": {
+      "code": "file_missing",
+      "text": "No file selected"
+    },
+    "No images provided": {
+      "code": "images_missing",
+      "text": "No images provided"
+    },
+    "Invalid role": {
+      "code": "invalid_role",
+      "text": "Invalid role"
+    },
+    "Invalid token": {
+      "code": "invalid_token",
+      "text": "Invalid token"
+    },
+    "User not found": {
+      "code": "user_not_found",
+      "text": "User not found"
+    },
+    "Folder not found": {
+      "code": "folder_not_found",
+      "text": "Folder not found"
+    },
+    "Name is required": {
+      "code": "name_required",
+      "text": "Name is required"
+    },
+    "Email is required": {
+      "code": "email_required",
+      "text": "Email is required"
+    },
+    "Password is required.": {
+      "code": "password_required",
+      "text": "Password is required."
+    },
+    "Invalid email or password.": {
+      "code": "invalid_credentials",
+      "text": "Invalid email or password."
+    },
+    "Please log in to access this page.": {
+      "code": "auth_required",
+      "text": "Please log in to access this page."
+    },
+    "Your session has expired. Please log in again.": {
+      "code": "session_expired",
+      "text": "Your session has expired. Please log in again."
+    },
+    "You have been logged out.": {
+      "code": "logged_out",
+      "text": "You have been logged out."
+    },
+    "You do not have permission to access this feature.": {
+      "code": "permission_denied",
+      "text": "You do not have permission to access this feature."
+    },
     "No active workspace is available for your account. Please contact your administrator.": {
       "code": "workspace_missing",
       "text": "No active workspace is available for your account. Please contact your administrator."
     },
-    "Invalid role selected.": { "code": "invalid_role", "text": "Invalid role selected." },
-    "User is already a member of this workspace": { "code": "member_exists", "text": "User is already a member of this workspace" },
+    "Invalid role selected.": {
+      "code": "invalid_role",
+      "text": "Invalid role selected."
+    },
+    "User is already a member of this workspace": {
+      "code": "member_exists",
+      "text": "User is already a member of this workspace"
+    },
     "An account with this email already exists. Please log in to accept the invite.": {
       "code": "invite_existing_account",
       "text": "An account with this email already exists. Please log in to accept the invite."
     },
-    "Page not found": { "code": "not_found", "text": "Page not found" },
-    "NotFound: 404 Not Found": { "code": "not_found", "text": "NotFound: 404 Not Found" }
+    "Page not found": {
+      "code": "not_found",
+      "text": "Page not found"
+    },
+    "NotFound: 404 Not Found": {
+      "code": "not_found",
+      "text": "NotFound: 404 Not Found"
+    },
+    "Select a workspace to continue.": {
+      "code": "select_workspace",
+      "text": "Select a workspace to continue."
+    },
+    "You are not assigned to any workspace.": {
+      "code": "workspace_missing",
+      "text": "You are not assigned to any workspace."
+    },
+    "All fields are required.": {
+      "code": "fields_required",
+      "text": "All fields are required."
+    },
+    "A user with this email already exists.": {
+      "code": "user_exists",
+      "text": "A user with this email already exists."
+    },
+    "Use workspace invites and membership management from the Workspace Users page.": {
+      "code": "workspace_users_manage_only",
+      "text": "Use workspace invites and membership management from the Workspace Users page."
+    },
+    "Use workspace membership management from the Workspace Users page.": {
+      "code": "workspace_membership_manage_only",
+      "text": "Use workspace membership management from the Workspace Users page."
+    },
+    "Cannot demote or deactivate the last admin.": {
+      "code": "last_admin_protection",
+      "text": "Cannot demote or deactivate the last admin."
+    },
+    "Remove users from the workspace from the Workspace Users page instead of deleting the account.": {
+      "code": "remove_workspace_member_instead",
+      "text": "Remove users from the workspace from the Workspace Users page instead of deleting the account."
+    },
+    "You cannot delete your own account.": {
+      "code": "cannot_delete_self",
+      "text": "You cannot delete your own account."
+    },
+    "Cannot delete the last admin.": {
+      "code": "cannot_delete_last_admin",
+      "text": "Cannot delete the last admin."
+    },
+    "You have joined the workspace.": {
+      "code": "workspace_joined",
+      "text": "You have joined the workspace."
+    },
+    "Account created and workspace joined.": {
+      "code": "account_created_workspace_joined",
+      "text": "Account created and workspace joined."
+    },
+    "Password updated successfully.": {
+      "code": "password_updated",
+      "text": "Password updated successfully."
+    },
+    "Access denied. System administrators only.": {
+      "code": "system_admin_only",
+      "text": "Access denied. System administrators only."
+    },
+    "Workspace not found.": {
+      "code": "workspace_not_found",
+      "text": "Workspace not found."
+    },
+    "Enter the workspace to access it.": {
+      "code": "enter_workspace_required",
+      "text": "Enter the workspace to access it."
+    },
+    "You do not have access to this workspace.": {
+      "code": "workspace_access_denied",
+      "text": "You do not have access to this workspace."
+    },
+    "Access denied. Workspace admin only.": {
+      "code": "workspace_admin_only",
+      "text": "Access denied. Workspace admin only."
+    },
+    "Access denied.": {
+      "code": "access_denied",
+      "text": "Access denied."
+    },
+    "Workspace is not active.": {
+      "code": "workspace_inactive",
+      "text": "Workspace is not active."
+    },
+    "Connection successful!": {
+      "code": "connection_success",
+      "text": "Connection successful!"
+    },
+    "Connection failed: ": {
+      "code": "connection_failed",
+      "text": "Connection failed: "
+    },
+    "Failed to test connection": {
+      "code": "connection_test_failed",
+      "text": "Failed to test connection"
+    },
+    "Save the connection first, then use the Test button to verify it.": {
+      "code": "save_connection_first",
+      "text": "Save the connection first, then use the Test button to verify it."
+    },
+    "Failed to save connection": {
+      "code": "save_connection_failed",
+      "text": "Failed to save connection"
+    },
+    "Failed to delete connection": {
+      "code": "delete_connection_failed",
+      "text": "Failed to delete connection"
+    },
+    "Failed to create invite": {
+      "code": "create_invite_failed",
+      "text": "Failed to create invite"
+    },
+    "Failed to revoke invite": {
+      "code": "revoke_invite_failed",
+      "text": "Failed to revoke invite"
+    },
+    "Failed to update role": {
+      "code": "update_role_failed",
+      "text": "Failed to update role"
+    },
+    "Failed to remove member": {
+      "code": "remove_member_failed",
+      "text": "Failed to remove member"
+    },
+    "Failed to add member": {
+      "code": "add_member_failed",
+      "text": "Failed to add member"
+    },
+    "Failed to save workspace": {
+      "code": "save_workspace_failed",
+      "text": "Failed to save workspace"
+    },
+    "Failed to delete workspace": {
+      "code": "delete_workspace_failed",
+      "text": "Failed to delete workspace"
+    },
+    "Failed to save settings": {
+      "code": "save_settings_failed",
+      "text": "Failed to save settings"
+    },
+    "Settings saved successfully!": {
+      "code": "settings_saved",
+      "text": "Settings saved successfully!"
+    },
+    "Settings saved": {
+      "code": "settings_saved_short",
+      "text": "Settings saved"
+    },
+    "Loop deleted": {
+      "code": "loop_deleted",
+      "text": "Loop deleted"
+    },
+    "Error deleting loop": {
+      "code": "delete_loop_failed",
+      "text": "Error deleting loop"
+    },
+    "Error saving loop": {
+      "code": "save_loop_failed",
+      "text": "Error saving loop"
+    },
+    "Error deleting files": {
+      "code": "delete_files_failed",
+      "text": "Error deleting files"
+    },
+    "Error deleting file": {
+      "code": "delete_file_failed",
+      "text": "Error deleting file"
+    },
+    "Error during cleanup": {
+      "code": "cleanup_failed",
+      "text": "Error during cleanup"
+    },
+    "Failed to load storage info": {
+      "code": "load_storage_failed",
+      "text": "Failed to load storage info"
+    },
+    "Failed to save folder": {
+      "code": "save_folder_failed",
+      "text": "Failed to save folder"
+    },
+    "Failed to delete folder": {
+      "code": "delete_folder_failed",
+      "text": "Failed to delete folder"
+    },
+    "Failed to move listings": {
+      "code": "move_listings_failed",
+      "text": "Failed to move listings"
+    },
+    "Failed to reassign listings": {
+      "code": "reassign_listings_failed",
+      "text": "Failed to reassign listings"
+    },
+    "Failed to publish listing": {
+      "code": "publish_listing_failed",
+      "text": "Failed to publish listing"
+    },
+    "Failed to unpublish listing": {
+      "code": "unpublish_listing_failed",
+      "text": "Failed to unpublish listing"
+    },
+    "Failed to sync PF status": {
+      "code": "sync_pf_status_failed",
+      "text": "Failed to sync PF status"
+    },
+    "Failed to duplicate listing": {
+      "code": "duplicate_listing_failed",
+      "text": "Failed to duplicate listing"
+    },
+    "Failed to send to PF draft": {
+      "code": "send_pf_draft_failed",
+      "text": "Failed to send to PF draft"
+    },
+    "Failed to sync": {
+      "code": "sync_failed",
+      "text": "Failed to sync"
+    },
+    "Failed to auto-assign": {
+      "code": "auto_assign_failed",
+      "text": "Failed to auto-assign"
+    },
+    "Failed to refresh": {
+      "code": "refresh_failed",
+      "text": "Failed to refresh"
+    },
+    "Failed to add comment: ": {
+      "code": "add_comment_failed",
+      "text": "Failed to add comment: "
+    },
+    "Failed to create credential: ": {
+      "code": "create_credential_failed",
+      "text": "Failed to create credential: "
+    },
+    "Failed to regenerate secret: ": {
+      "code": "regenerate_secret_failed",
+      "text": "Failed to regenerate secret: "
+    },
+    "Failed to revoke credential: ": {
+      "code": "revoke_credential_failed",
+      "text": "Failed to revoke credential: "
+    },
+    "Failed to copy: ": {
+      "code": "copy_failed",
+      "text": "Failed to copy: "
+    },
+    "Copy failed. Text: ": {
+      "code": "copy_failed_text",
+      "text": "Copy failed. Text: "
+    },
+    "Select an assignee first": {
+      "code": "select_assignee_first",
+      "text": "Select an assignee first"
+    },
+    "Role editing UI - coming soon": {
+      "code": "role_editing_coming_soon",
+      "text": "Role editing UI - coming soon"
+    },
+    "Task board is required for task reminders": {
+      "code": "task_board_required",
+      "text": "Task board is required for task reminders"
+    },
+    "Title and due date are required": {
+      "code": "title_due_required",
+      "text": "Title and due date are required"
+    },
+    "Please select a contact": {
+      "code": "select_contact_required",
+      "text": "Please select a contact"
+    },
+    "Please map all required fields before uploading.": {
+      "code": "map_required_fields",
+      "text": "Please map all required fields before uploading."
+    },
+    "Invalid file type. Please upload a JSON or CSV file.": {
+      "code": "invalid_file_type",
+      "text": "Invalid file type. Please upload a JSON or CSV file."
+    },
+    "File too large. Maximum size is 16MB.": {
+      "code": "file_too_large",
+      "text": "File too large. Maximum size is 16MB."
+    }
+  },
+  "runtime_prefixes": {
+    "Failed to save: ": "Failed to save: ",
+    "Failed to delete: ": "Failed to delete: ",
+    "Failed to update: ": "Failed to update: ",
+    "Failed to sync: ": "Failed to sync: ",
+    "Failed to refresh: ": "Failed to refresh: ",
+    "Connection failed: ": "Connection failed: ",
+    "Error parsing file: ": "Error parsing file: ",
+    "Errors (": "Errors (",
+    "Row ": "Row ",
+    "Reset link (copy):": "Reset link (copy):",
+    "Failed to create invite: ": "Failed to create invite: ",
+    "Failed to revoke invite: ": "Failed to revoke invite: ",
+    "Failed to update role: ": "Failed to update role: ",
+    "Failed to copy: ": "Failed to copy: ",
+    "Failed to auto-assign: ": "Failed to auto-assign: "
   }
 }

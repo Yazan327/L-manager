@@ -43,7 +43,12 @@
     "delete": "حذف",
     "search": "بحث",
     "all": "الكل",
-    "language": "اللغة"
+    "language": "اللغة",
+    "close": "إغلاق",
+    "prev": "السابق",
+    "next": "التالي",
+    "loading": "جاري التحميل...",
+    "save_changes": "حفظ التغييرات"
   },
   "listings": {
     "new": "جديد",
@@ -107,9 +112,10 @@
     "new_password": "كلمة المرور الجديدة",
     "enter_new_password": "أدخل كلمة المرور الجديدة",
     "update_password": "تحديث كلمة المرور",
-    "secure_reset": "إعادة تعيين آمنة عبر إل-مانجر"
+    "secure_reset": "إعادة تعيين آمنة عبر إل-مانجر",
+    "email_placeholder": "you@example.com"
   },
-    "dashboard": {
+  "dashboard": {
     "total_listings": "إجمالي العقارات",
     "published": "منشور",
     "drafts": "مسودات",
@@ -149,37 +155,402 @@
     "current_password_incorrect": "كلمة المرور الحالية غير صحيحة."
   },
   "legacy_messages": {
-    "Permission denied": { "code": "permission_denied", "text": "تم رفض الصلاحية" },
-    "Listing not found": { "code": "listing_not_found", "text": "العقار غير موجود" },
-    "Lead not found": { "code": "lead_not_found", "text": "العميل المحتمل غير موجود" },
-    "No files specified": { "code": "files_missing", "text": "لم يتم تحديد ملفات" },
-    "No data provided": { "code": "payload_missing", "text": "لم يتم إرسال بيانات" },
-    "No file provided": { "code": "file_missing", "text": "لم يتم إرسال ملف" },
-    "No file selected": { "code": "file_missing", "text": "لم يتم اختيار ملف" },
-    "No images provided": { "code": "images_missing", "text": "لم يتم إرسال صور" },
-    "Invalid role": { "code": "invalid_role", "text": "الدور غير صالح" },
-    "Invalid token": { "code": "invalid_token", "text": "الرمز غير صالح" },
-    "User not found": { "code": "user_not_found", "text": "المستخدم غير موجود" },
-    "Folder not found": { "code": "folder_not_found", "text": "المجلد غير موجود" },
-    "Name is required": { "code": "name_required", "text": "الاسم مطلوب" },
-    "Email is required": { "code": "email_required", "text": "البريد الإلكتروني مطلوب" },
-    "Password is required.": { "code": "password_required", "text": "كلمة المرور مطلوبة." },
-    "Invalid email or password.": { "code": "invalid_credentials", "text": "البريد الإلكتروني أو كلمة المرور غير صحيحة." },
-    "Please log in to access this page.": { "code": "auth_required", "text": "يرجى تسجيل الدخول للوصول إلى هذه الصفحة." },
-    "Your session has expired. Please log in again.": { "code": "session_expired", "text": "انتهت جلستك. الرجاء تسجيل الدخول مرة أخرى." },
-    "You have been logged out.": { "code": "logged_out", "text": "تم تسجيل خروجك." },
-    "You do not have permission to access this feature.": { "code": "permission_denied", "text": "ليس لديك صلاحية للوصول إلى هذه الميزة." },
+    "Permission denied": {
+      "code": "permission_denied",
+      "text": "تم رفض الصلاحية"
+    },
+    "Listing not found": {
+      "code": "listing_not_found",
+      "text": "العقار غير موجود"
+    },
+    "Lead not found": {
+      "code": "lead_not_found",
+      "text": "العميل المحتمل غير موجود"
+    },
+    "No files specified": {
+      "code": "files_missing",
+      "text": "لم يتم تحديد ملفات"
+    },
+    "No data provided": {
+      "code": "payload_missing",
+      "text": "لم يتم إرسال بيانات"
+    },
+    "No file provided": {
+      "code": "file_missing",
+      "text": "لم يتم إرسال ملف"
+    },
+    "No file selected": {
+      "code": "file_missing",
+      "text": "لم يتم اختيار ملف"
+    },
+    "No images provided": {
+      "code": "images_missing",
+      "text": "لم يتم إرسال صور"
+    },
+    "Invalid role": {
+      "code": "invalid_role",
+      "text": "الدور غير صالح"
+    },
+    "Invalid token": {
+      "code": "invalid_token",
+      "text": "الرمز غير صالح"
+    },
+    "User not found": {
+      "code": "user_not_found",
+      "text": "المستخدم غير موجود"
+    },
+    "Folder not found": {
+      "code": "folder_not_found",
+      "text": "المجلد غير موجود"
+    },
+    "Name is required": {
+      "code": "name_required",
+      "text": "الاسم مطلوب"
+    },
+    "Email is required": {
+      "code": "email_required",
+      "text": "البريد الإلكتروني مطلوب"
+    },
+    "Password is required.": {
+      "code": "password_required",
+      "text": "كلمة المرور مطلوبة."
+    },
+    "Invalid email or password.": {
+      "code": "invalid_credentials",
+      "text": "البريد الإلكتروني أو كلمة المرور غير صحيحة."
+    },
+    "Please log in to access this page.": {
+      "code": "auth_required",
+      "text": "يرجى تسجيل الدخول للوصول إلى هذه الصفحة."
+    },
+    "Your session has expired. Please log in again.": {
+      "code": "session_expired",
+      "text": "انتهت جلستك. الرجاء تسجيل الدخول مرة أخرى."
+    },
+    "You have been logged out.": {
+      "code": "logged_out",
+      "text": "تم تسجيل خروجك."
+    },
+    "You do not have permission to access this feature.": {
+      "code": "permission_denied",
+      "text": "ليس لديك صلاحية للوصول إلى هذه الميزة."
+    },
     "No active workspace is available for your account. Please contact your administrator.": {
       "code": "workspace_missing",
       "text": "لا توجد مساحة عمل نشطة لحسابك. يرجى التواصل مع مدير النظام."
     },
-    "Invalid role selected.": { "code": "invalid_role", "text": "تم اختيار دور غير صالح." },
-    "User is already a member of this workspace": { "code": "member_exists", "text": "المستخدم عضو بالفعل في مساحة العمل هذه" },
+    "Invalid role selected.": {
+      "code": "invalid_role",
+      "text": "تم اختيار دور غير صالح."
+    },
+    "User is already a member of this workspace": {
+      "code": "member_exists",
+      "text": "المستخدم عضو بالفعل في مساحة العمل هذه"
+    },
     "An account with this email already exists. Please log in to accept the invite.": {
       "code": "invite_existing_account",
       "text": "يوجد حساب بهذا البريد الإلكتروني. يرجى تسجيل الدخول لقبول الدعوة."
     },
-    "Page not found": { "code": "not_found", "text": "الصفحة غير موجودة" },
-    "NotFound: 404 Not Found": { "code": "not_found", "text": "غير موجود: 404" }
+    "Page not found": {
+      "code": "not_found",
+      "text": "الصفحة غير موجودة"
+    },
+    "NotFound: 404 Not Found": {
+      "code": "not_found",
+      "text": "غير موجود: 404"
+    },
+    "Select a workspace to continue.": {
+      "code": "select_workspace",
+      "text": "اختر مساحة عمل للمتابعة."
+    },
+    "You are not assigned to any workspace.": {
+      "code": "workspace_missing",
+      "text": "لست مضافًا إلى أي مساحة عمل."
+    },
+    "All fields are required.": {
+      "code": "fields_required",
+      "text": "جميع الحقول مطلوبة."
+    },
+    "A user with this email already exists.": {
+      "code": "user_exists",
+      "text": "يوجد مستخدم بهذا البريد الإلكتروني بالفعل."
+    },
+    "Use workspace invites and membership management from the Workspace Users page.": {
+      "code": "workspace_users_manage_only",
+      "text": "استخدم دعوات مساحة العمل وإدارة الأعضاء من صفحة مستخدمي مساحة العمل."
+    },
+    "Use workspace membership management from the Workspace Users page.": {
+      "code": "workspace_membership_manage_only",
+      "text": "استخدم إدارة عضوية مساحة العمل من صفحة مستخدمي مساحة العمل."
+    },
+    "Cannot demote or deactivate the last admin.": {
+      "code": "last_admin_protection",
+      "text": "لا يمكن خفض صلاحية أو تعطيل آخر مسؤول."
+    },
+    "Remove users from the workspace from the Workspace Users page instead of deleting the account.": {
+      "code": "remove_workspace_member_instead",
+      "text": "قم بإزالة المستخدمين من مساحة العمل من صفحة المستخدمين بدلًا من حذف الحساب."
+    },
+    "You cannot delete your own account.": {
+      "code": "cannot_delete_self",
+      "text": "لا يمكنك حذف حسابك."
+    },
+    "Cannot delete the last admin.": {
+      "code": "cannot_delete_last_admin",
+      "text": "لا يمكن حذف آخر مسؤول."
+    },
+    "You have joined the workspace.": {
+      "code": "workspace_joined",
+      "text": "لقد انضممت إلى مساحة العمل."
+    },
+    "Account created and workspace joined.": {
+      "code": "account_created_workspace_joined",
+      "text": "تم إنشاء الحساب والانضمام إلى مساحة العمل."
+    },
+    "Password updated successfully.": {
+      "code": "password_updated",
+      "text": "تم تحديث كلمة المرور بنجاح."
+    },
+    "Access denied. System administrators only.": {
+      "code": "system_admin_only",
+      "text": "تم رفض الوصول. لمشرفي النظام فقط."
+    },
+    "Workspace not found.": {
+      "code": "workspace_not_found",
+      "text": "مساحة العمل غير موجودة."
+    },
+    "Enter the workspace to access it.": {
+      "code": "enter_workspace_required",
+      "text": "ادخل إلى مساحة العمل للوصول إليها."
+    },
+    "You do not have access to this workspace.": {
+      "code": "workspace_access_denied",
+      "text": "ليس لديك صلاحية الوصول إلى مساحة العمل هذه."
+    },
+    "Access denied. Workspace admin only.": {
+      "code": "workspace_admin_only",
+      "text": "تم رفض الوصول. لمسؤولي مساحة العمل فقط."
+    },
+    "Access denied.": {
+      "code": "access_denied",
+      "text": "تم رفض الوصول."
+    },
+    "Workspace is not active.": {
+      "code": "workspace_inactive",
+      "text": "مساحة العمل غير نشطة."
+    },
+    "Connection successful!": {
+      "code": "connection_success",
+      "text": "تم الاتصال بنجاح!"
+    },
+    "Connection failed: ": {
+      "code": "connection_failed",
+      "text": "فشل الاتصال: "
+    },
+    "Failed to test connection": {
+      "code": "connection_test_failed",
+      "text": "فشل اختبار الاتصال"
+    },
+    "Save the connection first, then use the Test button to verify it.": {
+      "code": "save_connection_first",
+      "text": "احفظ الاتصال أولًا ثم استخدم زر الاختبار للتحقق."
+    },
+    "Failed to save connection": {
+      "code": "save_connection_failed",
+      "text": "فشل حفظ الاتصال"
+    },
+    "Failed to delete connection": {
+      "code": "delete_connection_failed",
+      "text": "فشل حذف الاتصال"
+    },
+    "Failed to create invite": {
+      "code": "create_invite_failed",
+      "text": "فشل إنشاء الدعوة"
+    },
+    "Failed to revoke invite": {
+      "code": "revoke_invite_failed",
+      "text": "فشل إلغاء الدعوة"
+    },
+    "Failed to update role": {
+      "code": "update_role_failed",
+      "text": "فشل تحديث الدور"
+    },
+    "Failed to remove member": {
+      "code": "remove_member_failed",
+      "text": "فشل إزالة العضو"
+    },
+    "Failed to add member": {
+      "code": "add_member_failed",
+      "text": "فشل إضافة العضو"
+    },
+    "Failed to save workspace": {
+      "code": "save_workspace_failed",
+      "text": "فشل حفظ مساحة العمل"
+    },
+    "Failed to delete workspace": {
+      "code": "delete_workspace_failed",
+      "text": "فشل حذف مساحة العمل"
+    },
+    "Failed to save settings": {
+      "code": "save_settings_failed",
+      "text": "فشل حفظ الإعدادات"
+    },
+    "Settings saved successfully!": {
+      "code": "settings_saved",
+      "text": "تم حفظ الإعدادات بنجاح!"
+    },
+    "Settings saved": {
+      "code": "settings_saved_short",
+      "text": "تم حفظ الإعدادات"
+    },
+    "Loop deleted": {
+      "code": "loop_deleted",
+      "text": "تم حذف الحلقة"
+    },
+    "Error deleting loop": {
+      "code": "delete_loop_failed",
+      "text": "خطأ أثناء حذف الحلقة"
+    },
+    "Error saving loop": {
+      "code": "save_loop_failed",
+      "text": "خطأ أثناء حفظ الحلقة"
+    },
+    "Error deleting files": {
+      "code": "delete_files_failed",
+      "text": "خطأ أثناء حذف الملفات"
+    },
+    "Error deleting file": {
+      "code": "delete_file_failed",
+      "text": "خطأ أثناء حذف الملف"
+    },
+    "Error during cleanup": {
+      "code": "cleanup_failed",
+      "text": "خطأ أثناء التنظيف"
+    },
+    "Failed to load storage info": {
+      "code": "load_storage_failed",
+      "text": "فشل تحميل معلومات التخزين"
+    },
+    "Failed to save folder": {
+      "code": "save_folder_failed",
+      "text": "فشل حفظ المجلد"
+    },
+    "Failed to delete folder": {
+      "code": "delete_folder_failed",
+      "text": "فشل حذف المجلد"
+    },
+    "Failed to move listings": {
+      "code": "move_listings_failed",
+      "text": "فشل نقل العقارات"
+    },
+    "Failed to reassign listings": {
+      "code": "reassign_listings_failed",
+      "text": "فشل إعادة تعيين العقارات"
+    },
+    "Failed to publish listing": {
+      "code": "publish_listing_failed",
+      "text": "فشل نشر العقار"
+    },
+    "Failed to unpublish listing": {
+      "code": "unpublish_listing_failed",
+      "text": "فشل إلغاء نشر العقار"
+    },
+    "Failed to sync PF status": {
+      "code": "sync_pf_status_failed",
+      "text": "فشل مزامنة حالة PF"
+    },
+    "Failed to duplicate listing": {
+      "code": "duplicate_listing_failed",
+      "text": "فشل نسخ العقار"
+    },
+    "Failed to send to PF draft": {
+      "code": "send_pf_draft_failed",
+      "text": "فشل الإرسال إلى مسودة PF"
+    },
+    "Failed to sync": {
+      "code": "sync_failed",
+      "text": "فشل المزامنة"
+    },
+    "Failed to auto-assign": {
+      "code": "auto_assign_failed",
+      "text": "فشل التوزيع التلقائي"
+    },
+    "Failed to refresh": {
+      "code": "refresh_failed",
+      "text": "فشل التحديث"
+    },
+    "Failed to add comment: ": {
+      "code": "add_comment_failed",
+      "text": "فشل إضافة التعليق: "
+    },
+    "Failed to create credential: ": {
+      "code": "create_credential_failed",
+      "text": "فشل إنشاء بيانات الاعتماد: "
+    },
+    "Failed to regenerate secret: ": {
+      "code": "regenerate_secret_failed",
+      "text": "فشل إعادة إنشاء السر: "
+    },
+    "Failed to revoke credential: ": {
+      "code": "revoke_credential_failed",
+      "text": "فشل إلغاء بيانات الاعتماد: "
+    },
+    "Failed to copy: ": {
+      "code": "copy_failed",
+      "text": "فشل النسخ: "
+    },
+    "Copy failed. Text: ": {
+      "code": "copy_failed_text",
+      "text": "فشل النسخ. النص: "
+    },
+    "Select an assignee first": {
+      "code": "select_assignee_first",
+      "text": "اختر مسؤولًا أولًا"
+    },
+    "Role editing UI - coming soon": {
+      "code": "role_editing_coming_soon",
+      "text": "واجهة تعديل الأدوار قادمة قريبًا"
+    },
+    "Task board is required for task reminders": {
+      "code": "task_board_required",
+      "text": "لوحة المهام مطلوبة لتذكيرات المهام"
+    },
+    "Title and due date are required": {
+      "code": "title_due_required",
+      "text": "العنوان وموعد الاستحقاق مطلوبان"
+    },
+    "Please select a contact": {
+      "code": "select_contact_required",
+      "text": "يرجى اختيار جهة اتصال"
+    },
+    "Please map all required fields before uploading.": {
+      "code": "map_required_fields",
+      "text": "يرجى ربط جميع الحقول المطلوبة قبل الرفع."
+    },
+    "Invalid file type. Please upload a JSON or CSV file.": {
+      "code": "invalid_file_type",
+      "text": "نوع الملف غير صالح. يرجى رفع ملف JSON أو CSV."
+    },
+    "File too large. Maximum size is 16MB.": {
+      "code": "file_too_large",
+      "text": "حجم الملف كبير جدًا. الحد الأقصى 16MB."
+    }
+  },
+  "runtime_prefixes": {
+    "Failed to save: ": "فشل الحفظ: ",
+    "Failed to delete: ": "فشل الحذف: ",
+    "Failed to update: ": "فشل التحديث: ",
+    "Failed to sync: ": "فشل المزامنة: ",
+    "Failed to refresh: ": "فشل التحديث: ",
+    "Connection failed: ": "فشل الاتصال: ",
+    "Error parsing file: ": "خطأ في تحليل الملف: ",
+    "Errors (": "أخطاء (",
+    "Row ": "الصف ",
+    "Reset link (copy):": "رابط إعادة التعيين (نسخ):",
+    "Failed to create invite: ": "فشل إنشاء الدعوة: ",
+    "Failed to revoke invite: ": "فشل إلغاء الدعوة: ",
+    "Failed to update role: ": "فشل تحديث الدور: ",
+    "Failed to copy: ": "فشل النسخ: ",
+    "Failed to auto-assign: ": "فشل التوزيع التلقائي: "
   }
 }

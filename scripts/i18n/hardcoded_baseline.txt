@@ -1,0 +1,210 @@
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/bulk_upload.html: alert literal -> Error parsing file:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/bulk_upload.html: alert literal -> File too large. Maximum size is 16MB.
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/bulk_upload.html: alert literal -> Invalid file type. Please upload a JSON or CSV file.
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/bulk_upload.html: alert literal -> Please map all required fields before uploading.
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/bulk_upload.html: placeholder literal -> Enter custom value
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/bulk_upload.html: placeholder literal -> e.g., balcony, central-ac, security
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/bulk_upload.html: placeholder literal -> field.key === 'compliance_type' ? 'rera, dtcm, or adrec' : 'Permit number'
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/bulk_upload.html: title literal -> getMappedValue(row, 'amenities')
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/connections.html: alert literal -> Connection failed:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/connections.html: alert literal -> Connection successful!
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/connections.html: alert literal -> Failed to delete connection
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/connections.html: alert literal -> Failed to save connection
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/connections.html: alert literal -> Failed to test connection
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/connections.html: alert literal -> Save the connection first, then use the Test button to verify it.
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/connections.html: placeholder literal -> field.placeholder || ''
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/connections.html: placeholder literal -> field.placeholder || '••••••••'
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/image_editor.html: alert literal -> Error saving settings:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/image_editor.html: alert literal -> Failed to save settings
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/image_editor.html: alert literal -> Settings saved successfully!
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/image_editor.html: confirm literal -> Clear all images?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/image_editor.html: placeholder literal -> Search by reference, title, location...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/image_editor.html: placeholder literal -> https://example.com
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/insights.html: alert literal -> Copy failed. Text:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/insights.html: title literal -> 'Click to copy: ' + getLocation(listing) + (listing.location?.id ? ' (ID: ' + listing.location.id + ')' : '')
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/insights.html: title literal -> Clicks
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/insights.html: title literal -> Exposure Type
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/insights.html: title literal -> Published Date
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/insights.html: title literal -> Quality Score
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/insights.html: title literal -> Search Impressions
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/insights.html: title literal -> View on PropertyFinder.ae
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/insights.html: title literal -> getAgentName(listing)
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/insights.html: title literal -> listing.offering
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: alert literal -> Contact already exists:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: alert literal -> Contact saved:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: alert literal -> Failed to add comment:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: alert literal -> Failed to auto-assign:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: alert literal -> Failed to delete:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: alert literal -> Failed to refresh:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: alert literal -> Failed to save contact:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: alert literal -> Failed to save:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: alert literal -> Failed to sync:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: alert literal -> Failed to sync: Server error
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: alert literal -> Failed to update:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: alert literal -> Please select a contact
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: alert literal -> Task board is required for task reminders
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: alert literal -> Title and due date are required
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: confirm literal -> Delete this comment?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: confirm literal -> Delete this contact?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: confirm literal -> Delete this lead?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: confirm literal -> Delete this reminder?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: confirm literal -> This will auto-assign unassigned leads to L-Manager users based on matching email with PropertyFinder agents. Continue?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: placeholder literal -> Add a comment...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: placeholder literal -> Add notes...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: placeholder literal -> Call client, schedule viewing, send proposal...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: placeholder literal -> Company
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: placeholder literal -> Contact name
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: placeholder literal -> Email
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: placeholder literal -> Enter source name
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: placeholder literal -> Enter status name
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: placeholder literal -> Enter tag name
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: placeholder literal -> Notes
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: placeholder literal -> Optional details
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: placeholder literal -> Phone number
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: placeholder literal -> Search by name, email, phone...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: placeholder literal -> Search contacts by name or phone...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: placeholder literal -> Search contacts...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: title literal -> Add lead to this column
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: title literal -> Auto-assign unassigned leads to users based on matching email with PF agent
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: title literal -> Call
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: title literal -> Configure Statuses & Sources
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: title literal -> Customize card fields
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: title literal -> Delete
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: title literal -> Edit
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: title literal -> Filter by tags (match any selected)
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: title literal -> Reply in PF
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: title literal -> Reply in PropertyFinder
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: title literal -> View Details
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/leads.html: title literal -> WhatsApp
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_detail.html: alert literal -> Failed to copy:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_detail.html: confirm literal -> Are you sure you want to delete this listing?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_detail.html: title literal -> Click to copy Location ID
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: confirm literal -> Remove all images?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> Describe the property in detail...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> Leave empty to auto-generate
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> Or paste image URL and press Enter...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> Property owner
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> RERA/DLD permit
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> Search: Tower, Building, Community...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> agent@company.com or PF ID
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> e.g., 0
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> e.g., 1
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> e.g., 444955
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> e.g., 46248
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> e.g., 657
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> e.g., 7
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> e.g., 715 (internal use)
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> e.g., Emaar, Damac
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> e.g., Stunning 2BR in Prime Location
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> https://my360tour.com/... (optional)
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: placeholder literal -> https://youtube.com/... (optional)
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: title literal -> Edit image settings
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: title literal -> Move Left
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: title literal -> Move Right
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: title literal -> Remove
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: title literal -> Reprocess from original images with current settings
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listing_form.html: title literal -> Set as Main
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: alert literal -> Failed to delete folder
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: alert literal -> Failed to delete listing
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: alert literal -> Failed to duplicate listing
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: alert literal -> Failed to move listings
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: alert literal -> Failed to publish listing
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: alert literal -> Failed to reassign listings
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: alert literal -> Failed to save folder
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: alert literal -> Failed to send to PF draft
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: alert literal -> Failed to sync PF status
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: alert literal -> Failed to unpublish listing
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: alert literal -> Select an assignee first
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: confirm literal -> Are you sure you want to delete this listing? This cannot be undone.
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: confirm literal -> Delete this folder? Listings will be moved to Uncategorized.
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: confirm literal -> Publish this listing?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: confirm literal -> Unpublish this listing?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: placeholder literal -> Brief description...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: placeholder literal -> Search listings...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: placeholder literal -> e.g., Hot Properties
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: title literal -> Delete
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: title literal -> Duplicate
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: title literal -> Edit
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: title literal -> First page
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: title literal -> Last page
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: title literal -> New Folder
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: title literal -> Publish on PF
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: title literal -> Publish to PF
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: title literal -> Send to PF Draft
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: title literal -> Sync PF Status
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: title literal -> Toggle Folders
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: title literal -> Unpublish
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: title literal -> View
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/listings.html: title literal -> sortOrder === 'desc' ? 'Descending' : 'Ascending'
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/loops.html: confirm literal -> Are you sure you want to delete this loop?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/loops.html: confirm literal -> Delete all duplicates from PropertyFinder?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/loops.html: placeholder literal -> Search by reference or title...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/loops.html: placeholder literal -> e.g., Morning Refresh Loop
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/loops.html: title literal -> Delete
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/loops.html: title literal -> Edit
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/loops.html: title literal -> Pause
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/loops.html: title literal -> Remove time
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/loops.html: title literal -> Resume
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/loops.html: title literal -> Run Now
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/loops.html: title literal -> Start
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/loops.html: title literal -> Stop
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/loops.html: title literal -> View Details
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/profile.html: placeholder literal -> Enter current password
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/profile.html: placeholder literal -> Enter new password (min. 6 characters)
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/settings.html: alert literal -> Sync failed:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/settings.html: placeholder literal -> Asia/Dubai
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/settings.html: placeholder literal -> agent@company.com
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/settings.html: placeholder literal -> owner@company.com
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/storage.html: confirm literal -> Delete all temporary files?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/storage.html: confirm literal -> Delete orphaned files not linked to any listing?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/storage.html: placeholder literal -> Search files...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/storage.html: title literal -> 'Linked to: ' + (file.linked_listing?.reference || '')
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/storage.html: title literal -> file.name
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/system_admin.html: alert literal -> Capabilities for
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/tasks.html: confirm literal -> Delete this board and all its tasks?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/tasks.html: confirm literal -> Delete this task?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/tasks.html: confirm literal -> Remove this member from the board?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/tasks.html: placeholder literal -> Add a comment...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/tasks.html: placeholder literal -> Add a description...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/tasks.html: placeholder literal -> Optional description
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/tasks.html: placeholder literal -> Task title
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/tasks.html: placeholder literal -> e.g., In Review
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/tasks.html: placeholder literal -> e.g., Marketing Tasks
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/tasks.html: title literal -> Board Members
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/tasks.html: title literal -> Board Settings
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/tasks.html: title literal -> assignee.name
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/users.html: alert literal -> Failed to create invite
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/users.html: alert literal -> Failed to generate reset link
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/users.html: alert literal -> Failed to remove workspace member
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/users.html: alert literal -> Failed to revoke invite
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/users.html: alert literal -> Failed to update workspace role
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/users.html: alert literal -> Workspace membership not found for this user.
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/users.html: confirm literal -> Revoke this invite?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/users.html: placeholder literal -> Full Name
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/users.html: placeholder literal -> Min. 6 characters
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/users.html: placeholder literal -> user@example.com
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/users.html: title literal -> Edit
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/users.html: title literal -> Generate reset link
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/users.html: title literal -> Remove from workspace
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspace_admin.html: alert literal -> Failed to create credential:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspace_admin.html: alert literal -> Failed to create invite:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspace_admin.html: alert literal -> Failed to regenerate secret:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspace_admin.html: alert literal -> Failed to revoke credential:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspace_admin.html: alert literal -> Failed to revoke invite:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspace_admin.html: alert literal -> Failed to save:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspace_admin.html: alert literal -> Failed to update role:
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspace_admin.html: alert literal -> Module permissions saved
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspace_admin.html: alert literal -> Role editing UI - coming soon
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspace_admin.html: alert literal -> Settings saved
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspace_admin.html: confirm literal -> Revoke this invite?
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspace_admin.html: placeholder literal -> CRM Integration
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspace_admin.html: placeholder literal -> user@example.com
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspaces.html: alert literal -> Failed to add member
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspaces.html: alert literal -> Failed to delete workspace
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspaces.html: alert literal -> Failed to remove member
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspaces.html: alert literal -> Failed to save workspace
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspaces.html: alert literal -> Failed to update role
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspaces.html: alert literal -> Name is required
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspaces.html: placeholder literal -> Optional description...
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspaces.html: placeholder literal -> e.g., PropertyFinder UAE
+/media/yazan/C2F4063BF40631E9/projects/L-manager/src/dashboard/templates/workspaces.html: title literal -> conn.provider_name

@@ -477,7 +477,7 @@
           },
           "assigned_to_id": {
             "type": "integer",
-            "description": "Optional workspace user id for internal assignee."
+            "description": "Optional workspace user id for internal assignee. If omitted, server attempts to infer assignee from assigned_agent email; if no match, normal fallback assignment is used."
           },
           "assignedTo": {
             "$ref": "#/components/schemas/OpenAssignedToAlias"

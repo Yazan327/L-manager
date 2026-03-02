@@ -214,20 +214,48 @@
             dir: {{ ui_dir|tojson|safe }},
             messages: {{ i18n.messages|tojson|safe if i18n is defined and i18n.messages is defined else '{}' }}
         };
-        window.I18N.t = function (key, fallback = '') {
+        window.I18N.t = function (key, fallback = '', vars = null) {
             const path = String(key || '').split('.');
             let node = window.I18N.messages || {};
             for (const part of path) {
                 if (!node || typeof node !== 'object' || !(part in node)) {
-                    return fallback || key;
+                    node = null;
+                    break;
                 }
                 node = node[part];
             }
-            return (typeof node === 'string') ? node : (fallback || key);
+            let text = (typeof node === 'string') ? node : (fallback || key);
+            if (vars && typeof vars === 'object') {
+                Object.entries(vars).forEach(([varKey, varValue]) => {
+                    const needle = `{${varKey}}`;
+                    text = String(text).split(needle).join(String(varValue ?? ''));
+                });
+            }
+            return text;
         };
-        window.i18nT = function (key, fallback = '') {
-            return window.I18N.t(key, fallback);
+        window.i18nT = function (key, fallback = '', vars = null) {
+            return window.I18N.t(key, fallback, vars);
         };
+
+        window.localizeRuntimeMessage = function (message) {
+            if (typeof message !== 'string' || !message) return message;
+            const legacy = (window.I18N.messages && window.I18N.messages.legacy_messages) || {};
+            const runtimePrefixes = (window.I18N.messages && window.I18N.messages.runtime_prefixes) || {};
+
+            const exact = legacy[message];
+            if (exact) {
+                if (typeof exact === 'string') return exact;
+                if (exact && typeof exact === 'object' && typeof exact.text === 'string') return exact.text;
+            }
+
+            for (const [prefix, localizedPrefix] of Object.entries(runtimePrefixes)) {
+                if (message.startsWith(prefix)) {
+                    return `${localizedPrefix}${message.slice(prefix.length)}`;
+                }
+            }
+            return message;
+        };
+
         window.formatLocalizedDate = function (value, options = {}) {
             if (!value) return '-';
             const parsed = new Date(value);
@@ -241,6 +269,21 @@
             const locale = window.I18N.lang === 'ar' ? 'ar-AE-u-nu-latn' : 'en-US';
             return new Intl.NumberFormat(locale, options).format(num);
         };
+        window.getLocalizedLocale = function () {
+            return window.I18N.lang === 'ar' ? 'ar-AE-u-nu-latn' : 'en-AE';
+        };
+
+        if (!window.__i18nWrappedAlerts) {
+            window.__i18nWrappedAlerts = true;
+            const originalAlert = window.alert.bind(window);
+            const originalConfirm = window.confirm.bind(window);
+            window.alert = function (message) {
+                return originalAlert(window.localizeRuntimeMessage(message));
+            };
+            window.confirm = function (message) {
+                return originalConfirm(window.localizeRuntimeMessage(message));
+            };
+        }
 
         document.querySelectorAll('[data-lang-toggle]').forEach((btn) => {
             btn.addEventListener('click', async () => {

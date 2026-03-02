@@ -2822,7 +2822,7 @@ function leadsManager() {
         
         formatDate(dateStr) {
             if (!dateStr) return '-';
-            return new Date(dateStr).toLocaleDateString('en-AE', { day: 'numeric', month: 'short', year: 'numeric' });
+            return new Date(dateStr).toLocaleDateString(window.getLocalizedLocale(), { day: 'numeric', month: 'short', year: 'numeric' });
         },
         
         formatDateShort(dateStr) {
@@ -2835,7 +2835,7 @@ function leadsManager() {
             if (diffDays === 1) return 'Yesterday';
             if (diffDays < 7) return diffDays + 'd ago';
             
-            return date.toLocaleDateString('en-AE', { day: 'numeric', month: 'short' });
+            return date.toLocaleDateString(window.getLocalizedLocale(), { day: 'numeric', month: 'short' });
         },
         
         isOverdue(dateStr) {
