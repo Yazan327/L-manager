@@ -2,7 +2,7 @@
 Database module
 """
 from .models import (
-    db, LocalListing, PFSession, User, PFCache, Lead, LeadReminder, LeadComment, Contact, Customer, AppSettings, ListingFolder,
+    db, LocalListing, PFSession, User, PFCache, Lead, LeadUserTag, LeadReminder, LeadComment, Contact, Customer, AppSettings, ListingFolder,
     LoopConfig, LoopListing, DuplicatedListing, LoopExecutionLog,
     TaskBoard, TaskLabel, Task, TaskComment, task_label_association,
     BoardMember, task_assignee_association, BOARD_PERMISSIONS,
@@ -12,7 +12,7 @@ from .models import (
 )
 
 __all__ = [
-    'db', 'LocalListing', 'PFSession', 'User', 'PFCache', 'Lead', 'LeadReminder', 'LeadComment', 'Contact', 'Customer', 'AppSettings', 'ListingFolder',
+    'db', 'LocalListing', 'PFSession', 'User', 'PFCache', 'Lead', 'LeadUserTag', 'LeadReminder', 'LeadComment', 'Contact', 'Customer', 'AppSettings', 'ListingFolder',
     'LoopConfig', 'LoopListing', 'DuplicatedListing', 'LoopExecutionLog',
     'TaskBoard', 'TaskLabel', 'Task', 'TaskComment', 'task_label_association',
     'BoardMember', 'task_assignee_association', 'BOARD_PERMISSIONS',

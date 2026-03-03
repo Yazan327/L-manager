@@ -124,8 +124,8 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
                 </svg>
             </button>
-            <button x-show="canManageSettings" @click="openSettingsModal()" 
-                    class="bg-gray-100 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-200" title="Configure Statuses & Sources">
+            <button x-show="canManageSettings || canManagePersonalTags" @click="openSettingsModal()"
+                    class="bg-gray-100 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-200" title="Configure lead settings">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
@@ -189,13 +189,43 @@
                         <option :value="source.id" x-text="source.label"></option>
                     </template>
                 </select>
-                <select multiple x-model="filters.tag_ids" @change="onFiltersChanged()"
-                        class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 min-w-[180px]"
-                        title="Filter by tags (match any selected)">
-                    <template x-for="tag in customTags" :key="tag.id">
-                        <option :value="tag.id" x-text="tag.label"></option>
-                    </template>
-                </select>
+                <div class="relative min-w-[220px]">
+                    <button type="button"
+                            @click="toggleTagPicker('filters')"
+                            class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 text-left bg-white flex items-center justify-between">
+                        <span class="text-sm" x-text="getTagPickerSummary('filters', 'All Tags')"></span>
+                        <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                        </svg>
+                    </button>
+                    <div x-show="tagPickerOpen.filters" x-cloak @click.outside="closeTagPicker('filters')"
+                         class="absolute z-20 mt-1 w-full bg-white border rounded-lg shadow-lg p-2 max-h-64 overflow-y-auto">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-xs text-gray-500">Filter by tags (match any)</span>
+                            <button type="button" class="text-xs text-blue-600 hover:underline"
+                                    @click="clearTags('filters'); onFiltersChanged()">Clear</button>
+                        </div>
+                        <template x-for="tag in customTags" :key="`filter-tag-${tag.id}`">
+                            <label class="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 cursor-pointer">
+                                <input type="checkbox"
+                                       class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                       :checked="isTagSelected('filters', tag.id)"
+                                       @change="toggleTag('filters', tag.id); onFiltersChanged()">
+                                <span class="text-sm" x-text="tag.label"></span>
+                            </label>
+                        </template>
+                        <div x-show="customTags.length === 0" class="text-xs text-gray-500 px-2 py-1">No tags configured</div>
+                    </div>
+                    <div x-show="getTagList('filters').length > 0" class="mt-1 flex flex-wrap gap-1">
+                        <template x-for="tagId in getTagList('filters')" :key="`filter-chip-${tagId}`">
+                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-xs">
+                                <span x-text="getTagLabel(tagId)"></span>
+                                <button type="button" class="hover:text-blue-900"
+                                        @click="removeTag('filters', tagId); onFiltersChanged()">&times;</button>
+                            </span>
+                        </template>
+                    </div>
+                </div>
                 <select x-show="(canManageLeads || canViewTeamLeads) && leadScope === 'team'" x-cloak x-model="selectedTeamMemberId" @change="onFiltersChanged()"
                         class="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
                     <option value="">All Team Members</option>
@@ -733,13 +763,42 @@
                         </div>
                         <div class="col-span-2">
                             <label class="block text-sm font-medium text-gray-700">Tags</label>
-                            <select multiple @change="newLead.tags = getSelectedValues($event.target)"
-                                    class="mt-1 w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 min-h-[88px]">
-                                <template x-for="tag in customTags" :key="`create-tag-${tag.id}`">
-                                    <option :value="tag.id" :selected="newLead.tags.includes(tag.id)" x-text="tag.label"></option>
+                            <div class="relative mt-1">
+                                <button type="button"
+                                        @click="toggleTagPicker('newLead')"
+                                        class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 text-left bg-white flex items-center justify-between">
+                                    <span class="text-sm" x-text="getTagPickerSummary('newLead', 'Select tags')"></span>
+                                    <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                    </svg>
+                                </button>
+                                <div x-show="tagPickerOpen.newLead" x-cloak @click.outside="closeTagPicker('newLead')"
+                                     class="absolute z-20 mt-1 w-full bg-white border rounded-lg shadow-lg p-2 max-h-64 overflow-y-auto">
+                                    <div class="flex items-center justify-between mb-2">
+                                        <span class="text-xs text-gray-500">Select lead tags</span>
+                                        <button type="button" class="text-xs text-blue-600 hover:underline"
+                                                @click="clearTags('newLead')">Clear</button>
+                                    </div>
+                                    <template x-for="tag in customTags" :key="`create-tag-${tag.id}`">
+                                        <label class="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 cursor-pointer">
+                                            <input type="checkbox"
+                                                   class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                                   :checked="isTagSelected('newLead', tag.id)"
+                                                   @change="toggleTag('newLead', tag.id)">
+                                            <span class="text-sm" x-text="tag.label"></span>
+                                        </label>
+                                    </template>
+                                    <div x-show="customTags.length === 0" class="text-xs text-gray-500 px-2 py-1">No tags configured</div>
+                                </div>
+                            </div>
+                            <div x-show="getTagList('newLead').length > 0" class="mt-2 flex flex-wrap gap-1">
+                                <template x-for="tagId in getTagList('newLead')" :key="`create-chip-${tagId}`">
+                                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-xs">
+                                        <span x-text="getTagLabel(tagId)"></span>
+                                        <button type="button" class="hover:text-blue-900" @click="removeTag('newLead', tagId)">&times;</button>
+                                    </span>
                                 </template>
-                            </select>
-                            <p class="text-xs text-gray-500 mt-1">Hold Ctrl/Cmd to select multiple tags.</p>
+                            </div>
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Assign To</label>
@@ -854,14 +913,43 @@
                     </div>
                     <div class="col-span-2">
                         <div class="text-sm text-gray-500">Tags</div>
-                        <select :value="(selectedLead?.tags || [])"
-                                @change="updateLeadField(selectedLead.id, 'tags', getSelectedValues($event.target))"
-                                multiple
-                                class="w-full px-2 py-1 border rounded text-sm font-medium min-h-[88px] mt-1">
-                            <template x-for="tag in customTags" :key="`view-tag-${tag.id}`">
-                                <option :value="tag.id" :selected="selectedLead?.tags?.includes(tag.id)" x-text="tag.label"></option>
+                        <div class="relative mt-1">
+                            <button type="button"
+                                    @click="toggleTagPicker('selectedLead')"
+                                    class="w-full px-2 py-1 border rounded text-sm font-medium bg-white flex items-center justify-between">
+                                <span x-text="getTagPickerSummary('selectedLead', 'Select tags')"></span>
+                                <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                </svg>
+                            </button>
+                            <div x-show="tagPickerOpen.selectedLead" x-cloak @click.outside="closeTagPicker('selectedLead')"
+                                 class="absolute z-20 mt-1 w-full bg-white border rounded-lg shadow-lg p-2 max-h-64 overflow-y-auto">
+                                <div class="flex items-center justify-between mb-2">
+                                    <span class="text-xs text-gray-500">Update tags</span>
+                                    <button type="button" class="text-xs text-blue-600 hover:underline"
+                                            @click="clearTags('selectedLead'); updateLeadField(selectedLead.id, 'tags', selectedLead.tags || [])">Clear</button>
+                                </div>
+                                <template x-for="tag in customTags" :key="`view-tag-${tag.id}`">
+                                    <label class="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 cursor-pointer">
+                                        <input type="checkbox"
+                                               class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                               :checked="isTagSelected('selectedLead', tag.id)"
+                                               @change="toggleTag('selectedLead', tag.id); updateLeadField(selectedLead.id, 'tags', selectedLead.tags || [])">
+                                        <span class="text-sm" x-text="tag.label"></span>
+                                    </label>
+                                </template>
+                                <div x-show="customTags.length === 0" class="text-xs text-gray-500 px-2 py-1">No tags configured</div>
+                            </div>
+                        </div>
+                        <div x-show="getTagList('selectedLead').length > 0" class="mt-2 flex flex-wrap gap-1">
+                            <template x-for="tagId in getTagList('selectedLead')" :key="`view-chip-${tagId}`">
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-xs">
+                                    <span x-text="getTagLabel(tagId)"></span>
+                                    <button type="button" class="hover:text-blue-900"
+                                            @click="removeTag('selectedLead', tagId); updateLeadField(selectedLead.id, 'tags', selectedLead.tags || [])">&times;</button>
+                                </span>
                             </template>
-                        </select>
+                        </div>
                     </div>
                     <div>
                         <div class="text-sm text-gray-500">PF Agent (PropertyFinder)</div>
@@ -1201,13 +1289,13 @@
                 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <!-- Statuses -->
-                    <div>
+                    <div x-show="canManageSettings" x-cloak>
                         <div class="flex items-center justify-between mb-3">
                             <h4 class="font-medium text-gray-900">Lead Statuses</h4>
                             <button @click="addStatus()" class="text-blue-600 hover:text-blue-800 text-sm">+ Add Status</button>
                         </div>
                         <div class="space-y-2">
-                            <template x-for="(status, index) in editStatuses" :key="index">
+                            <template x-for="status in editStatuses" :key="status.id">
                                 <div class="flex items-center gap-2">
                                     <select x-model="status.color" class="w-20 px-2 py-1.5 text-xs border rounded">
                                         <option value="blue">Blue</option>
@@ -1224,7 +1312,7 @@
                                     <input type="text" x-model="status.label"
                                            class="flex-1 px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500"
                                            placeholder="Enter status name">
-                                    <button @click="removeStatus(index)" :disabled="editStatuses.length <= 1"
+                                    <button @click="removeStatus(status.id)" :disabled="editStatuses.length <= 1"
                                             class="text-red-500 hover:text-red-700 disabled:opacity-30 disabled:cursor-not-allowed p-1">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -1236,13 +1324,13 @@
                     </div>
                     
                     <!-- Sources -->
-                    <div>
+                    <div x-show="canManageSettings" x-cloak>
                         <div class="flex items-center justify-between mb-3">
                             <h4 class="font-medium text-gray-900">Lead Sources</h4>
                             <button @click="addSource()" class="text-blue-600 hover:text-blue-800 text-sm">+ Add Source</button>
                         </div>
                         <div class="space-y-2">
-                            <template x-for="(source, index) in editSources" :key="index">
+                            <template x-for="source in editSources" :key="source.id">
                                 <div class="flex items-center gap-2">
                                     <select x-model="source.color" class="w-20 px-2 py-1.5 text-xs border rounded">
                                         <option value="blue">Blue</option>
@@ -1259,7 +1347,7 @@
                                     <input type="text" x-model="source.label"
                                            class="flex-1 px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500"
                                            placeholder="Enter source name">
-                                    <button @click="removeSource(index)" :disabled="editSources.length <= 1"
+                                    <button @click="removeSource(source.id)" :disabled="editSources.length <= 1"
                                             class="text-red-500 hover:text-red-700 disabled:opacity-30 disabled:cursor-not-allowed p-1">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -1271,13 +1359,14 @@
                     </div>
 
                     <!-- Tags -->
-                    <div>
+                    <div x-show="canManagePersonalTags" x-cloak>
                         <div class="flex items-center justify-between mb-3">
-                            <h4 class="font-medium text-gray-900">Lead Tags</h4>
+                            <h4 class="font-medium text-gray-900">My Lead Tags</h4>
                             <button @click="addTag()" class="text-blue-600 hover:text-blue-800 text-sm">+ Add Tag</button>
                         </div>
+                        <p class="text-xs text-gray-500 mb-2">Tags are private to your account in this workspace.</p>
                         <div class="space-y-2">
-                            <template x-for="(tag, index) in editTags" :key="index">
+                            <template x-for="tag in editTags" :key="tag.id">
                                 <div class="flex items-center gap-2">
                                     <select x-model="tag.color" class="w-20 px-2 py-1.5 text-xs border rounded">
                                         <option value="blue">Blue</option>
@@ -1294,7 +1383,7 @@
                                     <input type="text" x-model="tag.label"
                                            class="flex-1 px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500"
                                            placeholder="Enter tag name">
-                                    <button @click="removeTag(index)"
+                                    <button @click="removeConfigTag(tag.id)"
                                             class="text-red-500 hover:text-red-700 p-1">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -1310,7 +1399,7 @@
                 <div class="mt-6 flex justify-end gap-3">
                     <button type="button" @click="showSettingsModal = false"
                             class="px-4 py-2 border rounded-lg hover:bg-gray-50">Cancel</button>
-                    <button x-show="canManageSettings" @click="saveConfig()" :disabled="savingConfig"
+                    <button x-show="canManageSettings || canManagePersonalTags" @click="saveConfig()" :disabled="savingConfig"
                             class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
                         <span x-text="savingConfig ? 'Saving...' : 'Save Settings'"></span>
                     </button>
@@ -1379,12 +1468,42 @@
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Tags</label>
-                        <select multiple @change="bulkUpdate.tags = getSelectedValues($event.target)"
-                                class="w-full px-3 py-2 border rounded-lg min-h-[84px]">
-                            <template x-for="tag in customTags" :key="`bulk-tag-${tag.id}`">
-                                <option :value="tag.id" :selected="bulkUpdate.tags.includes(tag.id)" x-text="tag.label"></option>
+                        <div class="relative">
+                            <button type="button"
+                                    @click="toggleTagPicker('bulkUpdate')"
+                                    class="w-full px-3 py-2 border rounded-lg text-left bg-white flex items-center justify-between">
+                                <span class="text-sm" x-text="getTagPickerSummary('bulkUpdate', 'Select tags')"></span>
+                                <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                </svg>
+                            </button>
+                            <div x-show="tagPickerOpen.bulkUpdate" x-cloak @click.outside="closeTagPicker('bulkUpdate')"
+                                 class="absolute z-20 mt-1 w-full bg-white border rounded-lg shadow-lg p-2 max-h-64 overflow-y-auto">
+                                <div class="flex items-center justify-between mb-2">
+                                    <span class="text-xs text-gray-500">Bulk tag update</span>
+                                    <button type="button" class="text-xs text-blue-600 hover:underline"
+                                            @click="clearTags('bulkUpdate')">Clear</button>
+                                </div>
+                                <template x-for="tag in customTags" :key="`bulk-tag-${tag.id}`">
+                                    <label class="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 cursor-pointer">
+                                        <input type="checkbox"
+                                               class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                               :checked="isTagSelected('bulkUpdate', tag.id)"
+                                               @change="toggleTag('bulkUpdate', tag.id)">
+                                        <span class="text-sm" x-text="tag.label"></span>
+                                    </label>
+                                </template>
+                                <div x-show="customTags.length === 0" class="text-xs text-gray-500 px-2 py-1">No tags configured</div>
+                            </div>
+                        </div>
+                        <div x-show="getTagList('bulkUpdate').length > 0" class="mt-2 flex flex-wrap gap-1">
+                            <template x-for="tagId in getTagList('bulkUpdate')" :key="`bulk-chip-${tagId}`">
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-xs">
+                                    <span x-text="getTagLabel(tagId)"></span>
+                                    <button type="button" class="hover:text-blue-900" @click="removeTag('bulkUpdate', tagId)">&times;</button>
+                                </span>
                             </template>
-                        </select>
+                        </div>
                     </div>
                 </div>
                 
@@ -1538,6 +1657,7 @@ function leadsManager() {
         currentUserId: {{ current_user.id if current_user.is_authenticated else 'null' }},
         canViewTeamLeads: false,
         canManageSettings: false,
+        canManagePersonalTags: false,
         leadScope: 'my',
         selectedTeamMemberId: '',
         syncing: false,
@@ -1644,6 +1764,12 @@ function leadsManager() {
             task_board_id: '',
             task_column_id: ''
         },
+        tagPickerOpen: {
+            filters: false,
+            newLead: false,
+            selectedLead: false,
+            bulkUpdate: false
+        },
         
         // Drag and drop for Kanban (leads)
         draggingLeadId: null,
@@ -1716,8 +1842,91 @@ function leadsManager() {
             return `${this.buildWorkspacePath('/tasks')}?${params.toString()}`;
         },
 
-        getSelectedValues(selectEl) {
-            return Array.from(selectEl?.selectedOptions || []).map(opt => opt.value).filter(Boolean);
+        closeAllTagPickers(exceptKey = null) {
+            Object.keys(this.tagPickerOpen).forEach(key => {
+                if (key !== exceptKey) this.tagPickerOpen[key] = false;
+            });
+        },
+
+        toggleTagPicker(refName) {
+            const key = String(refName || '');
+            if (!Object.prototype.hasOwnProperty.call(this.tagPickerOpen, key)) return;
+            const nextState = !this.tagPickerOpen[key];
+            this.closeAllTagPickers(nextState ? key : null);
+            this.tagPickerOpen[key] = nextState;
+        },
+
+        closeTagPicker(refName) {
+            const key = String(refName || '');
+            if (Object.prototype.hasOwnProperty.call(this.tagPickerOpen, key)) {
+                this.tagPickerOpen[key] = false;
+            }
+        },
+
+        getTagList(refName) {
+            const key = String(refName || '');
+            if (key === 'filters') return this.normalizeLeadTags(this.filters.tag_ids || []);
+            if (key === 'newLead') return this.normalizeLeadTags(this.newLead.tags || []);
+            if (key === 'selectedLead') return this.normalizeLeadTags((this.selectedLead && this.selectedLead.tags) || []);
+            if (key === 'bulkUpdate') return this.normalizeLeadTags(this.bulkUpdate.tags || []);
+            return [];
+        },
+
+        setTagList(refName, tags) {
+            const normalized = this.normalizeLeadTags(tags || []);
+            const key = String(refName || '');
+            if (key === 'filters') {
+                this.filters.tag_ids = normalized;
+                return;
+            }
+            if (key === 'newLead') {
+                this.newLead.tags = normalized;
+                return;
+            }
+            if (key === 'selectedLead' && this.selectedLead) {
+                this.selectedLead.tags = normalized;
+                return;
+            }
+            if (key === 'bulkUpdate') {
+                this.bulkUpdate.tags = normalized;
+            }
+        },
+
+        isTagSelected(refName, tagId) {
+            const tag = String(tagId || '').trim().toLowerCase();
+            if (!tag) return false;
+            return this.getTagList(refName).includes(tag);
+        },
+
+        toggleTag(refName, tagId) {
+            const tag = String(tagId || '').trim().toLowerCase();
+            if (!tag) return;
+            const values = this.getTagList(refName);
+            const idx = values.indexOf(tag);
+            if (idx >= 0) {
+                values.splice(idx, 1);
+            } else {
+                values.push(tag);
+            }
+            this.setTagList(refName, values);
+        },
+
+        removeTag(refName, tagId) {
+            const tag = String(tagId || '').trim().toLowerCase();
+            if (!tag) return;
+            const values = this.getTagList(refName).filter(item => item !== tag);
+            this.setTagList(refName, values);
+        },
+
+        clearTags(refName) {
+            this.setTagList(refName, []);
+        },
+
+        getTagPickerSummary(refName, emptyLabel = 'Select tags') {
+            const values = this.getTagList(refName);
+            if (!values.length) return emptyLabel;
+            if (values.length === 1) return this.getTagLabel(values[0]);
+            return `${values.length} tags selected`;
         },
 
         normalizeLeadTags(raw) {
@@ -1968,6 +2177,7 @@ function leadsManager() {
                 this.teamMembers = data.team_members || [];
                 this.canViewTeamLeads = !!data.can_view_team_leads;
                 this.canManageSettings = !!data.can_manage_settings;
+                this.canManagePersonalTags = !!data.can_manage_personal_tags;
                 if (!(this.canManageLeads || this.canViewTeamLeads)) {
                     this.leadScope = 'my';
                 }
@@ -2982,42 +3192,76 @@ function leadsManager() {
         },
         
         openSettingsModal() {
-            this.editStatuses = JSON.parse(JSON.stringify(this.customStatuses));
-            this.editSources = JSON.parse(JSON.stringify(this.customSources));
-            this.editTags = JSON.parse(JSON.stringify(this.customTags));
+            this.editStatuses = this.normalizeConfigEditorItems(this.customStatuses, 'status');
+            this.editSources = this.normalizeConfigEditorItems(this.customSources, 'source');
+            this.editTags = this.normalizeConfigEditorItems(this.customTags, 'tag');
             this.showSettingsModal = true;
+        },
+
+        generateConfigItemId(prefix) {
+            const base = String(prefix || 'item').trim().toLowerCase();
+            return `${base}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+        },
+
+        normalizeConfigEditorItems(items, prefix) {
+            const source = Array.isArray(items) ? items : [];
+            const usedIds = new Set();
+            const normalized = [];
+            source.forEach((raw, index) => {
+                const item = raw && typeof raw === 'object' ? raw : {};
+                let id = String(item.id || '').trim().toLowerCase();
+                if (!id || usedIds.has(id)) {
+                    id = `${prefix}_${Date.now()}_${index}`;
+                }
+                usedIds.add(id);
+                normalized.push({
+                    id,
+                    label: String(item.label || '').trim(),
+                    color: String(item.color || 'gray').trim().toLowerCase() || 'gray'
+                });
+            });
+            return normalized;
+        },
+
+        sanitizeConfigEditorItems(items, prefix) {
+            const normalized = this.normalizeConfigEditorItems(items, prefix);
+            return normalized
+                .map(item => ({
+                    ...item,
+                    label: String(item.label || '').trim()
+                }))
+                .filter(item => item.label.length > 0);
         },
         
         addStatus() {
-            const id = 'status_' + Date.now();
+            const id = this.generateConfigItemId('status');
             this.editStatuses.push({ id, label: '', color: 'gray' });
         },
         
-        removeStatus(index) {
+        removeStatus(statusId) {
             if (this.editStatuses.length > 1) {
-                this.editStatuses.splice(index, 1);
+                this.editStatuses = this.editStatuses.filter(status => status.id !== statusId);
             }
         },
         
         addSource() {
-            // Generate a temporary ID - will be updated when user types the label
-            const id = 'source_' + Date.now();
+            const id = this.generateConfigItemId('source');
             this.editSources.push({ id, label: '', color: 'gray' });
         },
         
-        removeSource(index) {
+        removeSource(sourceId) {
             if (this.editSources.length > 1) {
-                this.editSources.splice(index, 1);
+                this.editSources = this.editSources.filter(source => source.id !== sourceId);
             }
         },
 
         addTag() {
-            const id = 'tag_' + Date.now();
+            const id = this.generateConfigItemId('tag');
             this.editTags.push({ id, label: '', color: 'gray' });
         },
 
-        removeTag(index) {
-            this.editTags.splice(index, 1);
+        removeConfigTag(tagId) {
+            this.editTags = this.editTags.filter(tag => tag.id !== tagId);
         },
         
         toggleCardField(fieldId) {
@@ -3041,20 +3285,39 @@ function leadsManager() {
         async saveConfig() {
             this.savingConfig = true;
             try {
+                const payload = {};
+                if (this.canManageSettings) {
+                    const statuses = this.sanitizeConfigEditorItems(this.editStatuses, 'status');
+                    const sources = this.sanitizeConfigEditorItems(this.editSources, 'source');
+                    if (!statuses.length) {
+                        alert('At least one status is required');
+                        this.savingConfig = false;
+                        return;
+                    }
+                    if (!sources.length) {
+                        alert('At least one source is required');
+                        this.savingConfig = false;
+                        return;
+                    }
+                    payload.statuses = statuses;
+                    payload.sources = sources;
+                }
+                if (this.canManagePersonalTags) {
+                    payload.tags = this.sanitizeConfigEditorItems(this.editTags, 'tag');
+                }
+                if (!Object.keys(payload).length) {
+                    this.savingConfig = false;
+                    return;
+                }
+
                 const resp = await fetch('/api/leads/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        statuses: this.editStatuses,
-                        sources: this.editSources,
-                        tags: this.editTags
-                    })
+                    body: JSON.stringify(payload)
                 });
                 const data = await resp.json();
                 if (data.success) {
-                    this.customStatuses = [...this.editStatuses];
-                    this.customSources = [...this.editSources];
-                    this.customTags = [...this.editTags];
+                    await this.loadConfig();
                     this.showSettingsModal = false;
                     this.filterLeads();
                 } else {

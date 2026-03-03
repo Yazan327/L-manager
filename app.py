@@ -33,7 +33,7 @@ from utils import BulkListingManager
 from database import (
     db, LocalListing, PFSession, User, PFCache, AppSettings, ListingFolder, 
     LoopConfig, LoopListing, DuplicatedListing, LoopExecutionLog, 
-    Lead, LeadReminder, LeadComment, Contact, Customer,
+    Lead, LeadUserTag, LeadReminder, LeadComment, Contact, Customer,
     TaskBoard, TaskLabel, Task, TaskComment, BoardMember, BOARD_PERMISSIONS, task_assignee_association,
     Workspace, WorkspaceMember, WorkspaceConnection, WorkspaceApiCredential, WorkspaceInvite, PasswordResetToken,
     WorkspaceUserPermissionOverride,
@@ -315,6 +315,105 @@ with app.app_context():
                     conn.commit()
         except Exception as e:
             print(f"[MIGRATION] lead_reminders table migration skipped or failed: {e}")
+
+        # Migration: Create lead_user_tags table + backfill from legacy shared lead tags
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name='lead_user_tags'"))
+                if not result.fetchone():
+                    print("[MIGRATION] Creating lead_user_tags table...")
+                    conn.execute(text("""
+                        CREATE TABLE lead_user_tags (
+                            id SERIAL PRIMARY KEY,
+                            workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                            lead_id INTEGER NOT NULL REFERENCES crm_leads(id) ON DELETE CASCADE,
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            tags TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            CONSTRAINT uq_lead_user_tags_scope UNIQUE (workspace_id, lead_id, user_id)
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX idx_lead_user_tags_workspace_user ON lead_user_tags(workspace_id, user_id)"))
+                    conn.execute(text("CREATE INDEX idx_lead_user_tags_workspace_lead ON lead_user_tags(workspace_id, lead_id)"))
+                    conn.execute(text("CREATE INDEX idx_lead_user_tags_workspace_user_tags ON lead_user_tags(workspace_id, user_id, tags)"))
+                    conn.commit()
+                    print("[MIGRATION] lead_user_tags table created successfully")
+                else:
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_lead_user_tags_workspace_user ON lead_user_tags(workspace_id, user_id)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_lead_user_tags_workspace_lead ON lead_user_tags(workspace_id, lead_id)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_lead_user_tags_workspace_user_tags ON lead_user_tags(workspace_id, user_id, tags)"))
+                    conn.execute(text("""
+                        DO $$
+                        BEGIN
+                            IF NOT EXISTS (
+                                SELECT 1
+                                FROM pg_constraint
+                                WHERE conname = 'uq_lead_user_tags_scope'
+                            ) THEN
+                                ALTER TABLE lead_user_tags
+                                ADD CONSTRAINT uq_lead_user_tags_scope UNIQUE (workspace_id, lead_id, user_id);
+                            END IF;
+                        END $$;
+                    """))
+                    conn.commit()
+
+                # One-time backfill: migrate legacy crm_leads.tags to assigned users.
+                conn.execute(text("""
+                    INSERT INTO lead_user_tags (workspace_id, lead_id, user_id, tags, created_at, updated_at)
+                    SELECT
+                        l.workspace_id,
+                        l.id,
+                        l.assigned_to_id,
+                        l.tags,
+                        COALESCE(l.created_at, CURRENT_TIMESTAMP),
+                        CURRENT_TIMESTAMP
+                    FROM crm_leads l
+                    JOIN workspace_members wm
+                      ON wm.workspace_id = l.workspace_id
+                     AND wm.user_id = l.assigned_to_id
+                    JOIN users u
+                      ON u.id = l.assigned_to_id
+                    WHERE l.assigned_to_id IS NOT NULL
+                      AND l.tags IS NOT NULL
+                      AND BTRIM(l.tags) <> ''
+                      AND COALESCE(u.is_active, TRUE) = TRUE
+                    ON CONFLICT (workspace_id, lead_id, user_id) DO NOTHING
+                """))
+
+                # One-time backfill: copy shared workspace lead_tags catalog to per-user keys if missing.
+                shared_rows = conn.execute(text("""
+                    SELECT workspace_id, value
+                    FROM app_settings
+                    WHERE key = 'lead_tags'
+                      AND workspace_id IS NOT NULL
+                """)).fetchall()
+
+                for shared_row in shared_rows:
+                    ws_id = shared_row.workspace_id
+                    shared_value = shared_row.value or '[]'
+                    member_rows = conn.execute(text("""
+                        SELECT wm.user_id
+                        FROM workspace_members wm
+                        JOIN users u ON u.id = wm.user_id
+                        WHERE wm.workspace_id = :workspace_id
+                          AND COALESCE(u.is_active, TRUE) = TRUE
+                    """), {'workspace_id': ws_id}).fetchall()
+
+                    for member_row in member_rows:
+                        per_user_key = f"lead_tags:user:{member_row.user_id}"
+                        conn.execute(text("""
+                            INSERT INTO app_settings (workspace_id, key, value, updated_at)
+                            VALUES (:workspace_id, :key, :value, CURRENT_TIMESTAMP)
+                            ON CONFLICT (workspace_id, key) DO NOTHING
+                        """), {
+                            'workspace_id': ws_id,
+                            'key': per_user_key,
+                            'value': shared_value,
+                        })
+                conn.commit()
+        except Exception as e:
+            print(f"[MIGRATION] lead_user_tags migration/backfill skipped or failed: {e}")
         
         # Migration: Add contacts table columns if missing
         try:
@@ -3187,8 +3286,8 @@ def resolve_leads_scope_request(workspace_id=None, user=None):
 
     tag_ids = _parse_tag_ids_query_param()
     if tag_ids:
-        # Validate against workspace catalog to avoid unknown/typo tags.
-        _validate_lead_tags(ws_id, tag_ids)
+        # Validate against current user's private catalog.
+        _validate_user_lead_tags(ws_id, user.id, tag_ids)
 
     return {
         'requested_scope': requested_scope,
@@ -3224,13 +3323,20 @@ def scoped_leads_query(workspace_id=None, user=None):
         for tag_id in scope_meta['tag_ids']:
             tag_clauses.append(
                 db.or_(
-                    Lead.tags == tag_id,
-                    Lead.tags.like(f'{tag_id},%'),
-                    Lead.tags.like(f'%,{tag_id},%'),
-                    Lead.tags.like(f'%,{tag_id}')
+                    LeadUserTag.tags == tag_id,
+                    LeadUserTag.tags.like(f'{tag_id},%'),
+                    LeadUserTag.tags.like(f'%,{tag_id},%'),
+                    LeadUserTag.tags.like(f'%,{tag_id}')
                 )
             )
-        query = query.filter(db.or_(*tag_clauses))
+        query = query.join(
+            LeadUserTag,
+            db.and_(
+                LeadUserTag.workspace_id == ws_id,
+                LeadUserTag.lead_id == Lead.id,
+                LeadUserTag.user_id == user.id
+            )
+        ).filter(db.or_(*tag_clauses))
 
     return query, scope_meta
 
@@ -10646,23 +10752,97 @@ def _normalize_lead_tags(items, *, strict=False, require_non_empty=False):
     )
 
 
-def _load_workspace_lead_tags(workspace_id):
-    raw = AppSettings.get('lead_tags', workspace_id=workspace_id)
+def _lead_tags_setting_key(user_id):
+    return f"lead_tags:user:{int(user_id)}"
+
+
+def _load_user_lead_tags(workspace_id, user_id):
+    raw = AppSettings.get(_lead_tags_setting_key(user_id), workspace_id=workspace_id)
+    if raw is None:
+        # Legacy fallback for workspaces not migrated yet.
+        raw = AppSettings.get('lead_tags', workspace_id=workspace_id)
     try:
         parsed = json.loads(raw) if raw else []
     except Exception:
         parsed = []
     normalized = _normalize_lead_tags(parsed)
     if normalized != parsed:
-        AppSettings.set('lead_tags', json.dumps(normalized), workspace_id=workspace_id)
+        AppSettings.set(_lead_tags_setting_key(user_id), json.dumps(normalized), workspace_id=workspace_id)
     return normalized
 
 
-def _validate_lead_tags(workspace_id, tag_ids):
+def _save_user_lead_tags(workspace_id, user_id, tags):
+    normalized = _normalize_lead_tags(tags, strict=True, require_non_empty=False)
+    _set_app_setting_no_commit(_lead_tags_setting_key(user_id), json.dumps(normalized), workspace_id)
+    return normalized
+
+
+def _normalize_tag_id_list(tag_ids):
+    normalized = []
+    for raw in (tag_ids or []):
+        tag = _slugify_lead_config_id(raw)
+        if tag and tag not in normalized:
+            normalized.append(tag)
+    return normalized
+
+
+def _get_lead_user_tag_row(workspace_id, lead_id, user_id):
+    return LeadUserTag.query.filter_by(
+        workspace_id=workspace_id,
+        lead_id=lead_id,
+        user_id=user_id
+    ).first()
+
+
+def _get_lead_tags_for_user(workspace_id, lead_id, user_id):
+    row = _get_lead_user_tag_row(workspace_id, lead_id, user_id)
+    return row.get_tags() if row else []
+
+
+def _set_lead_tags_for_user(workspace_id, lead_id, user_id, tag_ids):
+    normalized = _normalize_tag_id_list(tag_ids)
+    row = _get_lead_user_tag_row(workspace_id, lead_id, user_id)
+    if not normalized:
+        if row:
+            db.session.delete(row)
+        return []
+
+    if not row:
+        row = LeadUserTag(
+            workspace_id=workspace_id,
+            lead_id=lead_id,
+            user_id=user_id,
+        )
+        db.session.add(row)
+    row.set_tags(normalized)
+    return normalized
+
+
+def _bulk_get_lead_tags_for_user(workspace_id, user_id, lead_ids):
+    ids = []
+    for raw in (lead_ids or []):
+        try:
+            lead_id = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if lead_id not in ids:
+            ids.append(lead_id)
+    if not ids:
+        return {}
+
+    rows = LeadUserTag.query.filter(
+        LeadUserTag.workspace_id == workspace_id,
+        LeadUserTag.user_id == user_id,
+        LeadUserTag.lead_id.in_(ids)
+    ).all()
+    return {row.lead_id: row.get_tags() for row in rows}
+
+
+def _validate_user_lead_tags(workspace_id, user_id, tag_ids):
     if not tag_ids:
         return []
 
-    catalog = _load_workspace_lead_tags(workspace_id)
+    catalog = _load_user_lead_tags(workspace_id, user_id)
     allowed = {item['id'] for item in catalog}
     normalized = []
     for raw in tag_ids:
@@ -10932,11 +11112,18 @@ def can_view_full_lead_contact(user, workspace_id, lead):
     return False
 
 
-def serialize_lead_for_response(lead, workspace_id=None, user=None):
+def serialize_lead_for_response(lead, workspace_id=None, user=None, lead_tags_map=None):
     """Serialize lead with contact visibility policy."""
     ws_id = workspace_id or get_active_workspace_id()
     user = user or getattr(g, 'user', None)
     data = lead.to_dict()
+    if user and ws_id:
+        if isinstance(lead_tags_map, dict):
+            data['tags'] = lead_tags_map.get(lead.id, [])
+        else:
+            data['tags'] = _get_lead_tags_for_user(ws_id, lead.id, user.id)
+    else:
+        data['tags'] = []
 
     if can_view_full_lead_contact(user, ws_id, lead):
         data['contact_visibility'] = 'full'
@@ -10995,7 +11182,7 @@ def api_get_leads_config():
 
     statuses = _normalize_lead_statuses(statuses_parsed)
     sources = _normalize_lead_sources(sources_parsed)
-    tags = _load_workspace_lead_tags(ws_id)
+    tags = _load_user_lead_tags(ws_id, g.user.id)
 
     if statuses != statuses_parsed:
         AppSettings.set('lead_statuses', json.dumps(statuses), workspace_id=ws_id)
@@ -11030,6 +11217,7 @@ def api_get_leads_config():
         'tags': tags,
         'team_members': team_members,
         'can_manage_settings': can_manage_settings,
+        'can_manage_personal_tags': True,
         'can_view_team_leads': can_view_team_leads,
     })
 
@@ -11037,21 +11225,25 @@ def api_get_leads_config():
 @app.route('/api/leads/config', methods=['POST'])
 @login_required
 @require_active_workspace
-@require_workspace_leads_admin
 def api_update_leads_config():
-    """Update lead configuration (statuses, sources)"""
+    """Update lead configuration (workspace statuses/sources + personal tags)."""
     ws_id = get_active_workspace_id()
+    can_manage_settings = workspace_user_can_manage_all_leads(workspace_id=ws_id)
     data = request.get_json() or {}
     updates = {}
 
     try:
         if 'statuses' in data:
+            if not can_manage_settings:
+                return jsonify({'success': False, 'error': 'Only workspace admins can update lead statuses'}), 403
             if not isinstance(data.get('statuses'), list):
                 return jsonify({'success': False, 'error': 'statuses must be a list'}), 400
             statuses = _normalize_lead_statuses(data.get('statuses'), strict=True)
             updates['lead_statuses'] = json.dumps(statuses)
 
         if 'sources' in data:
+            if not can_manage_settings:
+                return jsonify({'success': False, 'error': 'Only workspace admins can update lead sources'}), 403
             if not isinstance(data.get('sources'), list):
                 return jsonify({'success': False, 'error': 'sources must be a list'}), 400
             sources = _normalize_lead_sources(data.get('sources'), strict=True)
@@ -11061,7 +11253,7 @@ def api_update_leads_config():
             if not isinstance(data.get('tags'), list):
                 return jsonify({'success': False, 'error': 'tags must be a list'}), 400
             tags = _normalize_lead_tags(data.get('tags'), strict=True, require_non_empty=False)
-            updates['lead_tags'] = json.dumps(tags)
+            updates[_lead_tags_setting_key(g.user.id)] = json.dumps(tags)
     except ValueError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
 
@@ -11308,10 +11500,18 @@ def api_get_leads():
     query = query.options(joinedload(Lead.assigned_to))
     leads = query.offset((page - 1) * per_page).limit(per_page).all()
     capped = bool(view_mode == 'kanban' and total > per_page)
+    user_tags_map = _bulk_get_lead_tags_for_user(ws_id, g.user.id, [lead.id for lead in leads])
 
     return jsonify({
         'success': True,
-        'leads': [serialize_lead_for_response(l, workspace_id=ws_id, user=g.user) for l in leads],
+        'leads': [
+            serialize_lead_for_response(
+                l,
+                workspace_id=ws_id,
+                user=g.user,
+                lead_tags_map=user_tags_map
+            ) for l in leads
+        ],
         'meta': {
             'requested_scope': scope_meta['requested_scope'],
             'effective_scope': scope_meta['effective_scope'],
@@ -11369,20 +11569,23 @@ def api_create_lead():
         assigned_to_id=assigned_to_id
     )
 
+    validated_tags = None
     if 'tags' in data:
         if not isinstance(data.get('tags'), list):
             return jsonify({'success': False, 'error': 'tags must be a list'}), 400
         try:
-            validated_tags = _validate_lead_tags(ws_id, data.get('tags') or [])
+            validated_tags = _validate_user_lead_tags(ws_id, g.user.id, data.get('tags') or [])
         except ValueError as exc:
             return jsonify({'success': False, 'error': str(exc)}), 400
-        lead.set_tags(validated_tags)
     
     # Set lead_type if the column exists
     if hasattr(Lead, 'lead_type'):
         lead.lead_type = data.get('lead_type', 'for_sale')
     
     db.session.add(lead)
+    db.session.flush()
+    if validated_tags is not None:
+        _set_lead_tags_for_user(ws_id, lead.id, g.user.id, validated_tags)
     db.session.commit()
     
     return jsonify({'success': True, 'lead': serialize_lead_for_response(lead, workspace_id=ws_id, user=g.user)})
@@ -11433,10 +11636,10 @@ def api_update_lead(lead_id):
         if not isinstance(data.get('tags'), list):
             return jsonify({'success': False, 'error': 'tags must be a list'}), 400
         try:
-            validated_tags = _validate_lead_tags(ws_id, data.get('tags') or [])
+            validated_tags = _validate_user_lead_tags(ws_id, g.user.id, data.get('tags') or [])
         except ValueError as exc:
             return jsonify({'success': False, 'error': str(exc)}), 400
-        lead.set_tags(validated_tags)
+        _set_lead_tags_for_user(ws_id, lead.id, g.user.id, validated_tags)
     
     if 'status' in data and data['status'] == 'contacted':
         lead.last_contact = datetime.utcnow()
@@ -11806,7 +12009,7 @@ def api_bulk_update_leads():
         if tags_mode not in ('replace', 'add', 'remove'):
             return jsonify({'success': False, 'error': 'tags_mode must be one of replace, add, remove'}), 400
         try:
-            tag_update_list = _validate_lead_tags(ws_id, data.get('tags') or [])
+            tag_update_list = _validate_user_lead_tags(ws_id, g.user.id, data.get('tags') or [])
         except ValueError as exc:
             return jsonify({'success': False, 'error': str(exc)}), 400
 
@@ -11815,21 +12018,29 @@ def api_bulk_update_leads():
     
     updated = 0
     visible_leads = visible_lead_query(ws_id, access='write').filter(Lead.id.in_(lead_ids)).all()
+    user_tag_map = {}
+    if tag_update_list is not None:
+        user_tag_map = _bulk_get_lead_tags_for_user(ws_id, g.user.id, [lead.id for lead in visible_leads])
     for lead in visible_leads:
         for field, value in updates.items():
             setattr(lead, field, value)
         if tag_update_list is not None:
-            current_tags = lead.get_tags()
+            current_tags = user_tag_map.get(lead.id, [])
             if tags_mode == 'replace':
-                lead.set_tags(tag_update_list)
+                _set_lead_tags_for_user(ws_id, lead.id, g.user.id, tag_update_list)
             elif tags_mode == 'add':
                 merged = current_tags[:]
                 for tag_id in tag_update_list:
                     if tag_id not in merged:
                         merged.append(tag_id)
-                lead.set_tags(merged)
+                _set_lead_tags_for_user(ws_id, lead.id, g.user.id, merged)
             elif tags_mode == 'remove':
-                lead.set_tags([tag_id for tag_id in current_tags if tag_id not in tag_update_list])
+                _set_lead_tags_for_user(
+                    ws_id,
+                    lead.id,
+                    g.user.id,
+                    [tag_id for tag_id in current_tags if tag_id not in tag_update_list]
+                )
         updated += 1
     
     db.session.commit()

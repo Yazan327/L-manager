@@ -2295,6 +2295,50 @@ class Lead(db.Model):
         self.tags = ','.join(normalized) if normalized else None
 
 
+class LeadUserTag(db.Model):
+    """Per-user lead tags (workspace scoped)."""
+    __tablename__ = 'lead_user_tags'
+    __table_args__ = (
+        db.UniqueConstraint('workspace_id', 'lead_id', 'user_id', name='uq_lead_user_tags_scope'),
+        db.Index('idx_lead_user_tags_workspace_user', 'workspace_id', 'user_id'),
+        db.Index('idx_lead_user_tags_workspace_lead', 'workspace_id', 'lead_id'),
+        db.Index('idx_lead_user_tags_workspace_user_tags', 'workspace_id', 'user_id', 'tags'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=False, index=True)
+    lead_id = db.Column(db.Integer, db.ForeignKey('crm_leads.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    tags = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    workspace = db.relationship('Workspace', foreign_keys=[workspace_id])
+    lead = db.relationship('Lead', foreign_keys=[lead_id])
+    user = db.relationship('User', foreign_keys=[user_id])
+
+    def get_tags(self):
+        if not self.tags:
+            return []
+        values = []
+        for raw in str(self.tags).split(','):
+            tag = str(raw or '').strip().lower()
+            if tag and tag not in values:
+                values.append(tag)
+        return values
+
+    def set_tags(self, tag_ids):
+        if not tag_ids:
+            self.tags = None
+            return
+        normalized = []
+        for raw in tag_ids:
+            tag = str(raw or '').strip().lower()
+            if tag and tag not in normalized:
+                normalized.append(tag)
+        self.tags = ','.join(normalized) if normalized else None
+
+
 class LeadReminder(db.Model):
     """Lead reminder records for events/meetings/actions."""
     __tablename__ = 'lead_reminders'
