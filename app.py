@@ -2940,6 +2940,45 @@ def get_direct_team_member_ids(workspace_id, leader_user_id):
     return {row[0] for row in rows if row and row[0] and row[0] != leader_user_id}
 
 
+def get_readable_user_ids_for_insights(user=None, workspace_id=None):
+    """Insights visibility policy: admin=workspace, team_leader=team, others=own."""
+    user = user or getattr(g, 'user', None)
+    if not user:
+        return set()
+    ws_id = workspace_id or get_active_workspace_id()
+    if not ws_id:
+        return set()
+    if is_system_admin(user):
+        return _get_workspace_member_user_ids(ws_id)
+
+    member = WorkspaceMember.query.filter_by(workspace_id=ws_id, user_id=user.id).first()
+    if not member:
+        return set()
+
+    role = (member.role or '').strip().lower()
+    if role in ('owner', 'admin'):
+        return _get_workspace_member_user_ids(ws_id)
+    if role == 'team_leader':
+        visible_ids = {user.id}
+        visible_ids.update(get_direct_team_member_ids(ws_id, user.id))
+        return visible_ids
+    return {user.id}
+
+
+def can_view_workspace_wide_insights(user=None, workspace_id=None):
+    """Whether user can view workspace-wide insights (owner/admin/system)."""
+    user = user or getattr(g, 'user', None)
+    if not user:
+        return False
+    ws_id = workspace_id or get_active_workspace_id()
+    if not ws_id:
+        return False
+    if is_system_admin(user):
+        return True
+    member = WorkspaceMember.query.filter_by(workspace_id=ws_id, user_id=user.id).first()
+    return bool(member and member.role in ('owner', 'admin'))
+
+
 def get_module_scope(user=None, workspace_id=None, module=None, action='read'):
     """Resolve effective scope for a module/action. Returns own/team/workspace or None."""
     user = user or getattr(g, 'user', None)
@@ -5650,7 +5689,15 @@ def require_workspace_access(f):
 
 def _render_insights_page(workspace_id):
     """Render insights page with a safe, complete context."""
-    local_listings = visible_local_listing_query(workspace_id).all() if workspace_id else []
+    local_listings = []
+    if workspace_id:
+        base_query = scope_query(LocalListing.query, workspace_id)
+        if can_view_workspace_wide_insights(workspace_id=workspace_id):
+            local_listings = base_query.all()
+        else:
+            visible_user_ids = get_readable_user_ids_for_insights(workspace_id=workspace_id)
+            if visible_user_ids:
+                local_listings = base_query.filter(LocalListing.assigned_to_id.in_(visible_user_ids)).all()
     local_data = [listing.to_dict() for listing in local_listings]
     return render_template(
         'insights.html',
@@ -7914,6 +7961,8 @@ def api_pf_insights():
     user_id = request.args.get('user_id')
     force_refresh = request.args.get('refresh', 'false').lower() == 'true'
     ws_id = get_active_workspace_id()
+    can_view_all_insights = can_view_workspace_wide_insights(workspace_id=ws_id)
+    insights_user_ids = get_readable_user_ids_for_insights(workspace_id=ws_id)
     
     # FAST PATH: Always try cache first (DB-backed, survives restarts)
     cached_listings = get_cached_listings(workspace_id=ws_id)  # Loads from DB if not in memory
@@ -7947,8 +7996,12 @@ def api_pf_insights():
 
     # Enforce row-level visibility for non-workspace-wide users by mapping PF data
     # to visible local listings only.
-    if not workspace_user_can_manage_all_listings(workspace_id=ws_id):
-        visible_local_listings = visible_local_listing_query(ws_id, access='read').all()
+    if not can_view_all_insights:
+        visible_local_listings = []
+        if insights_user_ids:
+            visible_local_listings = scope_query(LocalListing.query, ws_id).filter(
+                LocalListing.assigned_to_id.in_(insights_user_ids)
+            ).all()
         visible_pf_ids = set()
         visible_refs = set()
         for local_listing in visible_local_listings:
@@ -7977,6 +8030,38 @@ def api_pf_insights():
             if _pf_listing_is_visible(listing_node):
                 scoped_pf_leads.append(lead)
         leads = scoped_pf_leads
+
+    insight_users = cache.get('users', [])
+    if not can_view_all_insights:
+        visible_pf_user_ids = set()
+        for listing_item in listings:
+            if not isinstance(listing_item, dict):
+                continue
+            assigned_to = listing_item.get('assignedTo') or {}
+            public_profile = listing_item.get('publicProfile') or {}
+            assigned_id = assigned_to.get('id')
+            profile_id = public_profile.get('id')
+            if assigned_id is not None:
+                visible_pf_user_ids.add(str(assigned_id))
+            if profile_id is not None:
+                visible_pf_user_ids.add(str(profile_id))
+        for lead_item in leads:
+            if not isinstance(lead_item, dict):
+                continue
+            public_profile = lead_item.get('publicProfile') or {}
+            profile_id = public_profile.get('id')
+            if profile_id is not None:
+                visible_pf_user_ids.add(str(profile_id))
+
+        scoped_users = []
+        for pf_user in insight_users:
+            if not isinstance(pf_user, dict):
+                continue
+            public_profile = pf_user.get('publicProfile') or {}
+            pf_user_id = public_profile.get('id') or pf_user.get('id')
+            if pf_user_id is not None and str(pf_user_id) in visible_pf_user_ids:
+                scoped_users.append(pf_user)
+        insight_users = scoped_users
     
     # Get cached location map (no API calls - just use what we have)
     location_map = get_cached_locations(workspace_id=ws_id)
@@ -7993,7 +8078,7 @@ def api_pf_insights():
     return jsonify({
         'success': cache.get('error') is None or len(listings) > 0,
         'listings': listings,
-        'users': cache.get('users', []),
+        'users': insight_users,
         'leads': leads,
         'locations': location_map,
         'error': cache.get('error') if not listings else None,
