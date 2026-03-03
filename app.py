@@ -2214,6 +2214,7 @@ def inject_user():
     can_bulk_upload = False
     can_manage_users = False
     can_manage_settings = False
+    can_manage_connections = False
     workspace = getattr(g, 'workspace', None)
     if not workspace:
         try:
@@ -2233,17 +2234,20 @@ def inject_user():
             can_bulk_upload = service.check_workspace_module_action(g.user, workspace.id, 'listings', 'bulk')
             can_manage_users = service.check_workspace_module_action(g.user, workspace.id, 'users', 'edit')
             can_manage_settings = service.check_workspace_module_action(g.user, workspace.id, 'settings', 'edit')
+            can_manage_connections = can_manage_workspace_connections(g.user, workspace.id)
         elif g.user:
             can_create_listing = g.user.has_permission('create')
             can_bulk_upload = g.user.has_permission('bulk_upload')
             can_manage_users = g.user.has_permission('manage_users')
             can_manage_settings = g.user.has_permission('settings')
+            can_manage_connections = False
     except Exception:
         can_access_loops = False
         can_create_listing = False
         can_bulk_upload = False
         can_manage_users = False
         can_manage_settings = False
+        can_manage_connections = False
 
     ui_lang = getattr(g, 'ui_lang', DEFAULT_LANGUAGE)
     ui_dir = getattr(g, 'ui_dir', 'ltr')
@@ -2274,6 +2278,7 @@ def inject_user():
         can_bulk_upload=can_bulk_upload,
         can_manage_users=can_manage_users,
         can_manage_settings=can_manage_settings,
+        can_manage_connections=can_manage_connections,
         ui_lang=ui_lang,
         ui_dir=ui_dir,
         is_rtl=is_rtl,
@@ -3491,6 +3496,16 @@ def can_manage_workspace_members(user, workspace_id):
     from src.services.permissions import get_permission_service
     service = get_permission_service()
     return service.check_workspace_module_action(user, workspace_id, 'users', 'edit')
+
+
+def can_manage_workspace_connections(user, workspace_id):
+    """Workspace connection management is limited to owner/admin (or system admin)."""
+    if not user:
+        return False
+    if is_system_admin(user):
+        return True
+    member = WorkspaceMember.query.filter_by(workspace_id=workspace_id, user_id=user.id).first()
+    return bool(member and member.can_manage_connections())
 
 
 def _validate_assignee(workspace_id, assignee_id):
@@ -5750,6 +5765,9 @@ def workspace_loops(workspace_slug):
 @require_workspace_access
 def workspace_auth(workspace_slug):
     """Workspace-scoped PF Connect page"""
+    if not can_manage_workspace_connections(g.user, g.workspace.id):
+        flash('Access denied. Workspace admin only.', 'error')
+        return redirect(url_for('workspace_dashboard', workspace_slug=workspace_slug))
     return render_template('auth.html')
 
 
@@ -6312,8 +6330,10 @@ def connections_page(workspace_id):
     workspace = Workspace.query.get_or_404(workspace_id)
     
     # Check access
-    if not workspace.get_member(g.user.id) and not is_system_admin(g.user):
+    if not can_manage_workspace_connections(g.user, workspace_id):
         flash('Access denied.', 'error')
+        if workspace.get_member(g.user.id):
+            return redirect(url_for('workspace_dashboard', workspace_slug=workspace.slug))
         return redirect(url_for('index'))
     
     return render_template('connections.html',
@@ -6327,8 +6347,8 @@ def api_get_connections(workspace_id):
     """Get workspace connections"""
     # Models imported at top
     workspace = Workspace.query.get_or_404(workspace_id)
-    if not workspace.get_member(g.user.id) and not is_system_admin(g.user):
-        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    if not can_manage_workspace_connections(g.user, workspace_id):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     include_secrets = workspace.is_admin(g.user.id) or is_system_admin(g.user)
     
@@ -6444,6 +6464,9 @@ def api_test_connection(workspace_id, connection_id):
     
     if connection.workspace_id != workspace_id:
         return jsonify({'success': False, 'error': 'Connection not in this workspace'}), 400
+
+    if not can_manage_workspace_connections(g.user, workspace_id):
+        return jsonify({'success': False, 'error': 'Permission denied'}), 403
     
     try:
         if connection.provider == 'propertyfinder':
