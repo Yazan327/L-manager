@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import hashlib
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -51,6 +52,14 @@ def load_dictionary(lang: str) -> Dict[str, Any]:
 
 def get_dictionary(lang: Optional[str]) -> Dict[str, Any]:
     return load_dictionary(normalize_language(lang))
+
+
+def get_dictionary_version(lang: Optional[str] = None) -> str:
+    """Deterministic version hash for dictionary cache busting."""
+    normalized = normalize_language(lang)
+    payload = get_dictionary(normalized)
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:12]
 
 
 def _lookup_key(data: Dict[str, Any], key: str) -> Any:
@@ -140,6 +149,17 @@ def localize_legacy_message(message: str, lang: Optional[str]) -> str:
         return str(entry.get("text") or message)
     if isinstance(entry, str):
         return entry
+    dictionary = get_dictionary(lang)
+    runtime_strings = dictionary.get("runtime_strings") if isinstance(dictionary, dict) else None
+    if isinstance(runtime_strings, dict):
+        translated = runtime_strings.get(message)
+        if isinstance(translated, str) and translated.strip():
+            return translated
+    runtime_prefixes = dictionary.get("runtime_prefixes") if isinstance(dictionary, dict) else None
+    if isinstance(runtime_prefixes, dict):
+        for prefix, localized_prefix in runtime_prefixes.items():
+            if isinstance(prefix, str) and isinstance(localized_prefix, str) and message.startswith(prefix):
+                return f"{localized_prefix}{message[len(prefix):]}"
     return message
 
 

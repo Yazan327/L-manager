@@ -43,11 +43,13 @@ from images import ImageProcessor
 from src.services.i18n import (
     SUPPORTED_LANGUAGES,
     DEFAULT_LANGUAGE,
+    normalize_language as i18n_normalize_language,
     get_language as resolve_ui_language,
     set_language as save_user_language,
     translate as i18n_translate,
     get_direction as i18n_direction,
     get_dictionary as i18n_dictionary,
+    get_dictionary_version as i18n_dictionary_version,
     localize_legacy_message,
     localize_error_payload,
     get_error_code_for_legacy_message,
@@ -2265,6 +2267,7 @@ def inject_user():
         'lang': ui_lang,
         'dir': ui_dir,
         'messages': i18n_dictionary(ui_lang),
+        'version': i18n_dictionary_version(ui_lang),
     }
 
     return dict(
@@ -7506,8 +7509,9 @@ def api_check_access():
 @app.route('/api/i18n/<lang>', methods=['GET'])
 def api_i18n_payload(lang):
     """Expose translation dictionary for client-side localization."""
-    normalized = lang if lang in SUPPORTED_LANGUAGES else DEFAULT_LANGUAGE
-    cache_key = f'i18n_payload:{normalized}:v2'
+    normalized = i18n_normalize_language(lang)
+    version = i18n_dictionary_version(normalized)
+    cache_key = f'i18n_payload:{normalized}:{version}'
     cached_payload = cache.get(cache_key)
     if cached_payload:
         return jsonify(cached_payload)
@@ -7517,7 +7521,7 @@ def api_i18n_payload(lang):
         'language': normalized,
         'direction': i18n_direction(normalized),
         'messages': i18n_dictionary(normalized),
-        'version': 'v2'
+        'version': version
     }
     cache.set(cache_key, payload, timeout=3600)
     return jsonify(payload)

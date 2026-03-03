@@ -56,6 +56,9 @@ python scripts/i18n/check_hardcoded_strings.py
 
 # Optional: generate translation inventory CSV
 python scripts/i18n/extract_ui_strings.py
+
+# Rebuild runtime string dictionary for pages that still contain legacy literals
+python scripts/i18n/build_runtime_strings.py
 ```
 
 Localization notes:
@@ -63,6 +66,7 @@ Localization notes:
 - Use `i18nT('namespace.key', 'fallback', vars)` for JS strings.
 - Keep Arabic UI with Western digits (`ar-AE-u-nu-latn`).
 - For runtime alerts/confirms built from old literals, add entries to `legacy_messages` or `runtime_prefixes` in `src/dashboard/i18n/*.json`.
+- Use `runtime_strings` in `src/dashboard/i18n/*.json` for exact UI phrase fallback on legacy templates.
 
 ### Production (Railway)
 

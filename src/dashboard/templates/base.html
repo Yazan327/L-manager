@@ -218,6 +218,7 @@
         window.I18N = {
             lang: {{ ui_lang|tojson|safe }},
             dir: {{ ui_dir|tojson|safe }},
+            version: {{ i18n.version|tojson|safe if i18n is defined and i18n.version is defined else 'null' }},
             messages: {{ i18n.messages|tojson|safe if i18n is defined and i18n.messages is defined else '{}' }}
         };
         window.I18N.t = function (key, fallback = '', vars = null) {
@@ -246,12 +247,20 @@
         window.localizeRuntimeMessage = function (message) {
             if (typeof message !== 'string' || !message) return message;
             const legacy = (window.I18N.messages && window.I18N.messages.legacy_messages) || {};
+            const runtimeStrings = (window.I18N.messages && window.I18N.messages.runtime_strings) || {};
             const runtimePrefixes = (window.I18N.messages && window.I18N.messages.runtime_prefixes) || {};
+            const normalized = String(message).replace(/\s+/g, ' ').trim();
 
             const exact = legacy[message];
             if (exact) {
                 if (typeof exact === 'string') return exact;
                 if (exact && typeof exact === 'object' && typeof exact.text === 'string') return exact.text;
+            }
+            if (typeof runtimeStrings[message] === 'string' && runtimeStrings[message]) {
+                return runtimeStrings[message];
+            }
+            if (typeof runtimeStrings[normalized] === 'string' && runtimeStrings[normalized]) {
+                return runtimeStrings[normalized];
             }
 
             for (const [prefix, localizedPrefix] of Object.entries(runtimePrefixes)) {
@@ -260,6 +269,49 @@
                 }
             }
             return message;
+        };
+
+        window.localizeDOMStrings = function (root = document.body) {
+            if (!root || window.I18N.lang !== 'ar') return;
+
+            const shouldSkipNode = (node) => {
+                if (!node || !node.parentElement) return true;
+                const parent = node.parentElement;
+                if (parent.closest('[data-no-auto-i18n]')) return true;
+                const tag = parent.tagName ? parent.tagName.toLowerCase() : '';
+                if (['script', 'style', 'code', 'pre', 'textarea'].includes(tag)) return true;
+                return false;
+            };
+
+            const localizeTextValue = (value) => {
+                if (typeof value !== 'string') return value;
+                const compact = value.replace(/\s+/g, ' ').trim();
+                if (!compact || !/[A-Za-z]/.test(compact)) return value;
+                const localized = window.localizeRuntimeMessage(compact);
+                if (!localized || localized === compact) return value;
+                return value.replace(compact, localized);
+            };
+
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            let current;
+            while ((current = walker.nextNode())) {
+                if (shouldSkipNode(current)) continue;
+                const localized = localizeTextValue(current.nodeValue);
+                if (localized !== current.nodeValue) {
+                    current.nodeValue = localized;
+                }
+            }
+
+            const attrTargets = root.querySelectorAll('[placeholder], [title], [aria-label]');
+            attrTargets.forEach((el) => {
+                if (el.closest('[data-no-auto-i18n]')) return;
+                ['placeholder', 'title', 'aria-label'].forEach((attr) => {
+                    const raw = el.getAttribute(attr);
+                    if (!raw) return;
+                    const localized = localizeTextValue(raw);
+                    if (localized !== raw) el.setAttribute(attr, localized);
+                });
+            });
         };
 
         window.formatLocalizedDate = function (value, options = {}) {
@@ -290,6 +342,27 @@
                 return originalConfirm(window.localizeRuntimeMessage(message));
             };
         }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            if (window.I18N.lang !== 'ar') return;
+            window.localizeDOMStrings(document.body);
+
+            const observer = new MutationObserver((mutations) => {
+                for (const mutation of mutations) {
+                    mutation.addedNodes.forEach((node) => {
+                        if (node && node.nodeType === Node.ELEMENT_NODE) {
+                            window.localizeDOMStrings(node);
+                        } else if (node && node.nodeType === Node.TEXT_NODE && node.parentElement) {
+                            const localized = window.localizeRuntimeMessage(node.nodeValue.replace(/\s+/g, ' ').trim());
+                            if (localized && localized !== node.nodeValue) {
+                                node.nodeValue = node.nodeValue.replace(node.nodeValue.replace(/\s+/g, ' ').trim(), localized);
+                            }
+                        }
+                    });
+                }
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+        });
 
         document.querySelectorAll('[data-lang-toggle]').forEach((btn) => {
             btn.addEventListener('click', async () => {
